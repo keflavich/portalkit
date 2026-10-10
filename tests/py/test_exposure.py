@@ -165,6 +165,25 @@ def test_shallow_route_reexpands_target(tmp_path):
     assert check_target("secure", e).level == "refuse"
 
 
+def test_scan_result_independent_of_thread_count(tree, monkeypatch):
+    """The walk lists each level's directories concurrently; the entry list (order included)
+    and the warnings must not depend on the number of worker threads."""
+    o = tree["orange"]
+    deep = tree["public"] / "a" / "b"
+    deep.mkdir(parents=True)
+    os.symlink(o / "w51", deep / "w51link")
+    os.symlink(o / "robitaille_models", tree["public"] / "a" / "rlink")
+    os.symlink(tree["base"] / "nowhere", tree["public"] / "dangling")
+    roots = {"public": tree["public"], "secure": tree["secure"]}
+    out = []
+    for n in ("1", "8"):
+        monkeypatch.setenv("PK_SCAN_THREADS", n)
+        m = scan(roots, cache_s=0)
+        out.append(([(e.real, e.kind, e.url, e.via) for e in m.entries], m.warnings))
+    assert out[0] == out[1]
+    assert len(out[0][0]) > 8
+
+
 def test_cycles_and_dangling_links(tree):
     pub = tree["public"]
     os.symlink(pub, pub / "loop")                      # points at its own root

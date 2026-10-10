@@ -22,6 +22,7 @@ import posixpath
 import stat
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Iterable, Literal, Mapping
@@ -182,6 +183,63 @@ def _join_url(prefix: str, rel: str) -> str:
     return prefix.rstrip("/") + "/" + quote(rel, safe="/-_.~")
 
 
+def _scan_threads() -> int:
+    try:
+        return max(1, int(os.environ.get("PK_SCAN_THREADS", "16")))
+    except ValueError:
+        return 16
+
+
+def _list_dir(logical: str, prune: tuple[str, ...]) -> tuple[list[tuple], list[str]]:
+    """List one directory for :func:`_walk_root`.
+
+    Returns ``(children, warnings)``; children are ``("dir", name, path)`` or
+    ``("link", name, path, realpath, link_text)`` sorted by name. Runs in a worker thread:
+    on a network filesystem the walk is dominated by directory listings, which release the
+    GIL, so listing a level's directories concurrently shortens the scan without changing
+    its result.
+    """
+    warnings: list[str] = []
+    try:
+        with os.scandir(logical) as it:
+            dents = sorted(it, key=lambda de: de.name)
+    except OSError as exc:
+        return [], [f"cannot list {logical}: {exc.strerror or exc}"]
+    out: list[tuple] = []
+    for de in dents:
+        name = de.name
+        if any(fnmatch.fnmatch(name, pat) for pat in prune):
+            continue
+        try:
+            is_link = de.is_symlink()
+        except OSError:
+            continue
+        if is_link:
+            # only directory symlinks are mapped (section 11.2); one stat() tells dangling
+            # links and file links apart before the costlier realpath()
+            try:
+                st = os.stat(de.path)
+            except OSError:
+                warnings.append(f"dangling symlink {de.path}")
+                continue
+            if not stat.S_ISDIR(st.st_mode):
+                continue
+            try:
+                link_text = os.readlink(de.path)
+            except OSError as exc:
+                warnings.append(f"cannot read link {de.path}: {exc.strerror or exc}")
+                continue
+            out.append(("link", name, de.path, os.path.realpath(de.path), link_text))
+        else:
+            try:
+                is_dir = de.is_dir(follow_symlinks=False)
+            except OSError:
+                continue
+            if is_dir:
+                out.append(("dir", name, de.path))
+    return out, warnings
+
+
 def _walk_root(kind: str, root: str, prefix: str, depth: int, prune: tuple[str, ...],
                emap: ExposureMap) -> None:
     root_real = os.path.realpath(root)
@@ -190,61 +248,37 @@ def _walk_root(kind: str, root: str, prefix: str, depth: int, prune: tuple[str, 
         return
     emap.entries.append(ExposureEntry(real=root_real, kind=kind, url=_join_url(prefix, ""),
                                       via=(f"{kind}: {root}",)))
-    # smallest depth at which each directory has been expanded: a target first reached by a
-    # deep route is expanded again when a shallower route reaches it, so the walk covers
-    # everything within ``depth`` of the root along its shortest route (DFS order is arbitrary)
-    best: dict[str, int] = {root_real: 0}
-    # stack items: (logical path, rel url path, depth of this dir, chain, ancestor realpaths)
-    stack: list[tuple[str, str, int, tuple[str, ...], frozenset]] = [
-        (root, "", 0, (f"{kind}: {root}",), frozenset([root_real]))]
-    while stack:
-        logical, rel, d, chain, ancestors = stack.pop()
-        if d >= depth:
-            continue
-        try:
-            with os.scandir(logical) as it:
-                dents = sorted(it, key=lambda de: de.name)
-        except OSError as exc:
-            emap.warnings.append(f"cannot list {logical}: {exc.strerror or exc}")
-            continue
-        for de in dents:
-            name = de.name
-            if any(fnmatch.fnmatch(name, pat) for pat in prune):
-                continue
-            child_rel = f"{rel}/{name}" if rel else name
-            try:
-                is_link = de.is_symlink()
-            except OSError:
-                continue
-            if is_link:
-                # only directory symlinks are mapped (section 11.2); one stat() tells
-                # dangling links and file links apart before the costlier realpath()
-                try:
-                    st = os.stat(de.path)
-                except OSError:
-                    emap.warnings.append(f"dangling symlink {de.path}")
-                    continue
-                if not stat.S_ISDIR(st.st_mode):
-                    continue
-                try:
-                    link_text = os.readlink(de.path)
-                except OSError as exc:
-                    emap.warnings.append(f"cannot read link {de.path}: {exc.strerror or exc}")
-                    continue
-                target = os.path.realpath(de.path)
-                hop = chain + (f"{de.path} -> {link_text}",)
-                emap.entries.append(ExposureEntry(real=target, kind=kind,
-                                                  url=_join_url(prefix, child_rel), via=hop))
-                if target not in ancestors and d + 1 < best.get(target, depth + 1):
-                    best[target] = d + 1
-                    stack.append((de.path, child_rel, d + 1, hop, ancestors | {target}))
-            else:
-                try:
-                    is_dir = de.is_dir(follow_symlinks=False)
-                except OSError:
-                    continue
-                if is_dir:
-                    stack.append((de.path, child_rel, d + 1, chain, ancestors))
+    # Level-synchronous breadth-first walk: every directory at depth d is listed (in
+    # parallel) before any at depth d+1, so a symlink target is expanded along its shortest
+    # route from the root and the walk covers everything within ``depth`` of it. Results are
+    # consumed in a fixed order (level by level, each level in discovery order), so the
+    # entry list does not depend on thread timing.
+    expanded: set[str] = {root_real}
+    # level items: (logical path, rel url path, chain, ancestor realpaths)
+    level: list[tuple[str, str, tuple[str, ...], frozenset]] = [
+        (root, "", (f"{kind}: {root}",), frozenset([root_real]))]
+    d = 0
+    with ThreadPoolExecutor(max_workers=_scan_threads()) as pool:
+        while level and d < depth:
+            listings = pool.map(lambda item: _list_dir(item[0], prune), level)
+            nxt: list[tuple[str, str, tuple[str, ...], frozenset]] = []
+            for (logical, rel, chain, ancestors), (children, warns) in zip(level, listings):
+                emap.warnings.extend(warns)
+                for child in children:
+                    name, path = child[1], child[2]
+                    child_rel = f"{rel}/{name}" if rel else name
+                    if child[0] == "dir":
+                        nxt.append((path, child_rel, chain, ancestors))
+                        continue
+                    target, link_text = child[3], child[4]
+                    hop = chain + (f"{path} -> {link_text}",)
+                    emap.entries.append(ExposureEntry(real=target, kind=kind,
+                                                      url=_join_url(prefix, child_rel), via=hop))
+                    if target not in ancestors and target not in expanded:
+                        expanded.add(target)
+                        nxt.append((path, child_rel, hop, ancestors | {target}))
+            level = nxt
+            d += 1
 
 
 def scan(roots: Mapping[str, os.PathLike | str] | None = None, depth: int = 4,
@@ -255,8 +289,10 @@ def scan(roots: Mapping[str, os.PathLike | str] | None = None, depth: int = 4,
     ``roots`` maps ``"public"``/``"secure"`` to a directory (default :data:`DEFAULT_ROOTS`).
     Directory symlinks are followed to ``depth`` levels below each root; entries whose name
     matches a ``prune`` glob are skipped (HiPS trees are huge and never hold symlinks to
-    other trees). Results are cached in memory and under ``~/.cache/portalkit`` (or
-    ``$PK_CACHE_DIR``) for ``cache_s`` seconds; ``cache_s=0`` disables both caches.
+    other trees). Each level's directories are listed by ``$PK_SCAN_THREADS`` worker threads
+    (default 16); the result does not depend on the thread count. Results are cached in
+    memory and under ``~/.cache/portalkit`` (or ``$PK_CACHE_DIR``) for ``cache_s`` seconds;
+    ``cache_s=0`` disables both caches.
     """
     roots_n = _norm_roots(DEFAULT_ROOTS if roots is None else roots)
     prefixes = dict(URL_PREFIXES)

@@ -72,9 +72,11 @@ starting.
 27. **Two portals, one legacy_dir.** Every `[[portal]]` needs a distinct target. The nirspec6927 narrative portal
     (WP31) sets `target_dir = "<legacy_dir>/unified/narrative"` explicitly in its site TOML.
 28. **Install mode.** `web/` is not package data; portalkit runs from a checkout or `pip install -e .`.
-29. **Exposure scan cost.** A cold walk of `/orange/adamginsburg/web/secure` takes ~700 s (dominated by
-    `salt/dihca2/diagnostics_nopeaks` and `ACES/mosaics/lines`); results are cached for 1 h in `$PK_CACHE_DIR` or
-    `~/.cache/portalkit`. Prune globs for huge leaf directories are a planned follow-up.
+29. **Exposure scan cost.** The walk is breadth-first with each level listed by `$PK_SCAN_THREADS` threads
+    (default 16). Measured on `/orange/adamginsburg/web`: 6437 directories, 17 s warm (52 s with one thread);
+    a cold metadata cache costs 9-13 min, dominated by `salt/dihca2/diagnostics_nopeaks`. Results are cached
+    for 1 h in `$PK_CACHE_DIR` or `~/.cache/portalkit`. Name-based prune globs for big leaf directories are not
+    used: a pruned directory could hold a symlink that exposes a deploy target.
 
 ## Resolved after WP06 and WP07
 
