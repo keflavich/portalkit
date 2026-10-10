@@ -74,7 +74,7 @@ starting.
 28. **Install mode.** `web/` is not package data; portalkit runs from a checkout or `pip install -e .`.
 29. **Exposure scan cost.** The walk is breadth-first with each level listed by `$PK_SCAN_THREADS` threads
     (default 16). Measured on `/orange/adamginsburg/web`: 6437 directories, 17 s warm (52 s with one thread);
-    a cold metadata cache costs 9-13 min, dominated by `salt/dihca2/diagnostics_nopeaks`. Results are cached
+    cold runs took 9-13 min. The slowest single directory is `salt/dihca2/diagnostics_nopeaks` (10 s warm). Results are cached
     for 1 h in `$PK_CACHE_DIR` or `~/.cache/portalkit`. Name-based prune globs for big leaf directories are not
     used: a pruned directory could hold a symlink that exposes a deploy target.
 
