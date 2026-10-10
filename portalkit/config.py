@@ -938,19 +938,11 @@ def narrative_document(spec: NarrativeSpec) -> dict:
     return doc
 
 
-def _numlist(a: Any) -> list[float | None]:
-    arr = np.asarray(a, dtype=np.float64).ravel()
-    return [_json_number(float(x)) for x in arr]
-
-
 def isochrones_document(spec: IsochroneSpec) -> dict:
-    """``pk-isochrones/1`` document for ``spec`` (NaN becomes null; validated)."""
-    tracks = []
-    for t in spec.tracks:
-        tracks.append({"label": t.label, "age_myr": float(t.age_myr), "dist_pc": float(t.dist_pc),
-                       "feh": float(t.feh), "mass": _numlist(t.mass),
-                       "mags": {k: _numlist(v) for k, v in t.mags.items()}})
-    doc = {"schema": "pk-isochrones/1", "tracks": tracks}
+    """``pk-isochrones/1`` document for ``spec`` (NaN becomes null; validated, ConfigError
+    when invalid). Built by :func:`portalkit.physics.isochrones.build_document`."""
+    from .physics.isochrones import build_document
+    doc = build_document(spec)
     _raise(validate_isochrones(doc), "isochrones.json")
     return doc
 

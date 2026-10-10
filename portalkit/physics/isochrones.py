@@ -48,7 +48,7 @@ except ImportError:  # spec.py (WP03) not present: same-shaped local dataclasses
 
 __all__ = ["DEFAULT_MIST", "Track", "IsochroneSpec", "load_mist_table", "mist_header",
            "mist_filter_key", "mag_columns", "build_isochrone_track", "isochrone_spec",
-           "isochrones_document", "isochrones_bytes", "write", "track_xy", "thin_log_mass"]
+           "build_document", "isochrones_document", "isochrones_bytes", "write", "track_xy", "thin_log_mass"]
 
 DEFAULT_MIST = Path("/orange/adamginsburg/jwst/isochrones/MIST_iso_69cd1ed13b15a.iso.JWST")
 
@@ -251,17 +251,23 @@ def _tg(t: Any, k: str) -> Any:
     return t[k] if isinstance(t, Mapping) else getattr(t, k)
 
 
-def isochrones_document(spec: Any) -> dict:
-    """``pk-isochrones/1`` document (same structure and key order as
-    ``portalkit.config.isochrones_document``)."""
-    from ..schema import validate_isochrones
+def build_document(spec: Any) -> dict:
+    """Unvalidated ``pk-isochrones/1`` document (NaN becomes null). The single builder:
+    :func:`isochrones_document` and ``portalkit.config.isochrones_document`` both use it and
+    differ only in the exception they raise for an invalid document."""
     tracks = []
     for t in _tg(spec, "tracks"):
         tracks.append({"label": _tg(t, "label"), "age_myr": float(_tg(t, "age_myr")),
                        "dist_pc": float(_tg(t, "dist_pc")), "feh": float(_tg(t, "feh")),
                        "mass": _numlist(_tg(t, "mass")),
                        "mags": {k: _numlist(v) for k, v in _tg(t, "mags").items()}})
-    doc = {"schema": "pk-isochrones/1", "tracks": tracks}
+    return {"schema": "pk-isochrones/1", "tracks": tracks}
+
+
+def isochrones_document(spec: Any) -> dict:
+    """Validated ``pk-isochrones/1`` document; raises ValueError when invalid."""
+    from ..schema import validate_isochrones
+    doc = build_document(spec)
     errs = validate_isochrones(doc)
     if errs:
         raise ValueError("isochrones document invalid: " + "; ".join(errs[:10]))
