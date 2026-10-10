@@ -119,3 +119,69 @@ starting.
     manifold pane on the vendor Renderer falls back to `sunset` for others.
 42. **Budget.plan** returns `{dpr, allowed, refused, targetBytes, maxVertexBytes, fits, capFraction}`.
 43. **Focus broadcasts** (`broadcastFocus`/`onBroadcastFocus`) carry `ds`.
+
+## Resolved after WP01, WP02 and WP05
+
+44. **Bundle entry points** (used by WP13 `build.py`), documented in `docs/bundle.md` §1:
+    `catalog.write(spec, dest, *, build, seed, links, provenance, ledger, log, step_mas) -> CatalogResult`
+    (`manifest, order, ids, id_to_row, alias_to_row, files, warnings, writer, row_of()`);
+    `records.write(spec, dest, *, order=CatalogResult.row_of, tier, ledger, log) -> RecordsResult`;
+    `images.write(spec, dest, *, rows=CatalogResult.row_of, thumb=(url, item_id, role)->str|None, ledger, log,
+    page_max) -> ImagesResult`. `dest` is a `BundleWriter(stage_root, 'data/<ds>', ledger)` or a directory.
+    json-legacy record sets are accepted only for tier A or B.
+45. **Codec goldens.** `tests/golden/codec/index.json` (`pk-golden-codec/1`, format in `docs/bundle.md` §11) is the
+    cross-language oracle; `generate.py --check` and `tests/js/codec.test.mjs` both consume it.
+46. **Density grids.** Count grids use `u16log` with the column decode (`10**(lo+(code-1)*step)`, lo/hi in log10,
+    `step` always written) and carry `total`. Binned-stat grids use `enc:"f32"` plus `stat`, `value`, `shuffle`,
+    `lo`, `hi`. The stat syntax in specs is `fn:expr` or `fn(expr)`.
+47. **Log encodings.** `u16log` column lo/hi/step are in dex. `u8log` column lo/hi are linear (GC convention) and step
+    is in dex. Adapter lo/hi for u16log columns are given linear and stored in dex.
+48. **u32lin positions** are always 4-plane byte-shuffled; the encoding implies it (the `pos` block has no `shuffle`
+    key). `codec.decodePos(posMeta, files, bbox)` takes the manifest `bbox` as a third argument.
+49. **i16off tiling** is portalkit's own: dec bands of `0.125*step_mas/8` deg split into RA cells, `tile_refs` capped
+    at 4096 (step_mas is raised, with a warning, to stay under the cap). Position files are single files (no
+    chunking), which limits i16off catalogs to roughly 8M rows under `COL_FILE_MAX`. Chunked pos files are a schema
+    follow-up if a larger catalog appears.
+50. **Category encoding.** `enc:"auto"` gives `cat8` up to 255 levels and `cat16` above.
+51. **Record binaries.** pks1/pki1 headers are padded to a multiple of 8; wave arrays carry `dtype` (`f32`, or `f64`
+    when f32 would reorder samples or err by >1% of the smallest spacing). pki1 u8 codes map NaN to 0 (same as lo).
+52. **Images.** Width and height live per role (`roles[role].{url,w,h,thumb}`). `ImageSetSpec.join` naming an item tag
+    means "look up `tags[join]`"; otherwise the lookup uses `item.id`. `CatalogResult.row_of` resolves aliases.
+53. **`exact_gpu`** is read with `getattr(col or spec, 'exact_gpu', True)`; it is not yet a `spec.py` field.
+54. **Filter key resolution** (`resolveKey` / `filters.resolve_key`, goldens in `tests/golden/physics/resolve_key.json`):
+    colmap, exact, unique case-insensitive, unique alias, then short-name probes `lower(name)`, the text after the
+    last `_`, and `shortName(lower(name))`, each with a `label` tie-break when candidates are filter entries. The
+    shared filters document has no `aliases`; `ks`/`k` stay ambiguous there (2MASS vs VISTA/UKIDSS), so panes pass
+    the manifest colmap (column key -> `ColMeta.filter`).
+55. **JS physics signatures** (supersede §6.6): `aLambda(filterKeyOrEntry, av, rv, ext, filters, colmap)` throws
+    `TypeError` when given a key string without `filters`; `vector(xExpr, yExpr, av, rv, filters, colmap, ext)`;
+    `trackXY(track, xExpr, yExpr, av, rv, dm, filters, colmap, ext)`. Track mags are absolute: each value is
+    `c + Σ w·(M + 5·log10(dist_pc/10) + dm + A)`; for `av != 0` the filter entry is `resolveKey(magsKey, filters)`,
+    else `resolveKey(exprKey, filters, colmap)`. An unresolved key gives an all-NaN axis.
+56. **sedPoints** returns `[{wl, fnu, err, kind, key, filter}]` sorted by wl. Limit codes come from `row._lim[key]` /
+    `row._limits[key]` (1/'1'/'u' upper, 2/'2'/'l' lower) or the column's `limit` sibling; limits have `err:null`;
+    non-finite or non-positive fluxes are dropped.
+57. **Templates and laws.** `extend_to_um` extends templates with B_nu by default. The Brick2221 F1500W adapter (WP26)
+    passes `planck='lambda'` to reproduce the legacy curves and caveat text exactly. Law records are gzipped pks1
+    with a single channel `k` and meta `{law, rv}` (no flux channel). Template grid descriptors are
+    `templates/grid_<g>.<h8>.json`.
+58. **publish-res.** WP13 calls `portalkit.physics.write_shared(dest, ledger=...)`, which returns `{kind: path relative
+    to dest}`; `res_refs` URLs prepend `{res}/`. A filter's `trans` path is relative to the filters document URL.
+59. **Isochrone documents.** `config.isochrones_document`/`isochrones_file` and `physics.isochrones` produce
+    byte-identical output (tested). `physics.isochrones` is the implementation of record; config delegation is a
+    follow-up.
+60. **Picking.** A pick ViewRef carries `kx`, `ky` (pixels per data unit, per decade on log axes);
+    `DataClient.pick` rejects without them. Plot panes (WP07/WP08/WP09/WP10) add them.
+61. **Projections.** `DataClient.project(spec, {token, pane})` caches per pane+token; a `{kind:'proj'}` ViewRef looks
+    up its own `pane` first.
+62. **Queries.** `DataClient.query` sequences `apply:true` calls itself; a stale applying query returns
+    `applied:false`. Callers send no seq.
+63. **Export.** CSV has no comment lines; the worker result carries `exact` (false when values are dequantized).
+64. **GPU columns** are linear-space A/B for every non-u16q/u8q column, matching the CPU projection path. Adapters that
+    want log-flux manifold dims define log10 columns as base columns.
+65. **Vendored `kernel.buildGrid`** takes bounds from a stride subsample and can return NaN bounds for sparse drawable
+    sets. Callers use `workers/ops/select.js` `buildPickGrid`, which handles that case.
+66. **snr filter scope `projection`.** `hub.js` derives `snr.keys` from `axes:<pane>`/`frame:<pane>` when a filter omits
+    them.
+67. **Sky brushes.** The worker treats a sky ViewRef as `{kind:'xy', x:'ra', y:'dec'}` in degrees, with no RA wrap or
+    cos(dec) scaling. Current portal fields do not cross RA=0; a wrap-aware sky ViewRef is a follow-up.
