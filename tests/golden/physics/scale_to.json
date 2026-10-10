@@ -1,0 +1,361 @@
+{
+ "description": "scaleTo(model{wave,flux}, points, bands?): median over points with kind 'det', fnu > 0 and (bands absent or filter/key in bands) of fnu / model(wl), model linear in wavelength and finite > 0 (null outside); median of an even count is the mean of the middle two; null when nothing is usable.",
+ "model": {
+  "wave": [
+   1.0,
+   2.0,
+   3.0,
+   4.0,
+   5.0
+  ],
+  "flux": [
+   2.0,
+   1.0,
+   0.5,
+   0.25,
+   0.2
+  ]
+ },
+ "cases": [
+  {
+   "points": [
+    {
+     "wl": 1.5,
+     "fnu": 3.0,
+     "err": 0.1,
+     "kind": "det",
+     "key": "a",
+     "filter": "F1"
+    },
+    {
+     "wl": 2.0,
+     "fnu": 2.0,
+     "err": null,
+     "kind": "det",
+     "key": "b",
+     "filter": "F2"
+    },
+    {
+     "wl": 3.5,
+     "fnu": 0.9,
+     "err": 0.1,
+     "kind": "det",
+     "key": "c",
+     "filter": "F3"
+    },
+    {
+     "wl": 4.5,
+     "fnu": 10.0,
+     "err": null,
+     "kind": "ul",
+     "key": "d",
+     "filter": "F4"
+    },
+    {
+     "wl": 6.0,
+     "fnu": 1.0,
+     "err": 0.1,
+     "kind": "det",
+     "key": "e",
+     "filter": "F5"
+    },
+    {
+     "wl": 2.5,
+     "fnu": 0.0,
+     "err": 0.1,
+     "kind": "det",
+     "key": "f",
+     "filter": "F6"
+    }
+   ],
+   "scale": 2.0
+  },
+  {
+   "points": [
+    {
+     "wl": 1.5,
+     "fnu": 3.0,
+     "err": 0.1,
+     "kind": "det",
+     "key": "a",
+     "filter": "F1"
+    },
+    {
+     "wl": 2.0,
+     "fnu": 2.0,
+     "err": null,
+     "kind": "det",
+     "key": "b",
+     "filter": "F2"
+    },
+    {
+     "wl": 3.5,
+     "fnu": 0.9,
+     "err": 0.1,
+     "kind": "det",
+     "key": "c",
+     "filter": "F3"
+    },
+    {
+     "wl": 4.5,
+     "fnu": 10.0,
+     "err": null,
+     "kind": "ul",
+     "key": "d",
+     "filter": "F4"
+    },
+    {
+     "wl": 6.0,
+     "fnu": 1.0,
+     "err": 0.1,
+     "kind": "det",
+     "key": "e",
+     "filter": "F5"
+    },
+    {
+     "wl": 2.5,
+     "fnu": 0.0,
+     "err": 0.1,
+     "kind": "det",
+     "key": "f",
+     "filter": "F6"
+    }
+   ],
+   "scale": 2.2,
+   "bands": [
+    "F1",
+    "F3"
+   ]
+  },
+  {
+   "points": [
+    {
+     "wl": 1.5,
+     "fnu": 3.0,
+     "err": 0.1,
+     "kind": "det",
+     "key": "a",
+     "filter": "F1"
+    },
+    {
+     "wl": 2.0,
+     "fnu": 2.0,
+     "err": null,
+     "kind": "det",
+     "key": "b",
+     "filter": "F2"
+    },
+    {
+     "wl": 3.5,
+     "fnu": 0.9,
+     "err": 0.1,
+     "kind": "det",
+     "key": "c",
+     "filter": "F3"
+    },
+    {
+     "wl": 4.5,
+     "fnu": 10.0,
+     "err": null,
+     "kind": "ul",
+     "key": "d",
+     "filter": "F4"
+    },
+    {
+     "wl": 6.0,
+     "fnu": 1.0,
+     "err": 0.1,
+     "kind": "det",
+     "key": "e",
+     "filter": "F5"
+    },
+    {
+     "wl": 2.5,
+     "fnu": 0.0,
+     "err": 0.1,
+     "kind": "det",
+     "key": "f",
+     "filter": "F6"
+    }
+   ],
+   "scale": 2.0,
+   "bands": [
+    "b"
+   ]
+  },
+  {
+   "points": [
+    {
+     "wl": 1.5,
+     "fnu": 3.0,
+     "err": 0.1,
+     "kind": "det",
+     "key": "a",
+     "filter": "F1"
+    },
+    {
+     "wl": 2.0,
+     "fnu": 2.0,
+     "err": null,
+     "kind": "det",
+     "key": "b",
+     "filter": "F2"
+    },
+    {
+     "wl": 3.5,
+     "fnu": 0.9,
+     "err": 0.1,
+     "kind": "det",
+     "key": "c",
+     "filter": "F3"
+    },
+    {
+     "wl": 4.5,
+     "fnu": 10.0,
+     "err": null,
+     "kind": "ul",
+     "key": "d",
+     "filter": "F4"
+    },
+    {
+     "wl": 6.0,
+     "fnu": 1.0,
+     "err": 0.1,
+     "kind": "det",
+     "key": "e",
+     "filter": "F5"
+    },
+    {
+     "wl": 2.5,
+     "fnu": 0.0,
+     "err": 0.1,
+     "kind": "det",
+     "key": "f",
+     "filter": "F6"
+    }
+   ],
+   "scale": null,
+   "bands": [
+    "F4"
+   ]
+  },
+  {
+   "points": [
+    {
+     "wl": 1.5,
+     "fnu": 3.0,
+     "err": 0.1,
+     "kind": "det",
+     "key": "a",
+     "filter": "F1"
+    },
+    {
+     "wl": 2.0,
+     "fnu": 2.0,
+     "err": null,
+     "kind": "det",
+     "key": "b",
+     "filter": "F2"
+    },
+    {
+     "wl": 3.5,
+     "fnu": 0.9,
+     "err": 0.1,
+     "kind": "det",
+     "key": "c",
+     "filter": "F3"
+    },
+    {
+     "wl": 4.5,
+     "fnu": 10.0,
+     "err": null,
+     "kind": "ul",
+     "key": "d",
+     "filter": "F4"
+    },
+    {
+     "wl": 6.0,
+     "fnu": 1.0,
+     "err": 0.1,
+     "kind": "det",
+     "key": "e",
+     "filter": "F5"
+    },
+    {
+     "wl": 2.5,
+     "fnu": 0.0,
+     "err": 0.1,
+     "kind": "det",
+     "key": "f",
+     "filter": "F6"
+    }
+   ],
+   "scale": null,
+   "bands": [
+    "F5"
+   ]
+  },
+  {
+   "points": [
+    {
+     "wl": 1.5,
+     "fnu": 3.0,
+     "err": 0.1,
+     "kind": "det",
+     "key": "a",
+     "filter": "F1"
+    },
+    {
+     "wl": 2.0,
+     "fnu": 2.0,
+     "err": null,
+     "kind": "det",
+     "key": "b",
+     "filter": "F2"
+    },
+    {
+     "wl": 3.5,
+     "fnu": 0.9,
+     "err": 0.1,
+     "kind": "det",
+     "key": "c",
+     "filter": "F3"
+    },
+    {
+     "wl": 4.5,
+     "fnu": 10.0,
+     "err": null,
+     "kind": "ul",
+     "key": "d",
+     "filter": "F4"
+    },
+    {
+     "wl": 6.0,
+     "fnu": 1.0,
+     "err": 0.1,
+     "kind": "det",
+     "key": "e",
+     "filter": "F5"
+    },
+    {
+     "wl": 2.5,
+     "fnu": 0.0,
+     "err": 0.1,
+     "kind": "det",
+     "key": "f",
+     "filter": "F6"
+    }
+   ],
+   "scale": 2.0,
+   "bands": [
+    "F1",
+    "c",
+    "F2"
+   ]
+  },
+  {
+   "points": [],
+   "scale": null
+  }
+ ]
+}

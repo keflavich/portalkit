@@ -1,0 +1,139 @@
+{
+ "description": "magToJy(mag, zpJy) = zpJy*10**(-0.4*mag); jyToMag(jy, zpJy) = -2.5*log10(jy/zpJy), null for jy <= 0, zp <= 0 or missing input; magErrToJy(fnu, emag) = |fnu|*ln(10)/2.5*emag (null for emag < 0)",
+ "mag_to_jy": [
+  {
+   "mag": 0.0,
+   "zp_jy": 3631.0,
+   "jy": 3631.0
+  },
+  {
+   "mag": 10.0,
+   "zp_jy": 208.75045,
+   "jy": 0.020875045000000002
+  },
+  {
+   "mag": 18.21,
+   "zp_jy": 844.94329,
+   "jy": 4.393671280978569e-05
+  },
+  {
+   "mag": -1.5,
+   "zp_jy": 17.11778,
+   "jy": 68.14710961957245
+  },
+  {
+   "mag": 25.0,
+   "zp_jy": 2768.4046,
+   "jy": 2.7684046e-07
+  },
+  {
+   "mag": 40.0,
+   "zp_jy": 1.0,
+   "jy": 1e-16
+  },
+  {
+   "mag": null,
+   "zp_jy": 208.75,
+   "jy": null
+  },
+  {
+   "mag": 12.0,
+   "zp_jy": null,
+   "jy": null
+  },
+  {
+   "mag": 12.0,
+   "zp_jy": 0.0,
+   "jy": null
+  },
+  {
+   "mag": 300.0,
+   "zp_jy": 100.0,
+   "jy": 1e-118
+  },
+  {
+   "mag": -300.0,
+   "zp_jy": 100.0,
+   "jy": 1e+122
+  },
+  {
+   "mag": 1e-09,
+   "zp_jy": 1.0,
+   "jy": 0.999999999078966
+  }
+ ],
+ "jy_to_mag": [
+  {
+   "jy": 1.0,
+   "zp_jy": 3631.0,
+   "mag": 8.90006562228223
+  },
+  {
+   "jy": 0.020875045,
+   "zp_jy": 208.75045,
+   "mag": 10.0
+  },
+  {
+   "jy": 0.0,
+   "zp_jy": 100.0,
+   "mag": null
+  },
+  {
+   "jy": -1.0,
+   "zp_jy": 100.0,
+   "mag": null
+  },
+  {
+   "jy": null,
+   "zp_jy": 100.0,
+   "mag": null
+  },
+  {
+   "jy": 1e-30,
+   "zp_jy": 1.0,
+   "mag": 75.0
+  },
+  {
+   "jy": 1e+30,
+   "zp_jy": 1.0,
+   "mag": -75.0
+  },
+  {
+   "jy": 5.0,
+   "zp_jy": null,
+   "mag": null
+  },
+  {
+   "jy": 0.001,
+   "zp_jy": 844.94329,
+   "mag": 14.817068903538267
+  }
+ ],
+ "mag_err_to_jy": [
+  {
+   "fnu_jy": 1.0,
+   "emag": 0.1,
+   "err_jy": 0.09210340371976183
+  },
+  {
+   "fnu_jy": 0.0025,
+   "emag": 0.02,
+   "err_jy": 4.605170185988092e-05
+  },
+  {
+   "fnu_jy": 1.0,
+   "emag": null,
+   "err_jy": null
+  },
+  {
+   "fnu_jy": null,
+   "emag": 0.1,
+   "err_jy": null
+  },
+  {
+   "fnu_jy": 3.0,
+   "emag": -0.1,
+   "err_jy": null
+  }
+ ]
+}

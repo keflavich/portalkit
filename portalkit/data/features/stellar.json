@@ -1,0 +1,91 @@
+{
+ "family": "stellar",
+ "label": "Photospheric features",
+ "source": "JWST_Archive_ColorPortal.py:123-242 STELLAR_LINES",
+ "features": [
+  {
+   "name": "Mg I 1.711",
+   "w_um": 1.7109,
+   "label": "Mg I 1.711",
+   "kind": "line"
+  },
+  {
+   "name": "Mg I 2.107",
+   "w_um": 2.1066,
+   "label": "Mg I 2.107",
+   "kind": "line"
+  },
+  {
+   "name": "Al I 2.110",
+   "w_um": 2.1099,
+   "label": "Al I 2.110",
+   "kind": "line"
+  },
+  {
+   "name": "Al I 2.117",
+   "w_um": 2.117,
+   "label": "Al I 2.117",
+   "kind": "line"
+  },
+  {
+   "name": "Na I 2.206",
+   "w_um": 2.2062,
+   "label": "Na I 2.206",
+   "kind": "line"
+  },
+  {
+   "name": "Na I 2.209",
+   "w_um": 2.209,
+   "label": "Na I 2.209",
+   "kind": "line"
+  },
+  {
+   "name": "Ca I 2.261",
+   "w_um": 2.2614,
+   "label": "Ca I 2.261",
+   "kind": "line"
+  },
+  {
+   "name": "Ca I 2.263",
+   "w_um": 2.2631,
+   "label": "Ca I 2.263",
+   "kind": "line"
+  },
+  {
+   "name": "Ca I 2.266",
+   "w_um": 2.2657,
+   "label": "Ca I 2.266",
+   "kind": "line"
+  },
+  {
+   "name": "CO 2-0 bandhead",
+   "w_um": 2.2935,
+   "label": "CO 2-0 bandhead",
+   "kind": "line"
+  },
+  {
+   "name": "CO 3-1 bandhead",
+   "w_um": 2.3227,
+   "label": "CO 3-1 bandhead",
+   "kind": "line"
+  },
+  {
+   "name": "CO 4-2 bandhead",
+   "w_um": 2.3535,
+   "label": "CO 4-2 bandhead",
+   "kind": "line"
+  },
+  {
+   "name": "CO 5-3 bandhead",
+   "w_um": 2.3829,
+   "label": "CO 5-3 bandhead",
+   "kind": "line"
+  },
+  {
+   "name": "CO 6-4 bandhead",
+   "w_um": 2.4142,
+   "label": "CO 6-4 bandhead",
+   "kind": "line"
+  }
+ ]
+}

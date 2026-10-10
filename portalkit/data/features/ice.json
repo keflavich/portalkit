@@ -1,0 +1,127 @@
+{
+ "family": "ice",
+ "label": "Ices",
+ "color": "#58a6ff",
+ "source": "JWST_Archive_ColorPortal.py:123-242 ICE_BANDS; Brick2221_F1500W_SEDPortal.py:126-135 ice",
+ "features": [
+  {
+   "name": "H2O ice 1.5 um",
+   "w_um": 1.5,
+   "label": "H2O ice 1.5 um",
+   "kind": "band",
+   "lo_um": 1.45,
+   "hi_um": 1.6
+  },
+  {
+   "name": "H2O ice 2.0 um",
+   "w_um": 2.02,
+   "label": "H2O ice 2.0 um",
+   "kind": "band",
+   "lo_um": 1.95,
+   "hi_um": 2.1
+  },
+  {
+   "name": "CO2 ice comb. 2.70",
+   "w_um": 2.7,
+   "label": "CO2 ice comb. 2.70",
+   "kind": "band",
+   "lo_um": 2.68,
+   "hi_um": 2.72
+  },
+  {
+   "name": "CO2 ice comb. 2.78",
+   "w_um": 2.78,
+   "label": "CO2 ice comb. 2.78",
+   "kind": "band",
+   "lo_um": 2.76,
+   "hi_um": 2.8
+  },
+  {
+   "name": "NH3 ice N-H",
+   "w_um": 2.96,
+   "label": "NH3 ice N-H",
+   "kind": "band",
+   "lo_um": 2.9,
+   "hi_um": 3.02
+  },
+  {
+   "name": "H2O ice O-H stretch",
+   "w_um": 3.05,
+   "label": "H2O ice O-H stretch",
+   "kind": "band",
+   "lo_um": 2.72,
+   "hi_um": 3.6
+  },
+  {
+   "name": "CH4 ice",
+   "w_um": 3.32,
+   "label": "CH4 ice",
+   "kind": "band",
+   "lo_um": 3.29,
+   "hi_um": 3.35
+  },
+  {
+   "name": "3.47 um band",
+   "w_um": 3.47,
+   "label": "3.47 um band",
+   "kind": "band",
+   "lo_um": 3.42,
+   "hi_um": 3.52
+  },
+  {
+   "name": "CH3OH ice C-H",
+   "w_um": 3.53,
+   "label": "CH3OH ice C-H",
+   "kind": "band",
+   "lo_um": 3.47,
+   "hi_um": 3.6
+  },
+  {
+   "name": "CO2 ice nu3",
+   "w_um": 4.27,
+   "label": "CO2 ice nu3",
+   "kind": "band",
+   "lo_um": 4.21,
+   "hi_um": 4.33
+  },
+  {
+   "name": "13CO2 ice",
+   "w_um": 4.39,
+   "label": "13CO2 ice",
+   "kind": "band",
+   "lo_um": 4.36,
+   "hi_um": 4.42
+  },
+  {
+   "name": "OCN- (XCN)",
+   "w_um": 4.62,
+   "label": "OCN- (XCN)",
+   "kind": "band",
+   "lo_um": 4.58,
+   "hi_um": 4.65
+  },
+  {
+   "name": "CO ice",
+   "w_um": 4.67,
+   "label": "CO ice",
+   "kind": "band",
+   "lo_um": 4.63,
+   "hi_um": 4.7
+  },
+  {
+   "name": "OCS ice",
+   "w_um": 4.9,
+   "label": "OCS ice",
+   "kind": "band",
+   "lo_um": 4.87,
+   "hi_um": 4.93
+  },
+  {
+   "name": "CO2 ice 15.2",
+   "w_um": 15.2,
+   "label": "CO2 ice 15.2",
+   "kind": "line",
+   "source": "Brick2221_F1500W_SEDPortal.py:126-135"
+  }
+ ]
+}

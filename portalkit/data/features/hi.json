@@ -1,0 +1,343 @@
+{
+ "family": "hi",
+ "label": "H I recombination",
+ "source": "JWST_Archive_ColorPortal.py:123-242 hydrogen_lines(lo=0.6, hi=28.0)",
+ "features": [
+  {
+   "name": "Pa-l",
+   "w_um": 0.86008,
+   "label": "Pa-l",
+   "kind": "line"
+  },
+  {
+   "name": "Pa-k",
+   "w_um": 0.86675,
+   "label": "Pa-k",
+   "kind": "line"
+  },
+  {
+   "name": "Pa-i",
+   "w_um": 0.87529,
+   "label": "Pa-i",
+   "kind": "line"
+  },
+  {
+   "name": "Pa-th",
+   "w_um": 0.88653,
+   "label": "Pa-th",
+   "kind": "line"
+  },
+  {
+   "name": "Pa-eta",
+   "w_um": 0.90174,
+   "label": "Pa-eta",
+   "kind": "line"
+  },
+  {
+   "name": "Pa-z",
+   "w_um": 0.92316,
+   "label": "Pa-z",
+   "kind": "line"
+  },
+  {
+   "name": "Pa-e",
+   "w_um": 0.95486,
+   "label": "Pa-e",
+   "kind": "line"
+  },
+  {
+   "name": "Pa-d",
+   "w_um": 1.00522,
+   "label": "Pa-d",
+   "kind": "line"
+  },
+  {
+   "name": "Pa-g",
+   "w_um": 1.09412,
+   "label": "Pa-g",
+   "kind": "line"
+  },
+  {
+   "name": "Pa-b",
+   "w_um": 1.28217,
+   "label": "Pa-b",
+   "kind": "line"
+  },
+  {
+   "name": "Br(19)",
+   "w_um": 1.52648,
+   "label": "Br(19)",
+   "kind": "line"
+  },
+  {
+   "name": "Br(18)",
+   "w_um": 1.5346,
+   "label": "Br(18)",
+   "kind": "line"
+  },
+  {
+   "name": "Br(17)",
+   "w_um": 1.54432,
+   "label": "Br(17)",
+   "kind": "line"
+  },
+  {
+   "name": "Br-m",
+   "w_um": 1.55608,
+   "label": "Br-m",
+   "kind": "line"
+  },
+  {
+   "name": "Br-l",
+   "w_um": 1.5705,
+   "label": "Br-l",
+   "kind": "line"
+  },
+  {
+   "name": "Br-k",
+   "w_um": 1.58849,
+   "label": "Br-k",
+   "kind": "line"
+  },
+  {
+   "name": "Br-i",
+   "w_um": 1.61138,
+   "label": "Br-i",
+   "kind": "line"
+  },
+  {
+   "name": "Br-th",
+   "w_um": 1.64117,
+   "label": "Br-th",
+   "kind": "line"
+  },
+  {
+   "name": "Br-eta",
+   "w_um": 1.68112,
+   "label": "Br-eta",
+   "kind": "line"
+  },
+  {
+   "name": "Br-z",
+   "w_um": 1.73669,
+   "label": "Br-z",
+   "kind": "line"
+  },
+  {
+   "name": "Br-e",
+   "w_um": 1.81792,
+   "label": "Br-e",
+   "kind": "line"
+  },
+  {
+   "name": "Pa-a",
+   "w_um": 1.87563,
+   "label": "Pa-a",
+   "kind": "line"
+  },
+  {
+   "name": "Br-d",
+   "w_um": 1.9451,
+   "label": "Br-d",
+   "kind": "line"
+  },
+  {
+   "name": "Br-g",
+   "w_um": 2.16613,
+   "label": "Br-g",
+   "kind": "line"
+  },
+  {
+   "name": "Pf(20)",
+   "w_um": 2.43137,
+   "label": "Pf(20)",
+   "kind": "line"
+  },
+  {
+   "name": "Pf(19)",
+   "w_um": 2.44901,
+   "label": "Pf(19)",
+   "kind": "line"
+  },
+  {
+   "name": "Pf(18)",
+   "w_um": 2.46999,
+   "label": "Pf(18)",
+   "kind": "line"
+  },
+  {
+   "name": "Pf-m",
+   "w_um": 2.49526,
+   "label": "Pf-m",
+   "kind": "line"
+  },
+  {
+   "name": "Pf-l",
+   "w_um": 2.5261,
+   "label": "Pf-l",
+   "kind": "line"
+  },
+  {
+   "name": "Pf-k",
+   "w_um": 2.56433,
+   "label": "Pf-k",
+   "kind": "line"
+  },
+  {
+   "name": "Pf-i",
+   "w_um": 2.61266,
+   "label": "Pf-i",
+   "kind": "line"
+  },
+  {
+   "name": "Br-b",
+   "w_um": 2.62588,
+   "label": "Br-b",
+   "kind": "line"
+  },
+  {
+   "name": "Pf-th",
+   "w_um": 2.67514,
+   "label": "Pf-th",
+   "kind": "line"
+  },
+  {
+   "name": "Pf-eta",
+   "w_um": 2.75828,
+   "label": "Pf-eta",
+   "kind": "line"
+  },
+  {
+   "name": "Pf-z",
+   "w_um": 2.873,
+   "label": "Pf-z",
+   "kind": "line"
+  },
+  {
+   "name": "Pf-e",
+   "w_um": 3.03921,
+   "label": "Pf-e",
+   "kind": "line"
+  },
+  {
+   "name": "Pf-d",
+   "w_um": 3.297,
+   "label": "Pf-d",
+   "kind": "line"
+  },
+  {
+   "name": "Hu(21)",
+   "w_um": 3.57411,
+   "label": "Hu(21)",
+   "kind": "line"
+  },
+  {
+   "name": "Hu(20)",
+   "w_um": 3.60698,
+   "label": "Hu(20)",
+   "kind": "line"
+  },
+  {
+   "name": "Hu(19)",
+   "w_um": 3.64593,
+   "label": "Hu(19)",
+   "kind": "line"
+  },
+  {
+   "name": "Hu-m",
+   "w_um": 3.69264,
+   "label": "Hu-m",
+   "kind": "line"
+  },
+  {
+   "name": "Pf-g",
+   "w_um": 3.74057,
+   "label": "Pf-g",
+   "kind": "line"
+  },
+  {
+   "name": "Hu-l",
+   "w_um": 3.7494,
+   "label": "Hu-l",
+   "kind": "line"
+  },
+  {
+   "name": "Hu-k",
+   "w_um": 3.81946,
+   "label": "Hu-k",
+   "kind": "line"
+  },
+  {
+   "name": "Hu-i",
+   "w_um": 3.90756,
+   "label": "Hu-i",
+   "kind": "line"
+  },
+  {
+   "name": "Hu-th",
+   "w_um": 4.02088,
+   "label": "Hu-th",
+   "kind": "line"
+  },
+  {
+   "name": "Br-a",
+   "w_um": 4.05228,
+   "label": "Br-a",
+   "kind": "line"
+  },
+  {
+   "name": "Hu-eta",
+   "w_um": 4.1708,
+   "label": "Hu-eta",
+   "kind": "line"
+  },
+  {
+   "name": "Hu-z",
+   "w_um": 4.37646,
+   "label": "Hu-z",
+   "kind": "line"
+  },
+  {
+   "name": "Pf-b",
+   "w_um": 4.65379,
+   "label": "Pf-b",
+   "kind": "line"
+  },
+  {
+   "name": "Hu-e",
+   "w_um": 4.67252,
+   "label": "Hu-e",
+   "kind": "line"
+  },
+  {
+   "name": "Hu-d",
+   "w_um": 5.12867,
+   "label": "Hu-d",
+   "kind": "line"
+  },
+  {
+   "name": "Hu-g",
+   "w_um": 5.90823,
+   "label": "Hu-g",
+   "kind": "line"
+  },
+  {
+   "name": "Pf-a",
+   "w_um": 7.45988,
+   "label": "Pf-a",
+   "kind": "line"
+  },
+  {
+   "name": "Hu-b",
+   "w_um": 7.50251,
+   "label": "Hu-b",
+   "kind": "line"
+  },
+  {
+   "name": "Hu-a",
+   "w_um": 12.37193,
+   "label": "Hu-a",
+   "kind": "line"
+  }
+ ]
+}

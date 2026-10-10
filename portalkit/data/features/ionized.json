@@ -1,0 +1,109 @@
+{
+ "family": "ionized",
+ "label": "He I and forbidden lines",
+ "source": "JWST_Archive_ColorPortal.py:123-242 ION_LINES",
+ "features": [
+  {
+   "name": "[S III] 0.907",
+   "w_um": 0.9069,
+   "label": "[S III] 0.907",
+   "kind": "line"
+  },
+  {
+   "name": "[S III] 0.953",
+   "w_um": 0.9531,
+   "label": "[S III] 0.953",
+   "kind": "line"
+  },
+  {
+   "name": "[C I] 0.985",
+   "w_um": 0.9853,
+   "label": "[C I] 0.985",
+   "kind": "line"
+  },
+  {
+   "name": "He I 1.083",
+   "w_um": 1.08331,
+   "label": "He I 1.083",
+   "kind": "line"
+  },
+  {
+   "name": "[Fe II] 1.257",
+   "w_um": 1.25702,
+   "label": "[Fe II] 1.257",
+   "kind": "line"
+  },
+  {
+   "name": "He I 1.279",
+   "w_um": 1.27884,
+   "label": "He I 1.279",
+   "kind": "line"
+  },
+  {
+   "name": "[Fe II] 1.295",
+   "w_um": 1.29462,
+   "label": "[Fe II] 1.295",
+   "kind": "line"
+  },
+  {
+   "name": "[Fe II] 1.321",
+   "w_um": 1.32092,
+   "label": "[Fe II] 1.321",
+   "kind": "line"
+  },
+  {
+   "name": "[Fe II] 1.534",
+   "w_um": 1.5339,
+   "label": "[Fe II] 1.534",
+   "kind": "line"
+  },
+  {
+   "name": "[Fe II] 1.644",
+   "w_um": 1.644,
+   "label": "[Fe II] 1.644",
+   "kind": "line"
+  },
+  {
+   "name": "[Fe II] 1.677",
+   "w_um": 1.67733,
+   "label": "[Fe II] 1.677",
+   "kind": "line"
+  },
+  {
+   "name": "He I 1.701",
+   "w_um": 1.70073,
+   "label": "He I 1.701",
+   "kind": "line"
+  },
+  {
+   "name": "[Fe II] 1.745",
+   "w_um": 1.7449,
+   "label": "[Fe II] 1.745",
+   "kind": "line"
+  },
+  {
+   "name": "[Fe II] 1.810",
+   "w_um": 1.8099,
+   "label": "[Fe II] 1.810",
+   "kind": "line"
+  },
+  {
+   "name": "He I 2.059",
+   "w_um": 2.05869,
+   "label": "He I 2.059",
+   "kind": "line"
+  },
+  {
+   "name": "He I 2.113",
+   "w_um": 2.11274,
+   "label": "He I 2.113",
+   "kind": "line"
+  },
+  {
+   "name": "He I 4.049",
+   "w_um": 4.049,
+   "label": "He I 4.049",
+   "kind": "line"
+  }
+ ]
+}

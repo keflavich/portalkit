@@ -1,0 +1,533 @@
+{
+ "description": "sedPoints(row, filters, cols): one point per mag/flux column with a filter present in filters and a finite value; mag -> zp*10**(-0.4 m) (a non-finite result, e.g. from a -999 sentinel, is skipped), err = fnu*ln10/2.5*e (null if e missing or < 0); flux -> value*unitFactor (Jy, mJy, uJy ...), err = |e|*factor; non-positive flux skipped. kind: row._lim[colKey], then row._limits[colKey]: integer 1 or string '1' -> 'ul', 2 or '2' -> 'll' (strings trimmed), any other value -> 'det'; else the column's limit sibling 'u'/'U'/'1'/1 -> 'ul', 'l'/'L'/'2'/2 -> 'll', else 'det'; limits have err null. Sorted by wl (stable). Extra fields key/filter name the source column and filter. cases_string_codes exercise the string digit codes '1'/'2'.",
+ "filters": {
+  "JWST/NIRCam.F182M": {
+   "label": "F182M",
+   "instrument": "NIRCam",
+   "wl_um": 1.845167,
+   "weff_um": 0.225081,
+   "zp_jy": 844.94329,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.13931,
+    "G23_5.5": 0.214822
+   }
+  },
+  "JWST/NIRCam.F212N": {
+   "label": "F212N",
+   "instrument": "NIRCam",
+   "wl_um": 2.121318,
+   "weff_um": 0.0274274,
+   "zp_jy": 674.83167,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.109862,
+    "G23_5.5": 0.174987
+   }
+  },
+  "JWST/NIRCam.F410M": {
+   "label": "F410M",
+   "instrument": "NIRCam",
+   "wl_um": 4.082238,
+   "weff_um": 0.426286,
+   "zp_jy": 208.75045,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0359533,
+    "G23_5.5": 0.0684707
+   }
+  },
+  "JWST/NIRCam.F444W": {
+   "label": "F444W",
+   "instrument": "NIRCam",
+   "wl_um": 4.404315,
+   "weff_um": 1.0676,
+   "zp_jy": 184.10222,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0327011,
+    "G23_5.5": 0.0627014
+   }
+  },
+  "2MASS/2MASS.Ks": {
+   "label": "2MASS Ks",
+   "instrument": "2MASS",
+   "wl_um": 2.163861,
+   "weff_um": 0.250619,
+   "zp_jy": 666.8,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.106135,
+    "G23_5.5": 0.169903
+   }
+  },
+  "JWST/MIRI.F1500W": {
+   "label": "F1500W",
+   "instrument": "MIRI",
+   "wl_um": 15.06351,
+   "weff_um": 2.94262,
+   "zp_jy": 17.11778,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0315228,
+    "G23_5.5": 0.0396606
+   }
+  },
+  "Spitzer/MIPS.70mu": {
+   "label": "MIPS 70",
+   "instrument": "MIPS",
+   "wl_um": 70.89083,
+   "weff_um": 21.3015,
+   "zp_jy": 0.80090434,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": null,
+    "G23_5.5": null
+   }
+  },
+  "TEST/Curve.C300": {
+   "label": "C300",
+   "instrument": "TEST",
+   "wl_um": 3.0,
+   "weff_um": null,
+   "zp_jy": 350.0,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": null,
+    "G23_5.5": null
+   }
+  },
+  "TEST/Pair.P250": {
+   "label": "P250",
+   "instrument": "TEST",
+   "wl_um": 2.5,
+   "weff_um": 0.2,
+   "zp_jy": 500.0,
+   "system": "AB",
+   "a_over_av": {
+    "G23_3.1": 0.082,
+    "G23_5.5": 0.1366
+   }
+  },
+  "TEST/None.N900": {
+   "label": "N900",
+   "instrument": "TEST",
+   "wl_um": 900.0,
+   "weff_um": null,
+   "zp_jy": 0.01,
+   "system": "Vega",
+   "a_over_av": {}
+  }
+ },
+ "cols": [
+  {
+   "key": "f182m",
+   "role": "mag",
+   "filter": "JWST/NIRCam.F182M",
+   "err": "e_f182m"
+  },
+  {
+   "key": "e_f182m",
+   "role": "error"
+  },
+  {
+   "key": "f410m",
+   "role": "mag",
+   "filter": "JWST/NIRCam.F410M",
+   "err": "e_f410m"
+  },
+  {
+   "key": "e_f410m",
+   "role": "error"
+  },
+  {
+   "key": "f212n",
+   "role": "mag",
+   "filter": "JWST/NIRCam.F212N",
+   "err": "e_f212n",
+   "limit": "k_f212n"
+  },
+  {
+   "key": "e_f212n",
+   "role": "error"
+  },
+  {
+   "key": "k_f212n",
+   "role": "limit"
+  },
+  {
+   "key": "ks",
+   "role": "mag",
+   "filter": "2MASS/2MASS.Ks"
+  },
+  {
+   "key": "f1500w_mjy",
+   "role": "flux",
+   "filter": "JWST/MIRI.F1500W",
+   "unit": "mJy",
+   "err": "e_f1500w_mjy"
+  },
+  {
+   "key": "e_f1500w_mjy",
+   "role": "error"
+  },
+  {
+   "key": "f444w_flux",
+   "role": "flux",
+   "filter": "JWST/NIRCam.F444W",
+   "unit": "uJy"
+  },
+  {
+   "key": "nofilter",
+   "role": "mag"
+  },
+  {
+   "key": "unknownfilter",
+   "role": "mag",
+   "filter": "NOPE/NOPE.X"
+  },
+  {
+   "key": "notamag",
+   "role": "value",
+   "filter": "JWST/NIRCam.F410M"
+  }
+ ],
+ "cases": [
+  {
+   "row": {
+    "id": "all",
+    "f182m": 15.0,
+    "e_f182m": 0.05,
+    "f410m": 12.3,
+    "e_f410m": 0.02,
+    "f212n": 14.1,
+    "e_f212n": 0.1,
+    "k_f212n": "",
+    "ks": 13.9,
+    "f1500w_mjy": 12.5,
+    "e_f1500w_mjy": 0.5,
+    "f444w_flux": 850.0,
+    "nofilter": 1.0,
+    "unknownfilter": 2.0,
+    "notamag": 3.0
+   },
+   "points": [
+    {
+     "wl": 1.845167,
+     "fnu": 0.00084494329,
+     "err": 3.8911076479586906e-05,
+     "kind": "det",
+     "key": "f182m",
+     "filter": "JWST/NIRCam.F182M"
+    },
+    {
+     "wl": 2.121318,
+     "fnu": 0.0015459500438662545,
+     "err": 0.00014238726102079716,
+     "kind": "det",
+     "key": "f212n",
+     "filter": "JWST/NIRCam.F212N"
+    },
+    {
+     "wl": 2.163861,
+     "fnu": 0.0018365196993858873,
+     "err": null,
+     "kind": "det",
+     "key": "ks",
+     "filter": "2MASS/2MASS.Ks"
+    },
+    {
+     "wl": 4.082238,
+     "fnu": 0.0025097324174538005,
+     "err": 4.6230979614664245e-05,
+     "kind": "det",
+     "key": "f410m",
+     "filter": "JWST/NIRCam.F410M"
+    },
+    {
+     "wl": 4.404315,
+     "fnu": 0.00085,
+     "err": null,
+     "kind": "det",
+     "key": "f444w_flux",
+     "filter": "JWST/NIRCam.F444W"
+    },
+    {
+     "wl": 15.06351,
+     "fnu": 0.0125,
+     "err": 0.0005,
+     "kind": "det",
+     "key": "f1500w_mjy",
+     "filter": "JWST/MIRI.F1500W"
+    }
+   ]
+  },
+  {
+   "row": {
+    "id": "limits",
+    "f182m": 21.0,
+    "e_f182m": 0.3,
+    "f410m": 16.0,
+    "e_f410m": null,
+    "f212n": 19.5,
+    "e_f212n": 0.2,
+    "k_f212n": "u",
+    "ks": null,
+    "f1500w_mjy": 0.8,
+    "e_f1500w_mjy": 0.1,
+    "f444w_flux": -5.0,
+    "_lim": {
+     "f182m": 2,
+     "f1500w_mjy": 1
+    }
+   },
+   "points": [
+    {
+     "wl": 1.845167,
+     "fnu": 3.363779824600628e-06,
+     "err": null,
+     "kind": "ll",
+     "key": "f182m",
+     "filter": "JWST/NIRCam.F182M"
+    },
+    {
+     "wl": 2.121318,
+     "fnu": 1.069536119840163e-05,
+     "err": null,
+     "kind": "ul",
+     "key": "f212n",
+     "filter": "JWST/NIRCam.F212N"
+    },
+    {
+     "wl": 4.082238,
+     "fnu": 8.310505100126923e-05,
+     "err": null,
+     "kind": "det",
+     "key": "f410m",
+     "filter": "JWST/NIRCam.F410M"
+    },
+    {
+     "wl": 15.06351,
+     "fnu": 0.0008,
+     "err": null,
+     "kind": "ul",
+     "key": "f1500w_mjy",
+     "filter": "JWST/MIRI.F1500W"
+    }
+   ]
+  },
+  {
+   "row": {
+    "id": "missing",
+    "f182m": null,
+    "f410m": null,
+    "f212n": null,
+    "ks": null,
+    "f1500w_mjy": 0.0,
+    "f444w_flux": null
+   },
+   "points": []
+  },
+  {
+   "row": {
+    "id": "big",
+    "f182m": -3.0,
+    "e_f182m": 0.0,
+    "f410m": 35.0,
+    "e_f410m": 5.0,
+    "f212n": 14.0,
+    "e_f212n": -1.0,
+    "k_f212n": "l",
+    "ks": 9.0,
+    "f1500w_mjy": 1000000.0,
+    "f444w_flux": 0.001
+   },
+   "points": [
+    {
+     "wl": 1.845167,
+     "fnu": 13391.44868336697,
+     "err": 0.0,
+     "kind": "det",
+     "key": "f182m",
+     "filter": "JWST/NIRCam.F182M"
+    },
+    {
+     "wl": 2.121318,
+     "fnu": 0.0016951005154259486,
+     "err": null,
+     "kind": "ll",
+     "key": "f212n",
+     "filter": "JWST/NIRCam.F212N"
+    },
+    {
+     "wl": 2.163861,
+     "fnu": 0.16749258725305874,
+     "err": null,
+     "kind": "det",
+     "key": "ks",
+     "filter": "2MASS/2MASS.Ks"
+    },
+    {
+     "wl": 4.082238,
+     "fnu": 2.0875045e-12,
+     "err": 9.613313486515977e-12,
+     "kind": "det",
+     "key": "f410m",
+     "filter": "JWST/NIRCam.F410M"
+    },
+    {
+     "wl": 4.404315,
+     "fnu": 1e-09,
+     "err": null,
+     "kind": "det",
+     "key": "f444w_flux",
+     "filter": "JWST/NIRCam.F444W"
+    },
+    {
+     "wl": 15.06351,
+     "fnu": 1000.0,
+     "err": null,
+     "kind": "det",
+     "key": "f1500w_mjy",
+     "filter": "JWST/MIRI.F1500W"
+    }
+   ]
+  },
+  {
+   "row": {
+    "id": "sentinels",
+    "f182m": -999.0,
+    "e_f182m": 0.1,
+    "f410m": 999.0,
+    "e_f410m": 0.1,
+    "f212n": 14.0,
+    "e_f212n": 0.1,
+    "ks": 12.0,
+    "f1500w_mjy": 1.0,
+    "_limits": {
+     "ks": 1,
+     "f212n": 2
+    }
+   },
+   "points": [
+    {
+     "wl": 2.121318,
+     "fnu": 0.0016951005154259486,
+     "err": null,
+     "kind": "ll",
+     "key": "f212n",
+     "filter": "JWST/NIRCam.F212N"
+    },
+    {
+     "wl": 2.163861,
+     "fnu": 0.010568067807330685,
+     "err": null,
+     "kind": "ul",
+     "key": "ks",
+     "filter": "2MASS/2MASS.Ks"
+    },
+    {
+     "wl": 15.06351,
+     "fnu": 0.001,
+     "err": null,
+     "kind": "det",
+     "key": "f1500w_mjy",
+     "filter": "JWST/MIRI.F1500W"
+    }
+   ]
+  }
+ ],
+ "cases_string_codes": [
+  {
+   "row": {
+    "id": "string_digits",
+    "f182m": 15.0,
+    "e_f182m": 0.05,
+    "f410m": 12.3,
+    "e_f410m": 0.02,
+    "f212n": 14.1,
+    "e_f212n": 0.1,
+    "k_f212n": "2",
+    "ks": 13.9,
+    "f1500w_mjy": 1.0,
+    "_lim": {
+     "f182m": "1",
+     "f410m": " 2 ",
+     "f1500w_mjy": "0"
+    }
+   },
+   "points": [
+    {
+     "wl": 1.845167,
+     "fnu": 0.00084494329,
+     "err": null,
+     "kind": "ul",
+     "key": "f182m",
+     "filter": "JWST/NIRCam.F182M"
+    },
+    {
+     "wl": 2.121318,
+     "fnu": 0.0015459500438662545,
+     "err": null,
+     "kind": "ll",
+     "key": "f212n",
+     "filter": "JWST/NIRCam.F212N"
+    },
+    {
+     "wl": 2.163861,
+     "fnu": 0.0018365196993858873,
+     "err": null,
+     "kind": "det",
+     "key": "ks",
+     "filter": "2MASS/2MASS.Ks"
+    },
+    {
+     "wl": 4.082238,
+     "fnu": 0.0025097324174538005,
+     "err": null,
+     "kind": "ll",
+     "key": "f410m",
+     "filter": "JWST/NIRCam.F410M"
+    },
+    {
+     "wl": 15.06351,
+     "fnu": 0.001,
+     "err": null,
+     "kind": "det",
+     "key": "f1500w_mjy",
+     "filter": "JWST/MIRI.F1500W"
+    }
+   ]
+  },
+  {
+   "row": {
+    "id": "string_digit_sibling",
+    "f212n": 14.1,
+    "e_f212n": 0.1,
+    "k_f212n": "1",
+    "f182m": 15.0,
+    "_lim": {
+     "f182m": "x"
+    }
+   },
+   "points": [
+    {
+     "wl": 1.845167,
+     "fnu": 0.00084494329,
+     "err": null,
+     "kind": "det",
+     "key": "f182m",
+     "filter": "JWST/NIRCam.F182M"
+    },
+    {
+     "wl": 2.121318,
+     "fnu": 0.0015459500438662545,
+     "err": null,
+     "kind": "ul",
+     "key": "f212n",
+     "filter": "JWST/NIRCam.F212N"
+    }
+   ]
+  }
+ ]
+}

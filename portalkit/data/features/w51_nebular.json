@@ -1,0 +1,70 @@
+{
+ "family": "w51_nebular",
+ "label": "W51 nebular lines",
+ "source": "W51_Portal_Spectra.py:138-155 LINES ('neb' group)",
+ "features": [
+  {
+   "name": "Br-11",
+   "w_um": 1.6811,
+   "label": "Br-11",
+   "kind": "line",
+   "group": "hot",
+   "color": "#8ab4ff",
+   "requires_coverage": true
+  },
+  {
+   "name": "Br-10",
+   "w_um": 1.7367,
+   "label": "Br-10",
+   "kind": "line",
+   "group": "hot",
+   "color": "#8ab4ff",
+   "requires_coverage": true
+  },
+  {
+   "name": "He I 2.0587",
+   "w_um": 2.0587,
+   "label": "He I",
+   "kind": "line",
+   "group": "hot",
+   "color": "#8ab4ff",
+   "requires_coverage": true
+  },
+  {
+   "name": "He I 2.1126",
+   "w_um": 2.1126,
+   "label": "He I",
+   "kind": "line",
+   "group": "hot",
+   "color": "#8ab4ff",
+   "requires_coverage": true
+  },
+  {
+   "name": "H2 1-0 S(1)",
+   "w_um": 2.1218,
+   "label": "H2 1-0 S(1)",
+   "kind": "line",
+   "group": "h2",
+   "color": "#67d5b5",
+   "requires_coverage": true
+  },
+  {
+   "name": "Br-gamma",
+   "w_um": 2.1661,
+   "label": "Br-gamma",
+   "kind": "line",
+   "group": "hot",
+   "color": "#8ab4ff",
+   "requires_coverage": true
+  },
+  {
+   "name": "H2 1-0 S(0)",
+   "w_um": 2.2233,
+   "label": "H2 1-0 S(0)",
+   "kind": "line",
+   "group": "h2",
+   "color": "#67d5b5",
+   "requires_coverage": true
+  }
+ ]
+}

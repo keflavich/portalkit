@@ -1,0 +1,1510 @@
+{
+ "description": "resolveKey(name, candidates, colmap?, aliases?) -> key or null. candidates: an array of keys or an object of filter entries ('shared' = shared_filters, the default filters.json object with every registry filter). Order: (1) colmap[name] when it is a candidate; (2) exact key; (3) the unique key equal to name case-insensitively; (4) the unique key listing name among aliases[key] (case-insensitive); (5) short-name probes, in turn lower(name), the text after its last '_', and shortName(lower(name)) (text after the last '/' then the last '.'), skipping repeats: the unique candidate with lower(shortName(key)) == probe wins; when several match and candidates is an object of entries, the unique one among them with lower(entry.label) == probe wins; (6) null. vector cases: vector(x, y, av, rv, shared_filters, colmap, reddening.json ext); 'ks' stays ambiguous without a colmap (null).",
+ "shared_filters": {
+  "Roman/WFI.F062": {
+   "label": "WFI F062",
+   "instrument": "WFI",
+   "wl_um": 0.6290802,
+   "weff_um": 0.212229,
+   "zp_jy": 3174.1761,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.852155,
+    "G23_5.5": 0.884175
+   }
+  },
+  "JWST/NIRCam.F070W": {
+   "label": "F070W",
+   "instrument": "NIRCam",
+   "wl_um": 0.7039119,
+   "weff_um": 0.121284,
+   "zp_jy": 2768.4046,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.719318,
+    "G23_5.5": 0.797014
+   }
+  },
+  "JWST/NIRCam2025.F070W": {
+   "label": "F070W (2025)",
+   "instrument": "NIRCam",
+   "wl_um": 0.7047095,
+   "weff_um": 0.117649,
+   "zp_jy": 2765.462,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.718074,
+    "G23_5.5": 0.796126
+   }
+  },
+  "Roman/WFI.F087": {
+   "label": "WFI F087",
+   "instrument": "WFI",
+   "wl_um": 0.8695979,
+   "weff_um": 0.189217,
+   "zp_jy": 2294.0439,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.514563,
+    "G23_5.5": 0.631757
+   }
+  },
+  "JWST/NIRISS.F090W": {
+   "label": "NIRISS F090W",
+   "instrument": "NIRISS",
+   "wl_um": 0.9003897,
+   "weff_um": 0.176926,
+   "zp_jy": 2245.9691,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.484751,
+    "G23_5.5": 0.605403
+   }
+  },
+  "JWST/NIRCam.F090W": {
+   "label": "F090W",
+   "instrument": "NIRCam",
+   "wl_um": 0.9021529,
+   "weff_um": 0.177274,
+   "zp_jy": 2244.9507,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.483097,
+    "G23_5.5": 0.603939
+   }
+  },
+  "JWST/NIRCam2025.F090W": {
+   "label": "F090W (2025)",
+   "instrument": "NIRCam",
+   "wl_um": 0.9023997,
+   "weff_um": 0.176889,
+   "zp_jy": 2244.6272,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.482865,
+    "G23_5.5": 0.603735
+   }
+  },
+  "Roman/WFI.F106": {
+   "label": "WFI F106",
+   "instrument": "WFI",
+   "wl_um": 1.056652,
+   "weff_um": 0.244085,
+   "zp_jy": 1967.0751,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.356663,
+    "G23_5.5": 0.492299
+   }
+  },
+  "JWST/NIRISS.F115W": {
+   "label": "NIRISS F115W",
+   "instrument": "NIRISS",
+   "wl_um": 1.150102,
+   "weff_um": 0.219395,
+   "zp_jy": 1755.7085,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.308904,
+    "G23_5.5": 0.433594
+   }
+  },
+  "JWST/NIRCam2025.F115W": {
+   "label": "F115W (2025)",
+   "instrument": "NIRCam",
+   "wl_um": 1.154078,
+   "weff_um": 0.205284,
+   "zp_jy": 1746.5217,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.307113,
+    "G23_5.5": 0.431348
+   }
+  },
+  "JWST/NIRCam.F115W": {
+   "label": "F115W",
+   "instrument": "NIRCam",
+   "wl_um": 1.154261,
+   "weff_um": 0.205513,
+   "zp_jy": 1746.1179,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.307031,
+    "G23_5.5": 0.431245
+   }
+  },
+  "2MASS/2MASS.J": {
+   "label": "2MASS J",
+   "instrument": "2MASS",
+   "wl_um": 1.239309,
+   "weff_um": 0.152026,
+   "zp_jy": 1594.0,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.272376,
+    "G23_5.5": 0.387565
+   }
+  },
+  "Roman/WFI.F129": {
+   "label": "WFI F129",
+   "instrument": "WFI",
+   "wl_um": 1.290134,
+   "weff_um": 0.293926,
+   "zp_jy": 1483.5958,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.254544,
+    "G23_5.5": 0.364924
+   }
+  },
+  "JWST/NIRISS.F140M": {
+   "label": "NIRISS F140M",
+   "instrument": "NIRISS",
+   "wl_um": 1.405134,
+   "weff_um": 0.141255,
+   "zp_jy": 1288.9435,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.220441,
+    "G23_5.5": 0.321261
+   }
+  },
+  "JWST/NIRCam.F140M": {
+   "label": "F140M",
+   "instrument": "NIRCam",
+   "wl_um": 1.405323,
+   "weff_um": 0.13674,
+   "zp_jy": 1288.6489,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.220391,
+    "G23_5.5": 0.321197
+   }
+  },
+  "JWST/NIRCam2025.F140M": {
+   "label": "F140M (2025)",
+   "instrument": "NIRCam",
+   "wl_um": 1.405341,
+   "weff_um": 0.136373,
+   "zp_jy": 1288.6255,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.220386,
+    "G23_5.5": 0.321191
+   }
+  },
+  "Roman/WFI.F146": {
+   "label": "WFI F146",
+   "instrument": "WFI",
+   "wl_um": 1.437783,
+   "weff_um": 0.788983,
+   "zp_jy": 1396.7433,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.212074,
+    "G23_5.5": 0.310467
+   }
+  },
+  "JWST/NIRISS.F150W": {
+   "label": "NIRISS F150W",
+   "instrument": "NIRISS",
+   "wl_um": 1.498293,
+   "weff_um": 0.306669,
+   "zp_jy": 1175.4827,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.197846,
+    "G23_5.5": 0.292028
+   }
+  },
+  "JWST/NIRCam.F150W": {
+   "label": "F150W",
+   "instrument": "NIRCam",
+   "wl_um": 1.500744,
+   "weff_um": 0.289043,
+   "zp_jy": 1172.0576,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.197302,
+    "G23_5.5": 0.291321
+   }
+  },
+  "JWST/NIRCam2025.F150W": {
+   "label": "F150W (2025)",
+   "instrument": "NIRCam",
+   "wl_um": 1.500898,
+   "weff_um": 0.289231,
+   "zp_jy": 1171.8548,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.197268,
+    "G23_5.5": 0.291277
+   }
+  },
+  "Roman/WFI.F158": {
+   "label": "WFI F158",
+   "instrument": "WFI",
+   "wl_um": 1.574867,
+   "weff_um": 0.354672,
+   "zp_jy": 1091.956,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.181912,
+    "G23_5.5": 0.271243
+   }
+  },
+  "JWST/NIRISS.F158M": {
+   "label": "NIRISS F158M",
+   "instrument": "NIRISS",
+   "wl_um": 1.586646,
+   "weff_um": 0.18952,
+   "zp_jy": 1063.5123,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.179643,
+    "G23_5.5": 0.26827
+   }
+  },
+  "JWST/NIRCam2025.F162M": {
+   "label": "F162M (2025)",
+   "instrument": "NIRCam",
+   "wl_um": 1.627222,
+   "weff_um": 0.161912,
+   "zp_jy": 1023.0582,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.172162,
+    "G23_5.5": 0.258446
+   }
+  },
+  "JWST/NIRCam.F162M": {
+   "label": "F162M",
+   "instrument": "NIRCam",
+   "wl_um": 1.627247,
+   "weff_um": 0.162629,
+   "zp_jy": 1023.0385,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.172157,
+    "G23_5.5": 0.25844
+   }
+  },
+  "JWST/NIRCam2025.F164N": {
+   "label": "F164N (2025)",
+   "instrument": "NIRCam",
+   "wl_um": 1.644508,
+   "weff_um": 0.0200224,
+   "zp_jy": 985.51829,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.169124,
+    "G23_5.5": 0.254446
+   }
+  },
+  "JWST/NIRCam.F164N": {
+   "label": "F164N",
+   "instrument": "NIRCam",
+   "wl_um": 1.644536,
+   "weff_um": 0.0200101,
+   "zp_jy": 985.57767,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.16912,
+    "G23_5.5": 0.25444
+   }
+  },
+  "2MASS/2MASS.H": {
+   "label": "2MASS H",
+   "instrument": "2MASS",
+   "wl_um": 1.649495,
+   "weff_um": 0.241018,
+   "zp_jy": 1024.0,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.168264,
+    "G23_5.5": 0.253312
+   }
+  },
+  "JWST/NIRCam.F150W2": {
+   "label": "F150W2",
+   "instrument": "NIRCam",
+   "wl_um": 1.659211,
+   "weff_um": 0.938916,
+   "zp_jy": 1149.9432,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.166607,
+    "G23_5.5": 0.251128
+   }
+  },
+  "JWST/NIRCam2025.F150W2": {
+   "label": "F150W2 (2025)",
+   "instrument": "NIRCam",
+   "wl_um": 1.672016,
+   "weff_um": 0.89473,
+   "zp_jy": 1142.7811,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.164464,
+    "G23_5.5": 0.248297
+   }
+  },
+  "Roman/WFI.F184": {
+   "label": "WFI F184",
+   "instrument": "WFI",
+   "wl_um": 1.83941,
+   "weff_um": 0.302252,
+   "zp_jy": 854.11807,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.140045,
+    "G23_5.5": 0.215808
+   }
+  },
+  "JWST/NIRCam.F182M": {
+   "label": "F182M",
+   "instrument": "NIRCam",
+   "wl_um": 1.845167,
+   "weff_um": 0.225081,
+   "zp_jy": 844.94329,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.13931,
+    "G23_5.5": 0.214822
+   }
+  },
+  "JWST/NIRCam2025.F182M": {
+   "label": "F182M (2025)",
+   "instrument": "NIRCam",
+   "wl_um": 1.845213,
+   "weff_um": 0.225365,
+   "zp_jy": 844.90489,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.139304,
+    "G23_5.5": 0.214814
+   }
+  },
+  "JWST/NIRCam.F187N": {
+   "label": "F187N",
+   "instrument": "NIRCam",
+   "wl_um": 1.873899,
+   "weff_um": 0.0236686,
+   "zp_jy": 794.84816,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.135731,
+    "G23_5.5": 0.210015
+   }
+  },
+  "JWST/NIRCam2025.F187N": {
+   "label": "F187N (2025)",
+   "instrument": "NIRCam",
+   "wl_um": 1.874053,
+   "weff_um": 0.0236398,
+   "zp_jy": 794.63869,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.135712,
+    "G23_5.5": 0.20999
+   }
+  },
+  "JWST/NIRISS.F200W": {
+   "label": "NIRISS F200W",
+   "instrument": "NIRISS",
+   "wl_um": 1.983678,
+   "weff_um": 0.426326,
+   "zp_jy": 761.00637,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.123281,
+    "G23_5.5": 0.193211
+   }
+  },
+  "JWST/NIRCam2025.F200W": {
+   "label": "F200W (2025)",
+   "instrument": "NIRCam",
+   "wl_um": 1.987601,
+   "weff_um": 0.431303,
+   "zp_jy": 758.30082,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.122867,
+    "G23_5.5": 0.19265
+   }
+  },
+  "JWST/NIRCam.F200W": {
+   "label": "F200W",
+   "instrument": "NIRCam",
+   "wl_um": 1.988648,
+   "weff_um": 0.419039,
+   "zp_jy": 757.6538,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.122757,
+    "G23_5.5": 0.192501
+   }
+  },
+  "JWST/NIRCam.F210M": {
+   "label": "F210M",
+   "instrument": "NIRCam",
+   "wl_um": 2.095451,
+   "weff_um": 0.205538,
+   "zp_jy": 688.03251,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.11222,
+    "G23_5.5": 0.178198
+   }
+  },
+  "JWST/NIRCam2025.F210M": {
+   "label": "F210M (2025)",
+   "instrument": "NIRCam",
+   "wl_um": 2.095594,
+   "weff_um": 0.205074,
+   "zp_jy": 687.94995,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.112206,
+    "G23_5.5": 0.17818
+   }
+  },
+  "JWST/NIRCam2025.F212N": {
+   "label": "F212N (2025)",
+   "instrument": "NIRCam",
+   "wl_um": 2.121242,
+   "weff_um": 0.0274092,
+   "zp_jy": 674.87853,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.109869,
+    "G23_5.5": 0.174996
+   }
+  },
+  "JWST/NIRCam.F212N": {
+   "label": "F212N",
+   "instrument": "NIRCam",
+   "wl_um": 2.121318,
+   "weff_um": 0.0274274,
+   "zp_jy": 674.83167,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.109862,
+    "G23_5.5": 0.174987
+   }
+  },
+  "Roman/WFI.F213": {
+   "label": "WFI F213",
+   "instrument": "WFI",
+   "wl_um": 2.122996,
+   "weff_um": 0.333865,
+   "zp_jy": 675.72016,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.109711,
+    "G23_5.5": 0.174782
+   }
+  },
+  "Paranal/VISTA.Ks": {
+   "label": "VISTA Ks",
+   "instrument": "VISTA",
+   "wl_um": 2.152167,
+   "weff_um": 0.279343,
+   "zp_jy": 659.0941,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.107141,
+    "G23_5.5": 0.171277
+   }
+  },
+  "2MASS/2MASS.Ks": {
+   "label": "2MASS Ks",
+   "instrument": "2MASS",
+   "wl_um": 2.163861,
+   "weff_um": 0.250619,
+   "zp_jy": 666.8,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.106135,
+    "G23_5.5": 0.169903
+   }
+  },
+  "UKIRT/UKIDSS.K": {
+   "label": "UKIDSS K",
+   "instrument": "UKIDSS",
+   "wl_um": 2.205835,
+   "weff_um": 0.351,
+   "zp_jy": 632.56232,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.102633,
+    "G23_5.5": 0.165114
+   }
+  },
+  "UKIRT/WFCAM.K": {
+   "label": "WFCAM K",
+   "instrument": "WFCAM",
+   "wl_um": 2.205835,
+   "weff_um": 0.351,
+   "zp_jy": 632.56232,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.102633,
+    "G23_5.5": 0.165114
+   }
+  },
+  "JWST/NIRCam2025.F250M": {
+   "label": "F250M (2025)",
+   "instrument": "NIRCam",
+   "wl_um": 2.503123,
+   "weff_um": 0.178102,
+   "zp_jy": 504.69435,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0820152,
+    "G23_5.5": 0.136652
+   }
+  },
+  "JWST/NIRCam.F250M": {
+   "label": "F250M",
+   "instrument": "NIRCam",
+   "wl_um": 2.503233,
+   "weff_um": 0.178296,
+   "zp_jy": 504.65114,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0820087,
+    "G23_5.5": 0.136643
+   }
+  },
+  "JWST/NIRCam.F277W": {
+   "label": "F277W",
+   "instrument": "NIRCam",
+   "wl_um": 2.76174,
+   "weff_um": 0.661461,
+   "zp_jy": 430.1399,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0687153,
+    "G23_5.5": 0.11794
+   }
+  },
+  "JWST/NIRISS.F277W": {
+   "label": "NIRISS F277W",
+   "instrument": "NIRISS",
+   "wl_um": 2.77579,
+   "weff_um": 0.64483,
+   "zp_jy": 426.91333,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.06809,
+    "G23_5.5": 0.11705
+   }
+  },
+  "JWST/NIRCam2025.F277W": {
+   "label": "F277W (2025)",
+   "instrument": "NIRCam",
+   "wl_um": 2.77621,
+   "weff_um": 0.60623,
+   "zp_jy": 426.47544,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0680714,
+    "G23_5.5": 0.117024
+   }
+  },
+  "JWST/NIRCam.F300M": {
+   "label": "F300M",
+   "instrument": "NIRCam",
+   "wl_um": 2.989121,
+   "weff_um": 0.325558,
+   "zp_jy": 369.64763,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0596174,
+    "G23_5.5": 0.104879
+   }
+  },
+  "JWST/NIRCam2025.F300M": {
+   "label": "F300M (2025)",
+   "instrument": "NIRCam",
+   "wl_um": 2.996089,
+   "weff_um": 0.305287,
+   "zp_jy": 368.09433,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0593703,
+    "G23_5.5": 0.10452
+   }
+  },
+  "JWST/NIRCam.F322W2": {
+   "label": "F322W2",
+   "instrument": "NIRCam",
+   "wl_um": 3.231976,
+   "weff_um": 1.13325,
+   "zp_jy": 343.30233,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0519471,
+    "G23_5.5": 0.0936084
+   }
+  },
+  "JWST/NIRCam2025.F323N": {
+   "label": "F323N (2025)",
+   "instrument": "NIRCam",
+   "wl_um": 3.236749,
+   "weff_um": 0.0384609,
+   "zp_jy": 320.96413,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0518142,
+    "G23_5.5": 0.0934103
+   }
+  },
+  "JWST/NIRCam.F323N": {
+   "label": "F323N",
+   "instrument": "NIRCam",
+   "wl_um": 3.236853,
+   "weff_um": 0.038489,
+   "zp_jy": 320.94275,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0518113,
+    "G23_5.5": 0.093406
+   }
+  },
+  "JWST/NIRCam2025.F322W2": {
+   "label": "F322W2 (2025)",
+   "instrument": "NIRCam",
+   "wl_um": 3.246782,
+   "weff_um": 1.11615,
+   "zp_jy": 339.87946,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0515369,
+    "G23_5.5": 0.0929966
+   }
+  },
+  "JWST/NIRCam.F335M": {
+   "label": "F335M",
+   "instrument": "NIRCam",
+   "wl_um": 3.362067,
+   "weff_um": 0.338942,
+   "zp_jy": 298.90992,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0485415,
+    "G23_5.5": 0.0884945
+   }
+  },
+  "JWST/NIRCam2025.F335M": {
+   "label": "F335M (2025)",
+   "instrument": "NIRCam",
+   "wl_um": 3.362248,
+   "weff_um": 0.335057,
+   "zp_jy": 298.92078,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0485371,
+    "G23_5.5": 0.0884878
+   }
+  },
+  "Spitzer/IRAC.I1": {
+   "label": "IRAC I1",
+   "instrument": "IRAC",
+   "wl_um": 3.537841,
+   "weff_um": 0.683618,
+   "zp_jy": 274.53023,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0445871,
+    "G23_5.5": 0.0824373
+   }
+  },
+  "JWST/NIRCam2025.F356W": {
+   "label": "F356W (2025)",
+   "instrument": "NIRCam",
+   "wl_um": 3.565477,
+   "weff_um": 0.727893,
+   "zp_jy": 271.89283,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0440259,
+    "G23_5.5": 0.0815649
+   }
+  },
+  "JWST/NIRCam.F356W": {
+   "label": "F356W",
+   "instrument": "NIRCam",
+   "wl_um": 3.568362,
+   "weff_um": 0.72393,
+   "zp_jy": 271.39263,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0439682,
+    "G23_5.5": 0.081475
+   }
+  },
+  "JWST/NIRISS.F356W": {
+   "label": "NIRISS F356W",
+   "instrument": "NIRISS",
+   "wl_um": 3.594819,
+   "weff_um": 0.856646,
+   "zp_jy": 268.43569,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0434468,
+    "G23_5.5": 0.0806608
+   }
+  },
+  "JWST/NIRCam2025.F360M": {
+   "label": "F360M (2025)",
+   "instrument": "NIRCam",
+   "wl_um": 3.623357,
+   "weff_um": 0.360512,
+   "zp_jy": 260.42623,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0428996,
+    "G23_5.5": 0.0798027
+   }
+  },
+  "JWST/NIRCam.F360M": {
+   "label": "F360M",
+   "instrument": "NIRCam",
+   "wl_um": 3.624176,
+   "weff_um": 0.35848,
+   "zp_jy": 260.30649,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0428842,
+    "G23_5.5": 0.0797784
+   }
+  },
+  "JWST/NIRISS.F380M": {
+   "label": "NIRISS F380M",
+   "instrument": "NIRISS",
+   "wl_um": 3.828358,
+   "weff_um": 0.201962,
+   "zp_jy": 233.65142,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0393968,
+    "G23_5.5": 0.0742067
+   }
+  },
+  "JWST/NIRCam.F405N": {
+   "label": "F405N",
+   "instrument": "NIRCam",
+   "wl_um": 4.051653,
+   "weff_um": 0.0454872,
+   "zp_jy": 206.9694,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0363224,
+    "G23_5.5": 0.0691004
+   }
+  },
+  "JWST/NIRCam2025.F405N": {
+   "label": "F405N (2025)",
+   "instrument": "NIRCam",
+   "wl_um": 4.053118,
+   "weff_um": 0.0457284,
+   "zp_jy": 206.9544,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0363045,
+    "G23_5.5": 0.0690699
+   }
+  },
+  "JWST/NIRCam.F410M": {
+   "label": "F410M",
+   "instrument": "NIRCam",
+   "wl_um": 4.082238,
+   "weff_um": 0.426286,
+   "zp_jy": 208.75045,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0359533,
+    "G23_5.5": 0.0684707
+   }
+  },
+  "JWST/NIRCam2025.F410M": {
+   "label": "F410M (2025)",
+   "instrument": "NIRCam",
+   "wl_um": 4.082973,
+   "weff_um": 0.42524,
+   "zp_jy": 208.68098,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0359446,
+    "G23_5.5": 0.0684558
+   }
+  },
+  "JWST/NIRCam.F430M": {
+   "label": "F430M",
+   "instrument": "NIRCam",
+   "wl_um": 4.281258,
+   "weff_um": 0.229514,
+   "zp_jy": 190.69659,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0338164,
+    "G23_5.5": 0.0647324
+   }
+  },
+  "JWST/NIRCam2025.F430M": {
+   "label": "F430M (2025)",
+   "instrument": "NIRCam",
+   "wl_um": 4.281295,
+   "weff_um": 0.230264,
+   "zp_jy": 190.69627,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0338161,
+    "G23_5.5": 0.0647317
+   }
+  },
+  "JWST/NIRISS.F430M": {
+   "label": "NIRISS F430M",
+   "instrument": "NIRISS",
+   "wl_um": 4.28551,
+   "weff_um": 0.203914,
+   "zp_jy": 190.59879,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0337754,
+    "G23_5.5": 0.0646588
+   }
+  },
+  "JWST/NIRCam2025.F444W": {
+   "label": "F444W (2025)",
+   "instrument": "NIRCam",
+   "wl_um": 4.401752,
+   "weff_um": 1.05832,
+   "zp_jy": 184.27302,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0327229,
+    "G23_5.5": 0.0627417
+   }
+  },
+  "JWST/NIRCam.F444W": {
+   "label": "F444W",
+   "instrument": "NIRCam",
+   "wl_um": 4.404315,
+   "weff_um": 1.0676,
+   "zp_jy": 184.10222,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0327011,
+    "G23_5.5": 0.0627014
+   }
+  },
+  "JWST/NIRISS.F444W": {
+   "label": "NIRISS F444W",
+   "instrument": "NIRISS",
+   "wl_um": 4.434596,
+   "weff_um": 1.06462,
+   "zp_jy": 182.01733,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0324482,
+    "G23_5.5": 0.0622312
+   }
+  },
+  "Spitzer/IRAC.I2": {
+   "label": "IRAC I2",
+   "instrument": "IRAC",
+   "wl_um": 4.478049,
+   "weff_um": 0.864992,
+   "zp_jy": 177.66322,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0320992,
+    "G23_5.5": 0.0615757
+   }
+  },
+  "JWST/NIRCam2025.F460M": {
+   "label": "F460M (2025)",
+   "instrument": "NIRCam",
+   "wl_um": 4.629602,
+   "weff_um": 0.230219,
+   "zp_jy": 164.13334,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0310019,
+    "G23_5.5": 0.0594556
+   }
+  },
+  "JWST/NIRCam.F460M": {
+   "label": "F460M",
+   "instrument": "NIRCam",
+   "wl_um": 4.629928,
+   "weff_um": 0.2309,
+   "zp_jy": 164.10992,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0309998,
+    "G23_5.5": 0.0594513
+   }
+  },
+  "JWST/NIRCam2025.F466N": {
+   "label": "F466N (2025)",
+   "instrument": "NIRCam",
+   "wl_um": 4.654399,
+   "weff_um": 0.053627,
+   "zp_jy": 157.78043,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0308389,
+    "G23_5.5": 0.0591318
+   }
+  },
+  "JWST/NIRCam.F466N": {
+   "label": "F466N",
+   "instrument": "NIRCam",
+   "wl_um": 4.65443,
+   "weff_um": 0.0535405,
+   "zp_jy": 157.77307,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0308387,
+    "G23_5.5": 0.0591314
+   }
+  },
+  "JWST/NIRCam.F470N": {
+   "label": "F470N",
+   "instrument": "NIRCam",
+   "wl_um": 4.707791,
+   "weff_um": 0.0510272,
+   "zp_jy": 159.49947,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0305025,
+    "G23_5.5": 0.058455
+   }
+  },
+  "JWST/NIRCam2025.F470N": {
+   "label": "F470N (2025)",
+   "instrument": "NIRCam",
+   "wl_um": 4.707793,
+   "weff_um": 0.0510781,
+   "zp_jy": 159.50018,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0305025,
+    "G23_5.5": 0.058455
+   }
+  },
+  "JWST/NIRCam2025.F480M": {
+   "label": "F480M (2025)",
+   "instrument": "NIRCam",
+   "wl_um": 4.816549,
+   "weff_um": 0.309859,
+   "zp_jy": 153.30291,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0298753,
+    "G23_5.5": 0.0571586
+   }
+  },
+  "JWST/NIRISS.F480M": {
+   "label": "NIRISS F480M",
+   "instrument": "NIRISS",
+   "wl_um": 4.816824,
+   "weff_um": 0.297379,
+   "zp_jy": 153.38342,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0298738,
+    "G23_5.5": 0.0571555
+   }
+  },
+  "JWST/NIRCam.F480M": {
+   "label": "F480M",
+   "instrument": "NIRCam",
+   "wl_um": 4.818195,
+   "weff_um": 0.314137,
+   "zp_jy": 153.22388,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0298663,
+    "G23_5.5": 0.0571398
+   }
+  },
+  "JWST/MIRI.F560W": {
+   "label": "F560W",
+   "instrument": "MIRI",
+   "wl_um": 5.635256,
+   "weff_um": 0.946137,
+   "zp_jy": 115.28911,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.026975,
+    "G23_5.5": 0.0500723
+   }
+  },
+  "Spitzer/IRAC.I3": {
+   "label": "IRAC I3",
+   "instrument": "IRAC",
+   "wl_um": 5.696178,
+   "weff_um": 1.25612,
+   "zp_jy": 113.55608,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0268492,
+    "G23_5.5": 0.0496845
+   }
+  },
+  "JWST/MIRI.F770W": {
+   "label": "F770W",
+   "instrument": "MIRI",
+   "wl_um": 7.639334,
+   "weff_um": 1.82781,
+   "zp_jy": 65.079869,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0276385,
+    "G23_5.5": 0.0443633
+   }
+  },
+  "Spitzer/IRAC.I4": {
+   "label": "IRAC I4",
+   "instrument": "IRAC",
+   "wl_um": 7.79784,
+   "weff_um": 2.52885,
+   "zp_jy": 63.704449,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0286932,
+    "G23_5.5": 0.0450575
+   }
+  },
+  "JWST/MIRI.F1000W": {
+   "label": "F1000W",
+   "instrument": "MIRI",
+   "wl_um": 9.953116,
+   "weff_um": 1.70367,
+   "zp_jy": 38.508203,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0843224,
+    "G23_5.5": 0.0969537
+   }
+  },
+  "JWST/MIRI.F1065C": {
+   "label": "F1065C",
+   "instrument": "MIRI",
+   "wl_um": 10.56284,
+   "weff_um": 0.564725,
+   "zp_jy": 33.890489,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.067418,
+    "G23_5.5": 0.0792772
+   }
+  },
+  "JWST/MIRI.F1130W": {
+   "label": "F1130W",
+   "instrument": "MIRI",
+   "wl_um": 11.3085,
+   "weff_um": 0.722915,
+   "zp_jy": 29.664461,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0482607,
+    "G23_5.5": 0.0592919
+   }
+  },
+  "JWST/MIRI.F1140C": {
+   "label": "F1140C",
+   "instrument": "MIRI",
+   "wl_um": 11.3103,
+   "weff_um": 0.603653,
+   "zp_jy": 29.625297,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0482269,
+    "G23_5.5": 0.0592562
+   }
+  },
+  "JWST/MIRI.F1280W": {
+   "label": "F1280W",
+   "instrument": "MIRI",
+   "wl_um": 12.81014,
+   "weff_um": 2.43377,
+   "zp_jy": 23.522511,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0325917,
+    "G23_5.5": 0.042256
+   }
+  },
+  "JWST/MIRI.F1500W": {
+   "label": "F1500W",
+   "instrument": "MIRI",
+   "wl_um": 15.06351,
+   "weff_um": 2.94262,
+   "zp_jy": 17.11778,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0315228,
+    "G23_5.5": 0.0396606
+   }
+  },
+  "JWST/MIRI.F1550C": {
+   "label": "F1550C",
+   "instrument": "MIRI",
+   "wl_um": 15.51677,
+   "weff_um": 0.703801,
+   "zp_jy": 15.927285,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0332888,
+    "G23_5.5": 0.0411746
+   }
+  },
+  "JWST/MIRI.F1800W": {
+   "label": "F1800W",
+   "instrument": "MIRI",
+   "wl_um": 17.98372,
+   "weff_um": 2.91457,
+   "zp_jy": 11.992555,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.042252,
+    "G23_5.5": 0.048995
+   }
+  },
+  "JWST/MIRI.F2100W": {
+   "label": "F2100W",
+   "instrument": "MIRI",
+   "wl_um": 20.79501,
+   "weff_um": 4.40457,
+   "zp_jy": 9.0643991,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0405621,
+    "G23_5.5": 0.0463422
+   }
+  },
+  "JWST/MIRI.F2300C": {
+   "label": "F2300C",
+   "instrument": "MIRI",
+   "wl_um": 22.64464,
+   "weff_um": 4.30326,
+   "zp_jy": 7.6197972,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0380619,
+    "G23_5.5": 0.0433424
+   }
+  },
+  "Spitzer/MIPS.24mu": {
+   "label": "MIPS 24",
+   "instrument": "MIPS",
+   "wl_um": 23.59348,
+   "weff_um": 5.29629,
+   "zp_jy": 7.1031343,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0368633,
+    "G23_5.5": 0.0419187
+   }
+  },
+  "JWST/MIRI.F2550W": {
+   "label": "F2550W",
+   "instrument": "MIRI",
+   "wl_um": 25.364,
+   "weff_um": 3.87601,
+   "zp_jy": 6.0691255,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.0348016,
+    "G23_5.5": 0.0394834
+   }
+  },
+  "Spitzer/MIPS.70mu": {
+   "label": "MIPS 70",
+   "instrument": "MIPS",
+   "wl_um": 70.89083,
+   "weff_um": 21.3015,
+   "zp_jy": 0.80090434,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": null,
+    "G23_5.5": null
+   }
+  },
+  "Spitzer/MIPS.160mu": {
+   "label": "MIPS 160",
+   "instrument": "MIPS",
+   "wl_um": 155.3531,
+   "weff_um": 35.7528,
+   "zp_jy": 0.1581035,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": null,
+    "G23_5.5": null
+   }
+  }
+ },
+ "cases": [
+  {
+   "name": "f410m",
+   "candidates": "shared",
+   "expected": "JWST/NIRCam.F410M"
+  },
+  {
+   "name": "F410M",
+   "candidates": "shared",
+   "expected": "JWST/NIRCam.F410M"
+  },
+  {
+   "name": "nircam_f410m",
+   "candidates": "shared",
+   "expected": "JWST/NIRCam.F410M"
+  },
+  {
+   "name": "mag_f182m",
+   "candidates": "shared",
+   "expected": "JWST/NIRCam.F182M"
+  },
+  {
+   "name": "JWST/NIRCam.F410M",
+   "candidates": "shared",
+   "expected": "JWST/NIRCam.F410M"
+  },
+  {
+   "name": "jwst/nircam.f410m",
+   "candidates": "shared",
+   "expected": "JWST/NIRCam.F410M"
+  },
+  {
+   "name": "JWST/NIRCam2025.F410M",
+   "candidates": "shared",
+   "expected": "JWST/NIRCam2025.F410M"
+  },
+  {
+   "name": "f182m",
+   "candidates": "shared",
+   "expected": "JWST/NIRCam.F182M"
+  },
+  {
+   "name": "f444w",
+   "candidates": "shared",
+   "expected": "JWST/NIRCam.F444W"
+  },
+  {
+   "name": "f200w",
+   "candidates": "shared",
+   "expected": "JWST/NIRCam.F200W"
+  },
+  {
+   "name": "f1500w",
+   "candidates": "shared",
+   "expected": "JWST/MIRI.F1500W"
+  },
+  {
+   "name": "f150w",
+   "candidates": "shared",
+   "expected": "JWST/NIRCam.F150W"
+  },
+  {
+   "name": "ks",
+   "candidates": "shared",
+   "expected": null
+  },
+  {
+   "name": "k",
+   "candidates": "shared",
+   "expected": null
+  },
+  {
+   "name": "j",
+   "candidates": "shared",
+   "expected": "2MASS/2MASS.J"
+  },
+  {
+   "name": "i1",
+   "candidates": "shared",
+   "expected": "Spitzer/IRAC.I1"
+  },
+  {
+   "name": "nope",
+   "candidates": "shared",
+   "expected": null
+  },
+  {
+   "name": "F410M (2025)",
+   "candidates": "shared",
+   "expected": null
+  },
+  {
+   "name": "f410m",
+   "candidates": [
+    "JWST/NIRCam.F410M",
+    "JWST/NIRCam2025.F410M"
+   ],
+   "expected": null
+  },
+  {
+   "name": "f410m",
+   "candidates": [
+    "JWST/NIRCam.F410M",
+    "JWST/NIRCam2025.F410M"
+   ],
+   "aliases": {
+    "JWST/NIRCam.F410M": [
+     "F410M",
+     "NIRCam_F410M"
+    ],
+    "JWST/NIRCam2025.F410M": [
+     "NIRCam2025_F410M"
+    ]
+   },
+   "expected": "JWST/NIRCam.F410M"
+  },
+  {
+   "name": "nircam2025_f410m",
+   "candidates": [
+    "JWST/NIRCam.F410M",
+    "JWST/NIRCam2025.F410M"
+   ],
+   "aliases": {
+    "JWST/NIRCam.F410M": [
+     "F410M",
+     "NIRCam_F410M"
+    ],
+    "JWST/NIRCam2025.F410M": [
+     "NIRCam2025_F410M"
+    ]
+   },
+   "expected": "JWST/NIRCam2025.F410M"
+  },
+  {
+   "name": "JWST/NIRCam.F200W",
+   "candidates": {
+    "F200W": {
+     "label": "F200W"
+    },
+    "F444W": {
+     "label": "F444W"
+    }
+   },
+   "expected": "F200W"
+  },
+  {
+   "name": "jwst/nircam.f444w",
+   "candidates": [
+    "F200W",
+    "F444W"
+   ],
+   "expected": "F444W"
+  },
+  {
+   "name": "ks",
+   "candidates": {
+    "A/X.Ks": {
+     "label": "A Ks"
+    },
+    "B/Y.Ks": {
+     "label": "B Ks"
+    }
+   },
+   "expected": null
+  },
+  {
+   "name": "ks",
+   "candidates": {
+    "A/X.Ks": {
+     "label": "A Ks"
+    },
+    "B/Y.Ks": {
+     "label": "B Ks"
+    }
+   },
+   "colmap": {
+    "ks": "B/Y.Ks"
+   },
+   "expected": "B/Y.Ks"
+  },
+  {
+   "name": "ks",
+   "candidates": {
+    "A/X.Ks": {
+     "label": "A Ks"
+    },
+    "B/Y.Ks": {
+     "label": "B Ks"
+    }
+   },
+   "colmap": {
+    "ks": "C/Z.Ks"
+   },
+   "expected": null
+  },
+  {
+   "name": "x",
+   "candidates": "shared",
+   "colmap": {
+    "x": "JWST/MIRI.F1500W"
+   },
+   "expected": "JWST/MIRI.F1500W"
+  }
+ ],
+ "vector": [
+  {
+   "x": "f182m - f410m",
+   "y": "f410m",
+   "av": 10.0,
+   "rv": 3.1,
+   "dx": 1.0335670000000001,
+   "dy": 0.359533
+  },
+  {
+   "x": "f200w - f444w",
+   "y": "f444w",
+   "av": 10.0,
+   "rv": 3.1,
+   "dx": 0.9005590000000001,
+   "dy": 0.32701099999999994
+  },
+  {
+   "x": "F115W - F200W",
+   "y": "nircam_f200w",
+   "av": 5.0,
+   "rv": 5.5,
+   "dx": 1.19372,
+   "dy": 0.962505
+  },
+  {
+   "x": "f1500w - f444w",
+   "y": "f444w",
+   "av": 30.0,
+   "rv": 4.0,
+   "dx": -0.3735345468750002,
+   "dy": 1.4451001406250001
+  },
+  {
+   "x": "ks - f410m",
+   "y": "f410m",
+   "av": 10.0,
+   "rv": 3.1,
+   "dx": null,
+   "dy": 0.359533
+  },
+  {
+   "x": "ks - f410m",
+   "y": "f410m",
+   "av": 10.0,
+   "rv": 3.1,
+   "dx": 0.701817,
+   "dy": 0.359533,
+   "colmap": {
+    "ks": "2MASS/2MASS.Ks"
+   }
+  }
+ ]
+}

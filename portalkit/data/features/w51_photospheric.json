@@ -1,0 +1,133 @@
+{
+ "family": "w51_photospheric",
+ "label": "W51 photospheric lines",
+ "source": "W51_Portal_Spectra.py:138-155 LINES ('ph' group)",
+ "features": [
+  {
+   "name": "Br-11",
+   "w_um": 1.6811,
+   "label": "Br-11",
+   "kind": "line",
+   "group": "hot",
+   "color": "#8ab4ff",
+   "requires_coverage": true
+  },
+  {
+   "name": "Br-10",
+   "w_um": 1.7367,
+   "label": "Br-10",
+   "kind": "line",
+   "group": "hot",
+   "color": "#8ab4ff",
+   "requires_coverage": true
+  },
+  {
+   "name": "He I 2.0587",
+   "w_um": 2.0587,
+   "label": "He I",
+   "kind": "line",
+   "group": "hot",
+   "color": "#8ab4ff",
+   "requires_coverage": true
+  },
+  {
+   "name": "He I 2.1126",
+   "w_um": 2.1126,
+   "label": "He I",
+   "kind": "line",
+   "group": "hot",
+   "color": "#8ab4ff",
+   "requires_coverage": true
+  },
+  {
+   "name": "Br-gamma",
+   "w_um": 2.1661,
+   "label": "Br-gamma",
+   "kind": "line",
+   "group": "hot",
+   "color": "#8ab4ff",
+   "requires_coverage": true
+  },
+  {
+   "name": "He II",
+   "w_um": 2.1885,
+   "label": "He II",
+   "kind": "line",
+   "group": "hot",
+   "color": "#8ab4ff",
+   "requires_coverage": true
+  },
+  {
+   "name": "Na I 2.2062",
+   "w_um": 2.2062,
+   "label": "Na I",
+   "kind": "line",
+   "group": "cool",
+   "color": "#ffb347",
+   "requires_coverage": true
+  },
+  {
+   "name": "Na I 2.2090",
+   "w_um": 2.209,
+   "label": "Na I",
+   "kind": "line",
+   "group": "cool",
+   "color": "#ffb347",
+   "requires_coverage": true
+  },
+  {
+   "name": "Ca I",
+   "w_um": 2.2635,
+   "label": "Ca I",
+   "kind": "line",
+   "group": "cool",
+   "color": "#ffb347",
+   "requires_coverage": true
+  },
+  {
+   "name": "Mg I",
+   "w_um": 2.2814,
+   "label": "Mg I",
+   "kind": "line",
+   "group": "cool",
+   "color": "#ffb347",
+   "requires_coverage": true
+  },
+  {
+   "name": "CO 2-0",
+   "w_um": 2.2935,
+   "label": "CO 2-0",
+   "kind": "line",
+   "group": "cool",
+   "color": "#ffb347",
+   "requires_coverage": true
+  },
+  {
+   "name": "CO 3-1",
+   "w_um": 2.3227,
+   "label": "CO 3-1",
+   "kind": "line",
+   "group": "cool",
+   "color": "#ffb347",
+   "requires_coverage": true
+  },
+  {
+   "name": "CO 4-2",
+   "w_um": 2.3535,
+   "label": "CO 4-2",
+   "kind": "line",
+   "group": "cool",
+   "color": "#ffb347",
+   "requires_coverage": true
+  },
+  {
+   "name": "CO 5-3",
+   "w_um": 2.383,
+   "label": "CO 5-3",
+   "kind": "line",
+   "group": "cool",
+   "color": "#ffb347",
+   "requires_coverage": true
+  }
+ ]
+}

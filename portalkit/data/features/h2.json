@@ -1,0 +1,295 @@
+{
+ "family": "h2",
+ "label": "H2",
+ "source": "JWST_Archive_ColorPortal.py:123-242 H2_LINES",
+ "features": [
+  {
+   "name": "H2 1-0 S(9)",
+   "w_um": 1.6877,
+   "label": "1-0 S(9)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 1-0 S(8)",
+   "w_um": 1.7147,
+   "label": "1-0 S(8)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 1-0 S(7)",
+   "w_um": 1.748,
+   "label": "1-0 S(7)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 1-0 S(6)",
+   "w_um": 1.788,
+   "label": "1-0 S(6)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 1-0 S(5)",
+   "w_um": 1.8358,
+   "label": "1-0 S(5)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 1-0 S(4)",
+   "w_um": 1.892,
+   "label": "1-0 S(4)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 2-1 S(5)",
+   "w_um": 1.9449,
+   "label": "2-1 S(5)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 1-0 S(3)",
+   "w_um": 1.9576,
+   "label": "1-0 S(3)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 2-1 S(4)",
+   "w_um": 2.0041,
+   "label": "2-1 S(4)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 1-0 S(2)",
+   "w_um": 2.0338,
+   "label": "1-0 S(2)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 3-2 S(5)",
+   "w_um": 2.0656,
+   "label": "3-2 S(5)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 2-1 S(3)",
+   "w_um": 2.0735,
+   "label": "2-1 S(3)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 1-0 S(1)",
+   "w_um": 2.1218,
+   "label": "1-0 S(1)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 2-1 S(2)",
+   "w_um": 2.1542,
+   "label": "2-1 S(2)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 3-2 S(3)",
+   "w_um": 2.2014,
+   "label": "3-2 S(3)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 1-0 S(0)",
+   "w_um": 2.2233,
+   "label": "1-0 S(0)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 2-1 S(1)",
+   "w_um": 2.2477,
+   "label": "2-1 S(1)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 3-2 S(2)",
+   "w_um": 2.287,
+   "label": "3-2 S(2)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 2-1 S(0)",
+   "w_um": 2.3556,
+   "label": "2-1 S(0)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 3-2 S(1)",
+   "w_um": 2.3864,
+   "label": "3-2 S(1)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 1-0 Q(1)",
+   "w_um": 2.4066,
+   "label": "1-0 Q(1)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 1-0 Q(2)",
+   "w_um": 2.4134,
+   "label": "1-0 Q(2)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 1-0 Q(3)",
+   "w_um": 2.4237,
+   "label": "1-0 Q(3)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 1-0 Q(4)",
+   "w_um": 2.4375,
+   "label": "1-0 Q(4)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 1-0 Q(5)",
+   "w_um": 2.4548,
+   "label": "1-0 Q(5)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 1-0 Q(6)",
+   "w_um": 2.4756,
+   "label": "1-0 Q(6)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 1-0 Q(7)",
+   "w_um": 2.5001,
+   "label": "1-0 Q(7)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 2-1 Q(1)",
+   "w_um": 2.551,
+   "label": "2-1 Q(1)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 2-1 Q(3)",
+   "w_um": 2.5698,
+   "label": "2-1 Q(3)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 1-0 O(2)",
+   "w_um": 2.6269,
+   "label": "1-0 O(2)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 1-0 O(3)",
+   "w_um": 2.8025,
+   "label": "1-0 O(3)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 1-0 O(4)",
+   "w_um": 3.0039,
+   "label": "1-0 O(4)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 1-0 O(5)",
+   "w_um": 3.235,
+   "label": "1-0 O(5)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 0-0 S(21)",
+   "w_um": 3.3648,
+   "label": "0-0 S(21)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 0-0 S(20)",
+   "w_um": 3.3798,
+   "label": "0-0 S(20)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 0-0 S(19)",
+   "w_um": 3.4038,
+   "label": "0-0 S(19)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 0-0 S(18)",
+   "w_um": 3.4384,
+   "label": "0-0 S(18)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 0-0 S(17)",
+   "w_um": 3.4855,
+   "label": "0-0 S(17)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 1-0 O(6)",
+   "w_um": 3.5007,
+   "label": "1-0 O(6)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 0-0 S(16)",
+   "w_um": 3.547,
+   "label": "0-0 S(16)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 0-0 S(15)",
+   "w_um": 3.6255,
+   "label": "0-0 S(15)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 0-0 S(14)",
+   "w_um": 3.7237,
+   "label": "0-0 S(14)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 1-0 O(7)",
+   "w_um": 3.8075,
+   "label": "1-0 O(7)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 0-0 S(13)",
+   "w_um": 3.8464,
+   "label": "0-0 S(13)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 0-0 S(12)",
+   "w_um": 3.9968,
+   "label": "0-0 S(12)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 0-0 S(11)",
+   "w_um": 4.181,
+   "label": "0-0 S(11)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 0-0 S(10)",
+   "w_um": 4.4096,
+   "label": "0-0 S(10)",
+   "kind": "line"
+  },
+  {
+   "name": "H2 0-0 S(9)",
+   "w_um": 4.6947,
+   "label": "0-0 S(9)",
+   "kind": "line"
+  }
+ ]
+}

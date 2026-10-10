@@ -1,0 +1,19 @@
+{
+ "schema": "pk-golden-physics/1",
+ "rtol": 1e-06,
+ "atol": 1e-12,
+ "files": [
+  "mag_jy.json",
+  "nufnu.json",
+  "reddening.json",
+  "resolve_key.json",
+  "scale_to.json",
+  "sed_points.json",
+  "track_xy.json"
+ ],
+ "notes": {
+  "null": "null in expected values means NaN / missing",
+  "float32": "redden and trackXY outputs are float32 in JS; expected values are the float32 results widened to float64",
+  "generator": "python tests/golden/physics/generate.py (portalkit.physics)"
+ }
+}

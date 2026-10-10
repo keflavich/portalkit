@@ -1,0 +1,99 @@
+{
+ "family": "gas",
+ "label": "Gas-phase and dust bands",
+ "source": "JWST_Archive_ColorPortal.py:123-242 GAS_BANDS; Brick2221_F1500W_SEDPortal.py:126-135 PAH, silicate",
+ "features": [
+  {
+   "name": "CO gas overtone v=2-0",
+   "w_um": 2.35,
+   "label": "CO gas overtone v=2-0",
+   "kind": "band",
+   "lo_um": 2.29,
+   "hi_um": 2.45,
+   "group": "gas"
+  },
+  {
+   "name": "PAH 3.29 um",
+   "w_um": 3.29,
+   "label": "PAH 3.29 um",
+   "kind": "band",
+   "lo_um": 3.25,
+   "hi_um": 3.33,
+   "group": "gas"
+  },
+  {
+   "name": "aliphatic C-H 3.4",
+   "w_um": 3.4,
+   "label": "aliphatic C-H 3.4",
+   "kind": "band",
+   "lo_um": 3.36,
+   "hi_um": 3.44,
+   "group": "gas"
+  },
+  {
+   "name": "CO gas fundamental v=1-0",
+   "w_um": 4.7,
+   "label": "CO gas fundamental v=1-0",
+   "kind": "band",
+   "lo_um": 4.4,
+   "hi_um": 5.1,
+   "group": "gas"
+  },
+  {
+   "name": "PAH 6.2",
+   "w_um": 6.2,
+   "label": "PAH 6.2",
+   "kind": "line",
+   "group": "PAH",
+   "color": "#ffcc33"
+  },
+  {
+   "name": "PAH 7.7",
+   "w_um": 7.7,
+   "label": "PAH 7.7",
+   "kind": "line",
+   "group": "PAH",
+   "color": "#ffcc33"
+  },
+  {
+   "name": "PAH 8.6",
+   "w_um": 8.6,
+   "label": "PAH 8.6",
+   "kind": "line",
+   "group": "PAH",
+   "color": "#ffcc33"
+  },
+  {
+   "name": "silicate 9.7",
+   "w_um": 9.7,
+   "label": "silicate 9.7",
+   "kind": "line",
+   "group": "silicate",
+   "color": "#ff7b72"
+  },
+  {
+   "name": "PAH 11.3",
+   "w_um": 11.3,
+   "label": "PAH 11.3",
+   "kind": "line",
+   "group": "PAH",
+   "color": "#ffcc33"
+  },
+  {
+   "name": "PAH 12.7",
+   "w_um": 12.7,
+   "label": "PAH 12.7",
+   "kind": "line",
+   "group": "PAH",
+   "color": "#ffcc33"
+  },
+  {
+   "name": "silicate 18",
+   "w_um": 18.0,
+   "label": "silicate 18",
+   "kind": "line",
+   "group": "silicate",
+   "color": "#ff7b72"
+  }
+ ]
+}

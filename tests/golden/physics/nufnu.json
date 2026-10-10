@@ -1,0 +1,101 @@
+{
+ "description": "nuFnu = fnu*1e-26*c/lambda with c = 2.99792458e14 um/s (W m^-2); erg s^-1 cm^-2 = W m^-2 * 1e3; null for wl <= 0. blackbody B_nu in W m^-2 Hz^-1 sr^-1 (h=6.62607015e-34, c=2.99792458e8, k=1.380649e-23); null for T <= 0. flux_units: factor to Jy.",
+ "c_um_s": 299792458000000.0,
+ "nufnu": [
+  {
+   "wl_um": 1.0,
+   "fnu_jy": 1.0,
+   "nufnu_w_m2": 2.9979245800000003e-12,
+   "nufnu_erg_s_cm2": 2.9979245800000005e-09
+  },
+  {
+   "wl_um": 4.082238,
+   "fnu_jy": 0.0123,
+   "nufnu_w_m2": 9.032906051533498e-15,
+   "nufnu_erg_s_cm2": 9.032906051533498e-12
+  },
+  {
+   "wl_um": 15.06351,
+   "fnu_jy": 0.0025,
+   "nufnu_w_m2": 4.975474806336638e-16,
+   "nufnu_erg_s_cm2": 4.975474806336638e-13
+  },
+  {
+   "wl_um": 0.6,
+   "fnu_jy": 3631.0,
+   "nufnu_w_m2": 1.8142440249966668e-08,
+   "nufnu_erg_s_cm2": 1.8142440249966667e-05
+  },
+  {
+   "wl_um": 2.0,
+   "fnu_jy": null,
+   "nufnu_w_m2": null,
+   "nufnu_erg_s_cm2": null
+  },
+  {
+   "wl_um": 0.0,
+   "fnu_jy": 1.0,
+   "nufnu_w_m2": null,
+   "nufnu_erg_s_cm2": null
+  },
+  {
+   "wl_um": -1.0,
+   "fnu_jy": 1.0,
+   "nufnu_w_m2": null,
+   "nufnu_erg_s_cm2": null
+  },
+  {
+   "wl_um": 1000.0,
+   "fnu_jy": 1000.0,
+   "nufnu_w_m2": 2.9979245800000003e-12,
+   "nufnu_erg_s_cm2": 2.9979245800000005e-09
+  }
+ ],
+ "blackbody": [
+  {
+   "wl_um": 1.0,
+   "temp_k": 5750.0,
+   "bnu_si": 3.544194093287199e-08
+  },
+  {
+   "wl_um": 2.2,
+   "temp_k": 3000.0,
+   "bnu_si": 4.7554386614182625e-09
+  },
+  {
+   "wl_um": 10.0,
+   "temp_k": 300.0,
+   "bnu_si": 3.3103011984613342e-12
+  },
+  {
+   "wl_um": 0.5,
+   "temp_k": 30000.0,
+   "bnu_si": 1.9746378621552895e-06
+  },
+  {
+   "wl_um": 100.0,
+   "temp_k": 20.0,
+   "bnu_si": 2.9865430872267617e-16
+  },
+  {
+   "wl_um": 0.1,
+   "temp_k": 100.0,
+   "bnu_si": 0.0
+  },
+  {
+   "wl_um": 5.0,
+   "temp_k": 0.0,
+   "bnu_si": null
+  }
+ ],
+ "flux_units": {
+  "Jy": 1.0,
+  "mJy": 0.001,
+  "uJy": 1e-06,
+  "µJy": 1e-06,
+  "nJy": 1e-09,
+  "MJy": 1000000.0,
+  "erg/s/cm2/Hz": 1e+23,
+  "W/m2/Hz": 1e+26
+ }
+}
