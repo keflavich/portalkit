@@ -54,7 +54,6 @@ import urllib.parse
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-import numpy as np
 
 from . import caps as capsmod
 from .caps import CapsResult, CatInfo, PageData, iter_panes, page_data
