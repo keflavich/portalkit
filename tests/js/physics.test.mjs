@@ -62,7 +62,7 @@ test('nuFnu, blackbody and flux unit goldens', () => {
 
 test('sedPoints goldens', () => {
   const d = load('sed_points.json');
-  for (const c of d.cases) {
+  for (const c of [...d.cases, ...(d.cases_string_codes || [])]) {
     const got = sedPoints(c.row, d.filters, d.cols);
     assert.equal(got.length, c.points.length, `case ${c.row.id}: count`);
     c.points.forEach((p, i) => {
@@ -126,10 +126,30 @@ test('trackXY goldens', () => {
     closeArr(Array.from(r.x), c.x, `trackXY x ${c.x_expr} av=${c.av}`);
     closeArr(Array.from(r.y), c.y, `trackXY y ${c.y_expr} av=${c.av}`);
   }
+  for (const c of d.cases_short_filters || []) {
+    const r = trackXY(d.track, c.x_expr, c.y_expr, c.av, c.rv, c.dm, d.short_filters, c.colmap || null, ext);
+    closeArr(Array.from(r.x), c.x, `trackXY short-filters x ${c.x_expr} av=${c.av}`);
+    closeArr(Array.from(r.y), c.y, `trackXY short-filters y ${c.y_expr} av=${c.av}`);
+  }
   close(distanceModulus(10), 0, 'dm 10pc');
   close(distanceModulus(0), null, 'dm 0');
   assert.equal(trackCovers(d.track, 'f182m - f410m', 'f410m'), true);
   assert.equal(trackCovers(d.track, 'f182m - nope', 'f410m'), false);
+});
+
+test('resolveKey goldens (shared filters document, aliases, label tie-break)', () => {
+  const d = load('resolve_key.json');
+  for (const c of d.cases) {
+    const cands = c.candidates === 'shared' ? d.shared_filters : c.candidates;
+    assert.equal(resolveKey(c.name, cands, c.colmap || null, c.aliases || null), c.expected,
+      `resolveKey(${c.name}, ${typeof c.candidates === 'string' ? c.candidates : JSON.stringify(c.candidates)})`);
+  }
+  const ext = load('reddening.json').ext;
+  for (const c of d.vector) {
+    const v = vector(c.x, c.y, c.av, c.rv, d.shared_filters, c.colmap || null, ext);
+    close(v.dx, c.dx, `shared vector dx ${c.x}`);
+    close(v.dy, c.dy, `shared vector dy ${c.y}`);
+  }
 });
 
 test('interpLinear / resolveKey edge cases', () => {

@@ -122,11 +122,23 @@ export function shortName(key) {
 
 /**
  * Map a name (column key, expression key, short filter name) to one of `candidates`
- * (array or object keys): colmap[name]; exact; unique case-insensitive; unique alias; unique
- * short name (case-insensitive), then the same for the part after the last '_'. Else null.
+ * (array or object of filter entries): colmap[name]; exact; unique case-insensitive; unique
+ * alias; then short-name probes lower(name), the part after its last '_' and
+ * shortName(lower(name)). For each probe the unique candidate whose shortName matches
+ * case-insensitively wins; when several match and `candidates` is an object of entries, the
+ * unique one whose `label` equals the probe wins. Else null.
+ * (Python twin: physics.filters.resolve_key; goldens in resolve_key.json.)
  */
 export function resolveKey(name, candidates, colmap = null, aliases = null) {
-  const cands = Array.isArray(candidates) ? candidates : Object.keys(candidates || {});
+  const isMap = !Array.isArray(candidates);
+  const cands = isMap ? Object.keys(candidates || {}) : candidates;
+  const labels = new Map();
+  if (isMap) {
+    for (const c of cands) {
+      const e = candidates[c];
+      if (e && typeof e === 'object' && typeof e.label === 'string') labels.set(c, e.label.toLowerCase());
+    }
+  }
   const cset = new Set(cands);
   if (colmap && Object.prototype.hasOwnProperty.call(colmap, name) && cset.has(colmap[name])) return colmap[name];
   if (cset.has(name)) return name;
@@ -137,10 +149,17 @@ export function resolveKey(name, candidates, colmap = null, aliases = null) {
     const al = cands.filter((c) => (aliases[c] || []).some((a) => String(a).toLowerCase() === low));
     if (al.length === 1) return al[0];
   }
-  const tail = low.slice(low.lastIndexOf('_') + 1);
-  for (const probe of [low, tail]) {
+  const probes = [];
+  for (const p of [low, low.slice(low.lastIndexOf('_') + 1), shortName(low)]) {
+    if (p && !probes.includes(p)) probes.push(p);
+  }
+  for (const probe of probes) {
     const sn = cands.filter((c) => shortName(c).toLowerCase() === probe);
     if (sn.length === 1) return sn[0];
+    if (sn.length > 1 && labels.size) {
+      const lab = sn.filter((c) => labels.get(c) === probe);
+      if (lab.length === 1) return lab[0];
+    }
   }
   return null;
 }
@@ -153,7 +172,7 @@ export function filtersMap(filters) {
 
 // ------------------------------------------------------------------ SED points
 
-const LIM_STR = {u: 'ul', l: 'll', U: 'ul', L: 'll'};
+const LIM_STR = {u: 'ul', l: 'll', U: 'ul', L: 'll', 1: 'ul', 2: 'll'};
 
 function limCode(v) {
   if (typeof v === 'number') return v === 1 ? 'ul' : v === 2 ? 'll' : 'det';

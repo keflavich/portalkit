@@ -6,7 +6,7 @@
 // An unresolved key or a missing magnitude gives NaN.
 
 import {compileCached} from './expr.js';
-import {resolveKey} from './filters.js';
+import {resolveKey, filtersMap} from './filters.js';
 import {aLambda} from './extinction.js';
 
 /** Distance modulus 5·log10(dist_pc/10) (NaN for dist <= 0). */
@@ -31,7 +31,13 @@ function axis(track, expr, av, rv, dm, filters, colmap, ext) {
     }
     const m = mags[mk];
     let shift = mu + Number(dm);
-    if (Number(av) !== 0) shift += aLambda(mk, av, rv, ext, filters);
+    if (Number(av) !== 0) {
+      // The mags key is usually a full registry key; resolveKey also finds it in a short-keyed
+      // filters object through shortName. Fall back to the expression key with colmap.
+      const fl = filtersMap(filters);
+      const fk = resolveKey(mk, fl) ?? resolveKey(k, fl, colmap);
+      shift += fk === null ? NaN : aLambda(fl[fk], av, rv, ext);
+    }
     for (let i = 0; i < n; i++) {
       const mi = m[i] === null || m[i] === undefined ? NaN : +m[i];
       v[i] = v[i] + w * (mi + shift);
