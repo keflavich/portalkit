@@ -1,0 +1,123 @@
+/* Gallery pane (panes/gallery.js).
+   .pk-gallery > .pk-gal-bar + .pk-gal-main > (aside.pk-gal-facets + .pk-gal-view > .pk-gal-spacer + .pk-gal-grid > .pk-card*)
+   Cards are positioned by transform; --pk-gal-card-w and --pk-gal-img-h are set by the pane. */
+
+.pk-gallery {
+  display: flex; flex-direction: column;
+  height: 100%; min-height: 0;
+  font-size: var(--pk-fs-1);
+  --pk-gal-card-w: 220px;
+  --pk-gal-img-h: 165px;
+  --pk-swatch: transparent;
+}
+
+.pk-gal-bar {
+  flex: 0 0 auto;
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--pk-sp-1) var(--pk-sp-2);
+  padding: var(--pk-sp-1) var(--pk-sp-2);
+  border-bottom: 1px solid var(--pk-border);
+}
+.pk-gal-bar .pk-btn, .pk-gal-bar select, .pk-gal-search { height: 26px; min-height: 26px; }
+.pk-gal-bar select, .pk-gal-search {
+  border: 1px solid var(--pk-border); border-radius: var(--pk-radius);
+  background: var(--pk-bg); color: var(--pk-fg); font: inherit; padding: 0 var(--pk-sp-1);
+  max-width: 14em;
+}
+.pk-gal-search { flex: 1 1 9em; min-width: 6em; max-width: 20em; padding: 0 var(--pk-sp-2); }
+.pk-gal-search:focus-visible, .pk-gal-bar select:focus-visible { outline: 2px solid var(--pk-focus); outline-offset: -1px; }
+.pk-gal-size { width: 6em; accent-color: var(--pk-accent); }
+.pk-gal-count { font-size: var(--pk-fs-0); white-space: nowrap; }
+.pk-gal-annot { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--pk-sp-1); }
+.pk-gal-annot-legend { display: inline-flex; flex-wrap: wrap; gap: 2px; }
+.pk-gal-annot-help { font-size: var(--pk-fs-0); }
+.pk-gal-mini { margin-left: auto; }
+.pk-gal-mini-btn { text-transform: capitalize; }
+
+.pk-gal-main { flex: 1 1 auto; min-height: 0; display: flex; position: relative; }
+
+.pk-gal-facets {
+  flex: 0 0 13em; min-width: 0;
+  overflow-y: auto; overscroll-behavior: contain;
+  padding: var(--pk-sp-2);
+  border-right: 1px solid var(--pk-border);
+  background: var(--pk-bg-2);
+}
+.pk-gallery.pk-gal-facets-closed .pk-gal-facets, .pk-gallery.pk-gal-nofacets .pk-gal-facets { display: none; }
+.pk-facet { margin: 0 0 var(--pk-sp-3); padding: 0; border: 0; min-width: 0; }
+.pk-facet-title { padding: 0; margin-bottom: var(--pk-sp-1); font-size: var(--pk-fs-0); font-weight: 600; color: var(--pk-fg-2); text-transform: uppercase; letter-spacing: .03em; }
+.pk-facet-value {
+  display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: var(--pk-sp-1);
+  padding: 1px 0; cursor: pointer;
+}
+.pk-facet-value input { margin: 0; accent-color: var(--pk-accent); }
+.pk-facet-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pk-facet-count { font-size: var(--pk-fs-0); color: var(--pk-fg-3); }
+.pk-facet-value.pk-zero { opacity: .5; }
+.pk-facet-clear { height: 22px; min-height: 22px; margin-top: 2px; font-size: var(--pk-fs-0); }
+
+.pk-gal-view {
+  position: relative;
+  flex: 1 1 auto; min-width: 0;
+  overflow-y: auto; overflow-x: hidden;
+  padding: var(--pk-sp-2);
+  outline: none;
+  overscroll-behavior: contain;
+}
+.pk-gal-view:focus-visible { box-shadow: inset 0 0 0 2px var(--pk-focus); }
+.pk-gal-spacer { width: 1px; }
+.pk-gal-grid { position: absolute; left: var(--pk-sp-2); top: var(--pk-sp-2); right: var(--pk-sp-2); }
+
+.pk-card {
+  position: absolute; left: 0; top: 0;
+  width: var(--pk-gal-card-w);
+  border: 1px solid var(--pk-border); border-radius: var(--pk-radius);
+  background: var(--pk-bg);
+  overflow: hidden;
+  cursor: pointer;
+  user-select: none;
+  contain: layout paint;
+}
+.pk-gal-colored .pk-card { border-top: 3px solid var(--pk-swatch); }
+.pk-card:hover, .pk-card.pk-hover { border-color: var(--pk-hover); }
+.pk-card.pk-sel { border-color: var(--pk-sel); box-shadow: 0 0 0 1px var(--pk-sel); }
+.pk-card.pk-focus { border-color: var(--pk-accent); box-shadow: 0 0 0 2px var(--pk-accent); }
+.pk-card-img { height: var(--pk-gal-img-h); background: var(--pk-bg-2); display: flex; align-items: center; justify-content: center; }
+.pk-card-img img { max-width: 100%; max-height: 100%; width: 100%; height: 100%; object-fit: contain; display: block; }
+.pk-card.pk-card-broken .pk-card-img img { visibility: hidden; }
+.pk-card.pk-card-broken .pk-card-img::after { content: "no image"; color: var(--pk-fg-3); font-size: var(--pk-fs-0); position: absolute; }
+.pk-card-cap {
+  height: 46px; box-sizing: border-box;
+  padding: 3px var(--pk-sp-2);
+  display: flex; flex-direction: column; gap: 1px;
+  border-top: 1px solid var(--pk-border);
+  font-size: var(--pk-fs-0);
+  overflow: hidden;
+}
+.pk-card-id { font-family: var(--pk-mono); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pk-card-caption { color: var(--pk-fg-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pk-card-badge {
+  position: absolute; top: 6px; right: 6px;
+  min-width: 22px; height: 22px; padding: 0 5px; box-sizing: border-box;
+  border-radius: 11px; display: inline-flex; align-items: center; justify-content: center;
+  background: var(--pk-accent); color: var(--pk-accent-fg);
+  font: 600 var(--pk-fs-1)/1 var(--pk-mono);
+  box-shadow: var(--pk-shadow);
+}
+/* Checklist codes (y/n/g/w/l/e) share the semantic tokens. */
+.pk-annot-y { background: var(--pk-ok); color: #fff; border-color: var(--pk-ok); }
+.pk-annot-n { background: var(--pk-danger); color: #fff; border-color: var(--pk-danger); }
+.pk-annot-g { background: var(--pk-warn); color: #fff; border-color: var(--pk-warn); }
+.pk-annot-w { background: var(--pk-cat-6); color: #fff; border-color: var(--pk-cat-6); }
+.pk-annot-l { background: var(--pk-cat-0); color: #fff; border-color: var(--pk-cat-0); }
+.pk-annot-e { background: var(--pk-cat-3); color: #102; border-color: var(--pk-cat-3); }
+.pk-annot-chip { font-family: var(--pk-mono); }
+
+.pk-gal-empty { position: absolute; inset: 40% 0 auto; text-align: center; pointer-events: none; padding: var(--pk-sp-4); }
+.pk-gal-skeleton { position: absolute; inset: 48px var(--pk-sp-3) var(--pk-sp-3); }
+
+@media (max-width: 899px) {
+  .pk-gal-facets { position: absolute; z-index: 3; left: 0; top: 0; bottom: 0; width: min(80%, 18em); box-shadow: var(--pk-shadow); }
+  .pk-gal-bar .pk-btn, .pk-gal-bar select, .pk-gal-search { height: 32px; min-height: 32px; }
+  .pk-gal-search { font-size: 16px; }
+  .pk-gal-size, .pk-gal-annot-help { display: none; }
+}
