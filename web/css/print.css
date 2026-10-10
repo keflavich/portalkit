@@ -1,0 +1,32 @@
+/* portalkit print stylesheet (loaded with media="print"). Prints panes stacked on white with
+   the light-theme tokens; interactive chrome is hidden. Canvases print as rendered. */
+:root, :root[data-theme="dark"] {
+  --pk-bg:#ffffff; --pk-bg-2:#ffffff; --pk-bg-3:#f0f0f0; --pk-fg:#000000; --pk-fg-2:#333333; --pk-fg-3:#666666;
+  --pk-border:#bbbbbb; --pk-plot-bg:#ffffff; --pk-plot-grid:#e6e9ee; --pk-plot-axis:#333333;
+  --pk-sel:#d9822b; --pk-neutral:#4b5563;
+  color-scheme: light;
+}
+@page { margin: 12mm; }
+html, body { background: #fff !important; color: #000; }
+body { overflow: visible; }
+
+.pk-app { height: auto; overflow: visible; display: block; }
+.pk-main, .pk-layout, .pk-stage { display: block; height: auto; min-height: 0; overflow: visible; padding: 0; }
+.pk-header { height: auto; padding: 0 0 4mm; background: none; border-bottom: 1px solid #999; }
+.pk-header-tools, .pk-nav-slot, .pk-tabs, .pk-selbar, .pk-splitter,
+.pk-popout-btn, .pk-pane-tools, .pk-popout-layer, .pk-popout-placeholder,
+.pk-skeleton, dialog, .pk-theme-toggle, .pk-help-btn { display: none !important; }
+
+.pk-split { display: block; height: auto; width: auto; }
+.pk-cell { display: block !important; flex: none !important; overflow: visible; height: auto; break-inside: avoid; }
+.pk-cell.pk-is-collapsed { display: none !important; }
+.pk-pane { display: block; height: auto; border: 1px solid #ccc; margin: 0 0 4mm; break-inside: avoid; }
+.pk-pane.pk-collapsed { display: none; }
+.pk-pane-head { height: auto; padding: 1mm 2mm; background: none; border-bottom: 1px solid #ccc; writing-mode: horizontal-tb !important; width: auto !important; }
+.pk-fold { pointer-events: none; }
+.pk-chev { display: none; }
+.pk-pane-body { overflow: visible; min-height: 80mm; height: auto; }
+.pk-pane[data-pane-type="list"] .pk-pane-body, .pk-pane[data-pane-type="table"] .pk-pane-body,
+.pk-pane[data-pane-type="readme"] .pk-pane-body, .pk-pane[data-pane-type="detail"] .pk-pane-body { min-height: 0; }
+canvas { max-width: 100% !important; height: auto !important; }
+a { color: #000; text-decoration: underline; }
