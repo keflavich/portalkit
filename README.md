@@ -21,6 +21,10 @@ pip install -e ".[extinction]"    # + dust_extinction (regenerate G23 tables)
 python -m playwright install chromium   # e2e tests only
 ```
 
+Use an editable install (or run from the checkout). The viewer under `web/` is not package
+data: `portalkit build` and `portalkit publish-assets` read it from the source tree, so a
+regular `pip install .` produces a builder that cannot find the viewer.
+
 ## Quickstart
 
 ```bash

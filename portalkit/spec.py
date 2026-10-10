@@ -83,6 +83,7 @@ class ColumnSpec:
     colors: dict[str, str] | None = None
     default_off: list[str] = field(default_factory=list)
     exact: bool = True                 # include in row chunks
+    exact_gpu: bool | None = None      # None -> CatalogSpec.exact_gpu; False lets 'value' use f32
 
 
 @dataclass
@@ -149,6 +150,7 @@ class CatalogSpec:
     density: list[DensitySpec] = field(default_factory=list)
     manifold: ManifoldSpec | None = None
     exact_rows: bool | None = None     # None -> n <= EXACT_ROWS_MAX_N
+    exact_gpu: bool = True             # False: 'value' columns spanning > 1e4 are stored f32 (section 5.3)
     context: bool = False
     order: Literal["auto", "input", "lod"] = "auto"
     title: str = ""

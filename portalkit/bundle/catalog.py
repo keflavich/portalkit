@@ -363,8 +363,9 @@ def write(spec: Any, dest: str | Path | BundleWriter, *, build: str | None = Non
         fvals = None
         if role not in ("category", "flag", "id", "text", "url", "image", "limit"):
             fvals = to_float_array(raw_s)
+        col_gpu = _get(c, "exact_gpu", None)
         enc_name, step = resolve_enc(c, fvals, rows_written=rows_written,
-                                     exact_gpu=_get(c, "exact_gpu", exact_gpu_default))
+                                     exact_gpu=exact_gpu_default if col_gpu is None else bool(col_gpu))
         if enc_name is None:
             continue
         meta: dict = {"key": key}

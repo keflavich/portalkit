@@ -528,6 +528,16 @@ def test_catalog_value_f32_when_not_exact_gpu(tmp_path):
     assert read_col(tmp_path, x, 3).tolist() == pytest.approx([1e-3, 1.0, 1e5], rel=1e-7)
 
 
+@pytest.mark.parametrize("cat_gpu, col_gpu, enc", [
+    (True, None, "u16q"), (False, None, "f32"), (True, False, "f32"), (False, True, "u16q")])
+def test_catalog_exact_gpu_column_overrides_catalog(tmp_path, cat_gpu, col_gpu, enc):
+    t = Table({"id": ["a", "b", "c"], "x": [1e-3, 1.0, 1e5]})
+    spec = CatalogSpec(key="f", table=t, id="id", exact_gpu=cat_gpu,
+                       columns=[ColumnSpec("x", exact_gpu=col_gpu)])
+    res = catalog.write(spec, tmp_path)
+    assert col_by_key(res.manifest, "x")["enc"] == enc
+
+
 # ---------------------------------------------------------------------------
 # presets, density, manifold, budget, staging
 # ---------------------------------------------------------------------------
