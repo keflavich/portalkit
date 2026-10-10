@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Node (tests only; no npm deps are allowed under web/)
+node_modules/
+
+# Builder outputs that must never be committed
+/stage/
+/portalkit_stage/
+*.pk-tmp
+.portalkit_backup/
+build_report.json
+perf_report.json
+contact_sheet/
+
+# Playwright / test artefacts
+test-results/
+playwright-report/
+tests/e2e/_artifacts/
+
+# Editors / OS
+.DS_Store
+*.swp
+*~
+.idea/
+.vscode/

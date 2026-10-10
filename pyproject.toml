@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "portalkit"
+dynamic = ["version"]
+description = "Static-site portal generator for astronomical catalogs, spectra and images"
+readme = "README.md"
+requires-python = ">=3.13"
+authors = [{ name = "Adam Ginsburg", email = "adamginsburg@ufl.edu" }]
+dependencies = [
+    "numpy",
+    "astropy",
+]
+
+[project.optional-dependencies]
+thumbs = ["matplotlib"]
+extinction = ["dust_extinction"]
+test = ["pytest", "playwright"]
+
+[project.scripts]
+portalkit = "portalkit.cli:main"
+
+[tool.setuptools.dynamic]
+# single source of truth for the version (section 15 bumps it there)
+version = { attr = "portalkit.version.VERSION" }
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["portalkit", "portalkit.*", "adapters", "adapters.*"]
+
+[tool.setuptools.package-data]
+portalkit = ["data/*.json", "data/*.ecsv", "data/features/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+# markers are registered in tests/conftest.py

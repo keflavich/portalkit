@@ -1,0 +1,631 @@
+[
+ {
+  "id": "WP00",
+  "title": "Skeleton, contracts, vendoring (serial, first)",
+  "depends_on": [],
+  "files": [
+   "pyproject.toml",
+   "README.md",
+   "VENDORED.md",
+   ".gitignore",
+   "portalkit/__init__.py",
+   "portalkit/version.py",
+   "portalkit/constants.py",
+   "portalkit/schema.py",
+   "adapters/__init__.py",
+   "web/js/core/constants.js",
+   "web/js/vendor/gc/gl/renderer.js",
+   "web/js/vendor/gc/gl/shaders.js",
+   "web/js/vendor/gc/gl/colormaps.js",
+   "web/js/vendor/gc/config/style.js",
+   "web/js/vendor/gc/math/frame.js",
+   "web/js/vendor/gc/math/linalg.js",
+   "web/js/vendor/gc/workers/kernel.js",
+   "web/js/vendor/gc/app/pick.js",
+   "tests/conftest.py",
+   "tests/py/test_no_broad_except.py",
+   "tests/py/test_schema.py",
+   "tests/py/test_constants_sync.py"
+  ],
+  "description": "git init the repo at /blue/adamginsburg/adamginsburg/repos/portalkit. Write pyproject (numpy, astropy; extras thumbs/extinction/test; console script portalkit). Write constants.py and constants.js exactly as in section 6.12. Write schema.py validators for every JSON document in sections 4-5 (pk-page/1, pk-portal/1, pk-catalog/1, pk-records/1, pk-images/1, pk-hips/1, pk-overlays/1, pk-narrative/1, pk-templates/1, pk-filters/1, pk-extinction/1, pk-isochrones/1, pk-features/1, products/1, pk-deploy/1); each validator returns a list of errors. Copy the GC modules byte-for-byte and apply only the 3-line theme patch in renderer.js (section 6.11); record sha256 values in VENDORED.md. Write the test markers, the AST no-broad-except scanner (bare except, or Exception/BaseException without re-raise) and the constants sync test (it also re-hashes vendored files). Commit."
+ },
+ {
+  "id": "WP01",
+  "title": "Python bundle writers and codecs",
+  "depends_on": [
+   "WP00"
+  ],
+  "files": [
+   "portalkit/bundle/__init__.py",
+   "portalkit/bundle/codec.py",
+   "portalkit/bundle/catalog.py",
+   "portalkit/bundle/order.py",
+   "portalkit/bundle/records.py",
+   "portalkit/bundle/density.py",
+   "portalkit/bundle/images.py",
+   "portalkit/bundle/writer.py",
+   "docs/bundle.md",
+   "tests/py/test_codec.py",
+   "tests/py/test_catalog_bundle.py",
+   "tests/py/test_order.py",
+   "tests/py/test_records.py",
+   "tests/py/test_density.py",
+   "tests/golden/codec/"
+  ],
+  "description": "Implement section 5 exactly. codec.py holds gz() verbatim from GCTreasury_Portal_Manifold.py (level 9, mtime 0, OS byte; filtered variant), all encoders in the section 5.3 table, the shuffles, str and sparse, and dim_stats/log_dim_stats. catalog.py turns a CatalogSpec into the manifest, column files, chunking, ids/aliases, limits, row chunks (exact_rows rule) and the auto-encoding table. order.py implements the LOD permutation and the tile/morton sort with _src_index. records.py implements the pks1/pki1/json/sedcurve writers and the shard packer (target 256 kB, max 512 kB, layout file fallback). density.py writes pre-binned u16log grids and binned statistics. writer.py handles content-hash naming (h8 = sha256 of bytes) in .bin files, atomic writes inside staging, and the budget ledger. Golden fixtures are bytes plus expected decoded JSON consumed by WP05 node tests."
+ },
+ {
+  "id": "WP02",
+  "title": "Physics resources (filters, extinction, templates, isochrones, features, SED)",
+  "depends_on": [
+   "WP00",
+   "WP01"
+  ],
+  "files": [
+   "portalkit/physics/__init__.py",
+   "portalkit/physics/filters.py",
+   "portalkit/physics/extinction.py",
+   "portalkit/physics/templates.py",
+   "portalkit/physics/isochrones.py",
+   "portalkit/physics/features.py",
+   "portalkit/physics/sed.py",
+   "portalkit/data/filters_registry.ecsv",
+   "portalkit/data/g23_alav.ecsv",
+   "portalkit/data/features/",
+   "tests/py/test_physics.py",
+   "tests/golden/physics/"
+  ],
+  "description": "Build the filter registry from the existing SVO caches and jwst_vega_zeropoints.ecsv: key, label, instrument, wl_um, weff_um, zp_jy, system. Compute G23 A_lambda/A_V per filter for R_V 3.1 and 5.5; dust_extinction is optional (except ImportError), and a vendored ecsv is the default. Split jwst_template_spectra.json into one pks1 file per (template, grid), about 20 kB each, plus the k31/k55 laws; extend_to_um hooks Brick2221 build_extended_templates. Wrap the MIST track loaders from WD2_Portal_Manifold (load_mist_table, build_isochrone_track) to produce IsochroneSpec. Write feature atlases from JWST_Archive_ColorPortal.py:123-242, Brick2221 FEATURE_FAMILIES:122-135 and the W51 lists. sed.py holds the mag<->Jy and nuFnu reference implementations. Write golden JSON for the JS tests."
+ },
+ {
+  "id": "WP03",
+  "title": "Spec dataclasses, capability resolver, config assembly, shell",
+  "depends_on": [
+   "WP00"
+  ],
+  "files": [
+   "portalkit/spec.py",
+   "portalkit/caps.py",
+   "portalkit/config.py",
+   "portalkit/expr.py",
+   "portalkit/render/__init__.py",
+   "portalkit/render/shell.py",
+   "portalkit/render/markdown_lite.py",
+   "portalkit/data/expr_vectors.json",
+   "web/shell.html",
+   "tests/py/test_spec.py",
+   "tests/py/test_caps.py",
+   "tests/py/test_config.py",
+   "tests/py/test_expr.py",
+   "tests/py/test_shell.py",
+   "tests/py/test_markdown_lite.py"
+  ],
+  "description": "Implement the section 9.1 dataclasses and helpers (catalog_from_rows, join, ImageSetSpec.from_rows, standard_pages). caps.py implements the section 8.1 flag derivation and rules, including the added collapsed panes. config.py assembles page.json (section 4.3); it validates every key and expression against manifests, validates pane options (section 6.10) and the 64 kB cap. expr.py implements the section 4.4 grammar. shell.html is under 8 kB: viewport meta, inline theme pre-script, CSS links from {assets}, the #pk-page JSON with '</' escaped, a module script that imports boot.js, a noscript message, and an onerror fallback note if the assets fail. markdown_lite produces sanitized HTML for headings, lists, tables, code and links only."
+ },
+ {
+  "id": "WP04",
+  "title": "Deploy: exposure, staging, ownership, replace/backup/rollback, verify, status, devserver",
+  "depends_on": [
+   "WP00"
+  ],
+  "files": [
+   "portalkit/deploy/__init__.py",
+   "portalkit/deploy/exposure.py",
+   "portalkit/deploy/stage.py",
+   "portalkit/deploy/deploy.py",
+   "portalkit/deploy/backup.py",
+   "portalkit/deploy/verify.py",
+   "portalkit/deploy/status.py",
+   "portalkit/deploy/htaccess.py",
+   "portalkit/deploy/devserver.py",
+   "docs/deploy.md",
+   "tests/py/test_exposure.py",
+   "tests/py/test_deploy.py",
+   "tests/py/test_backup_rollback.py",
+   "tests/py/test_verify.py",
+   "tests/py/test_devserver.py"
+  ],
+  "description": "Implement section 11 exactly. The exposure classifier works over a configurable root pair; tests use a fake tree that mirrors the verified symlinks. deploy.py implements the ownership manifest, the lstat symlink refusal, the pk-tmp + fsync + os.replace order (data, then portal.json, then HTML) and the stub/inplace replace. backup.py implements backup.json with md5 and rollback. verify.py uses urllib (no requests), downloads to a temporary file and hashes it, and checks 401 vs 200. htaccess.py writes the optional .htaccess. devserver.py is a ThreadingHTTPServer with options for basic auth, Range on/off, a Content-Encoding mode (auto adds gzip for .gz like a misconfigured Apache, none, or gzip) and latency; it is used by CLI serve and all e2e tests. Catch only specific exceptions (OSError, urllib.error.HTTPError, ...)."
+ },
+ {
+  "id": "WP05",
+  "title": "JS data layer and workers",
+  "depends_on": [
+   "WP00",
+   "WP01"
+  ],
+  "files": [
+   "web/js/data/codec.js",
+   "web/js/data/inflate.js",
+   "web/js/data/fetch.js",
+   "web/js/data/client.js",
+   "web/js/data/hub.js",
+   "web/js/data/expr.js",
+   "web/js/data/records.js",
+   "web/js/data/templates.js",
+   "web/js/data/filters.js",
+   "web/js/data/extinction.js",
+   "web/js/data/isochrones.js",
+   "web/js/workers/data.worker.js",
+   "web/js/workers/rpc.js",
+   "web/js/workers/ops/select.js",
+   "web/js/workers/ops/raster.js",
+   "web/js/workers/ops/query.js",
+   "web/js/workers/ops/sky.js",
+   "web/js/workers/ops/project.js",
+   "web/js/workers/ops/export.js",
+   "web/js/workers/ops/find.js",
+   "tests/js/codec.test.mjs",
+   "tests/js/expr.test.mjs",
+   "tests/js/select.test.mjs",
+   "tests/js/records.test.mjs",
+   "tests/js/physics.test.mjs"
+  ],
+  "description": "Implement the section 6.6 APIs exactly. Use one module worker per catalog dataset. Fetch with a gzip-magic check, then DecompressionStream, with inflate.js (a port of tiny-inflate with its MIT header) as fallback. The shard LRU is 16 MiB; the record LRU is 64 entries with tokens that drop stale responses. project.js reuses vendor kernel.projectRange when support <= 28, and uses a sparse loop otherwise. select.js applies brushes only to drawable rows (lasso even-odd with bbox prefilter). sky.js holds skyWindow (viewport filter over LOD order, cap 20k) and the dec-sorted crossmatch. find.js handles id, alias, substring and sexagesimal/decimal cone search. export.js writes CSV, JSON, the ID list and DS9 regions. Physics helpers match WP02 golden values to 1e-6 relative."
+ },
+ {
+  "id": "WP06",
+  "title": "JS core, layout, CSS tokens",
+  "depends_on": [
+   "WP00"
+  ],
+  "files": [
+   "web/js/core/boot.js",
+   "web/js/core/store.js",
+   "web/js/core/selection.js",
+   "web/js/core/hash.js",
+   "web/js/core/carry.js",
+   "web/js/core/keys.js",
+   "web/js/core/theme.js",
+   "web/js/core/loadscript.js",
+   "web/js/core/testhooks.js",
+   "web/js/core/fmt.js",
+   "web/js/core/registry.js",
+   "web/js/layout/layout.js",
+   "web/css/tokens.css",
+   "web/css/base.css",
+   "web/css/layout.css",
+   "web/css/print.css",
+   "docs/js.md",
+   "tests/js/store.test.mjs",
+   "tests/js/selection.test.mjs",
+   "tests/js/hash.test.mjs",
+   "tests/js/fmt.test.mjs"
+  ],
+  "description": "Implement sections 6.1-6.5, 6.7 and 6.8 and section 12. boot follows the documented order and sets body data-caps and data-tier. The store has rAF-coalesced topics, sync mode and events. Selection has the frozen semantics, undo depth min(20, floor(64MiB/n)), recipes and the ids/bits/r serialization. hash binds with replaceState debounced at 250 ms, with pushState on focus; legacyhash.js (WP13) is imported dynamically only when page.legacy.grammar is set. The layout has splitters, folds, pop-out, mobile tabs below 900 px and try/catch localStorage persistence. fmt.stepDigits gives step-aware precision. registry maps pane type to module path. testhooks are active only with ?pktest=1."
+ },
+ {
+  "id": "WP07",
+  "title": "Rendering primitives: XYRenderer, budget, canvas2d, axes, overlays, brush UI, fold/tour/compass",
+  "depends_on": [
+   "WP00",
+   "WP06"
+  ],
+  "files": [
+   "web/js/gl/xyrenderer.js",
+   "web/js/gl/xyshaders.js",
+   "web/js/gl/budget.js",
+   "web/js/plot/canvas2d.js",
+   "web/js/plot/axes.js",
+   "web/js/plot/overlays.js",
+   "web/js/plot/brushui.js",
+   "web/js/math/tour.js",
+   "web/js/math/compass.js",
+   "web/js/math/fold.js",
+   "tests/js/fold.test.mjs",
+   "tests/js/tour.test.mjs",
+   "tests/js/axes.test.mjs"
+  ],
+  "description": "XYRenderer (section 6.9) reuses vendor ACCUM_FS_CONT, ACCUM_FS_CAT, COMPOSITE_FS, DOWN_FS, BLUR_FS and FINAL_FS. New XY_VS emits the same varyings (v_w, v_c, v_has, v_sel, flat v_code). MARKER_VS/FS handle tier T1. budget.js implements the section 7.5 plan. fold.js implements section 7.3, including dm and the constant folded into the camera. tour.js wraps vendor frame.geodesic/blendFrames with drift and per-axis play. canvas2d handles T0 styling and SVG export. overlays.js handles dim-space overlays with coverage fade, pairs connectors, isochrones, vectors and cut lines. brushui has rect/circle/lasso with modifier-to-op mapping via selection.opFromEvent."
+ },
+ {
+  "id": "WP08",
+  "title": "Plot panes: scatter, manifold, hist + controls",
+  "depends_on": [
+   "WP05",
+   "WP06",
+   "WP07"
+  ],
+  "files": [
+   "web/js/panes/scatter.js",
+   "web/js/panes/manifold.js",
+   "web/js/panes/hist.js",
+   "web/js/ui/controls.js",
+   "web/js/ui/axis_picker.js",
+   "web/js/ui/chips.js",
+   "web/js/ui/legend.js",
+   "web/css/panes/scatter.css",
+   "web/css/panes/manifold.css",
+   "web/css/panes/controls.css"
+  ],
+  "description": "scatter and manifold implement the tier table in section 7.1, including the semantic-zoom switch, context density, raster PNG layers, pre-binned first paint, small multiples (grid option) and per-pane pop-out. manifold wires the GC Renderer when support <= 28 and XYRenderer otherwise, plus tour/compass/presets and missing-data fade. controls handles av/rv/dm sliders, colour-by, the template picker and features toggles. axis_picker has grouped optgroups with counts, prev/next/play and typed expressions. chips cover category, flag, S/N-tighten, saved selection and preselect chips. legend shows counts and category toggles. hist provides the range brush that writes filters.ranges."
+ },
+ {
+  "id": "WP09",
+  "title": "Sky panes: sky, wavelength, narrative + Aladin layer",
+  "depends_on": [
+   "WP05",
+   "WP06",
+   "WP07"
+  ],
+  "files": [
+   "web/js/panes/sky.js",
+   "web/js/panes/wavelength.js",
+   "web/js/panes/narrative.js",
+   "web/js/sky/aladin.js",
+   "web/js/sky/layers.js",
+   "web/js/sky/markers.js",
+   "web/js/sky/overlays.js",
+   "web/js/sky/skybrush.js",
+   "web/css/panes/sky.css",
+   "web/css/panes/wavelength.css",
+   "web/css/panes/narrative.css",
+   "tests/fixtures/aladin_stub.js"
+  ],
+  "description": "aladin.js loads the CDN, then the mirror, then shows an error note, with an 8 s timeout. It keeps one instance per page, a command queue before ready, and feature detection for the layer/opacity API drift. layers.js handles base and overlays with opacity, overlays off/defaults and lazy FITS overlays. markers.js has one A.catalog per category and skyWindow LOD markers up to 20k, with a sampled notice. overlays.js handles polygons, boxes, circles, rings and shapes. skybrush.js does circle/rect on the sky through DataClient.brush with sky ViewRef. wavelength.js does the asymmetric cross-fade with step fallback, play/speed and markers. narrative.js uses IntersectionObserver beats; scene exit removes overlays; suppress_view. aladin_stub.js implements the section 13 API list and records calls."
+ },
+ {
+  "id": "WP10",
+  "title": "Spectrum panes: spectrum1d, spectrum2d, SED, features",
+  "depends_on": [
+   "WP05",
+   "WP06",
+   "WP07"
+  ],
+  "files": [
+   "web/js/panes/spectrum1d.js",
+   "web/js/panes/spectrum2d.js",
+   "web/js/panes/sed.js",
+   "web/js/spec/features.js",
+   "web/css/panes/spectrum.css",
+   "web/css/panes/sed.css",
+   "tests/js/sed.test.mjs"
+  ],
+  "description": "spectrum1d supports pan, wheel, box and pinch; autoY on the visible range; variants; segment toggles; band jumps; pin up to 8; rubber band; velocity offset; mask shading; filter transmission shading; reddened templates scaled over configurable bands; sed mode (log-log). spectrum2d supports pki1 (colormap, stretch) and PNG mode, with the x axis linked to store spec.xr. sed supports Fnu/nuFnu, limits as arrows, templates/blackbody/sedcurve models and a fullscreen dialog with nearest-point tooltip. features.js does atlas rendering with collision dropping and requires_coverage dashing."
+ },
+ {
+  "id": "WP11",
+  "title": "List/detail/gallery/table/readme/landing panes + UI widgets",
+  "depends_on": [
+   "WP05",
+   "WP06"
+  ],
+  "files": [
+   "web/js/panes/list.js",
+   "web/js/panes/detail.js",
+   "web/js/panes/gallery.js",
+   "web/js/panes/table.js",
+   "web/js/panes/readme.js",
+   "web/js/panes/landing.js",
+   "web/js/ui/hover.js",
+   "web/js/ui/lightbox.js",
+   "web/js/ui/export.js",
+   "web/js/ui/nav.js",
+   "web/js/ui/help.js",
+   "web/js/ui/toast.js",
+   "web/js/ui/annotate.js",
+   "web/css/panes/list.css",
+   "web/css/panes/detail.css",
+   "web/css/panes/gallery.css",
+   "web/css/panes/landing.css",
+   "web/css/panes/ui.css",
+   "tests/js/export.test.mjs"
+  ],
+  "description": "list is virtualized for any N, with search through DataClient.find, sort and a selection-only view. detail has templates, the property table with click-to-axis, figures, products, bars, prose and links; it prefers exact rows. gallery has a virtualized card grid, roles, facets with counts, presets, lazy images, hover, annotate mode and mini panes through the layout. landing has cards from portal.json, counts from manifests, global search and readme blocks. hover is an edge-flipping card. lightbox works over the filtered set with lb= hash clear and swipe. export handles CSV/JSON/IDs/DS9 and import by id, alias or 0.3 arcsec position. nav renders portal.json, carry, login-required badges and related links. help lists enabled and disabled caps with reasons and the keymap. annotate stores codes y/n/g/w/l/e in localStorage and exports a CSV with the checklist key columns; it never writes server files."
+ },
+ {
+  "id": "WP12",
+  "title": "Test harness: synthetic fixtures, e2e smoke, caps matrix, perf, parity, contact sheet",
+  "depends_on": [
+   "WP01",
+   "WP02",
+   "WP03",
+   "WP04",
+   "WP06"
+  ],
+  "files": [
+   "tests/fixtures/make_synthetic.py",
+   "tests/e2e/conftest.py",
+   "tests/e2e/test_archetype_smoke.py",
+   "tests/e2e/test_caps_matrix.py",
+   "tests/e2e/test_deep_links.py",
+   "tests/e2e/test_fallbacks.py",
+   "tests/perf/test_perf_budget.py",
+   "tests/py/test_web_tree.py",
+   "tests/py/test_parity_inventory.py",
+   "tests/data/inventory_caps.json",
+   "tests/data/port_table.json",
+   "tools/contact_sheet.py"
+  ],
+  "description": "make_synthetic.py builds section 13 Level 1 portals through bundle/physics/render directly (it does not depend on build.py). The e2e conftest starts devserver, launches Chromium with SwiftShader flags and routes aladin to the stub. Smoke, caps-matrix, deep-link and fallback tests follow section 13. Perf tests follow the Level 3 table. test_web_tree checks there is no package.json and that imports are relative. inventory_caps.json and port_table.json come from inventory.json and section 14. test_parity_inventory asserts that each page's resolver output is a superset of its legacy caps. contact_sheet.py writes paired screenshots to a review HTML. E2E tests that depend on panes from WP08-WP11 are marked xfail(strict=False) until those WPs land."
+ },
+ {
+  "id": "WP13",
+  "title": "Legacy bridge, context, build orchestration, CLI",
+  "depends_on": [
+   "WP01",
+   "WP02",
+   "WP03",
+   "WP04"
+  ],
+  "files": [
+   "portalkit/legacy/__init__.py",
+   "portalkit/legacy/extract.py",
+   "portalkit/legacy/manifold_payload.py",
+   "portalkit/legacy/gc_manifest.py",
+   "portalkit/legacy/hashmap.py",
+   "portalkit/legacy/dirgallery.py",
+   "portalkit/legacy/importshim.py",
+   "portalkit/context.py",
+   "portalkit/build.py",
+   "portalkit/cli.py",
+   "web/js/core/legacyhash.js",
+   "adapters/_template.py",
+   "docs/adapters.md",
+   "tests/py/test_legacy_extract.py",
+   "tests/py/test_manifold_payload.py",
+   "tests/py/test_gc_manifest.py",
+   "tests/py/test_hashmap.py",
+   "tests/py/test_dirgallery.py",
+   "tests/py/test_importshim.py",
+   "tests/py/test_cli_build.py",
+   "tests/js/legacyhash.test.mjs",
+   "tests/fixtures/legacy_snippets/"
+  ],
+  "description": "extract.py uses raw_decode at the three embed styles. manifold_payload converts stars/dims (v, k, center, scale, range, group, log, note)/groups/presets/categories to a CatalogSpec and ManifoldSpec, with k codes mapped to limit kinds. gc_manifest writes a pk-catalog/1 manifest whose file URLs point at GC files in place (u16 dims map to u16q, offsets to i16off, errs to u8log, meta to cat8). dirgallery scans a directory with named-group regex facets. importshim implements section 9.3. context implements the section 9.3 cache, keyed by path/mtime/size without pickle, and the input registry with tmp rejection. build.py runs the section 9.4 pipeline. cli.py implements the section 10 commands and exit codes. legacyhash.js implements all section 6.4 grammars. adapters/_template.py is a commented skeleton."
+ },
+ {
+  "id": "WP20",
+  "title": "Adapter: sgrb2 (wave 1)",
+  "depends_on": [
+   "WP13",
+   "WP12",
+   "WP08",
+   "WP09",
+   "WP10",
+   "WP11"
+  ],
+  "files": [
+   "adapters/sgrb2.py",
+   "sites/sgrb2.toml",
+   "tests/adapters/test_sgrb2.py",
+   "tests/e2e/test_port_sgrb2.py"
+  ],
+  "description": "Tier A references the existing data/mapccd/*.f32.gz in place (enc f32, linear order). Tier B imports SgrB2_Portal_MapCCD loaders and re-encodes to u16q with LOD and pre-binned density. Pages: landing, sky explorer, map_ccd explorer (T2, GPU projection), SED gallery with live SED for all 2105 sources. Declared public (target classified both). Remove the hard-coded counts. The landing card that links the secure manifold triggers the public->secure badge."
+ },
+ {
+  "id": "WP21",
+  "title": "Adapter: robitaille (wave 1)",
+  "depends_on": [
+   "WP13",
+   "WP12",
+   "WP08",
+   "WP09",
+   "WP10",
+   "WP11"
+  ],
+  "files": [
+   "adapters/robitaille.py",
+   "sites/robitaille.toml",
+   "tests/adapters/test_robitaille.py",
+   "tests/e2e/test_port_robitaille.py"
+  ],
+  "description": "28,248 rows. Store 54 mags and 21 physical params; the 172 colours are virtual (CPU projection path, 75-83 base columns). FRIED becomes a category. The dm slider and the >30 mag at 8 kpc rule are client-side. Tier B caches the 4-hour read_geometry loop through ctx.cache. SED curves are written as sedcurve pks1 shards. The imaging gallery gets thumbnails via portalkit thumbs; imaging/gallery.html is merged and dropped from nav. Public."
+ },
+ {
+  "id": "WP22",
+  "title": "Adapter: nirspec6927 core pages (wave 1)",
+  "depends_on": [
+   "WP13",
+   "WP12",
+   "WP08",
+   "WP09",
+   "WP10",
+   "WP11"
+  ],
+  "files": [
+   "adapters/nirspec6927.py",
+   "sites/nirspec6927.toml",
+   "tests/adapters/test_nirspec6927.py",
+   "tests/e2e/test_port_nirspec6927.py"
+  ],
+  "description": "Pages: landing, map explorer, manifold, specviewer, colorcolor, icecolumns, cogas, pvgallery, sedgallery, spectra_png gallery. Spectra go to pks1 shards and s2d FITS to pki1. MSA shutter and dither overlays. Per-grating products as records json. Secure: deploy must classify the target as secure. Uses NIRSpec_6927_AladinMap/Manifold through ctx.legacy."
+ },
+ {
+  "id": "WP23",
+  "title": "Adapter: dirgallery_sites (wave 2)",
+  "depends_on": [
+   "WP13",
+   "WP12",
+   "WP08",
+   "WP09",
+   "WP10",
+   "WP11",
+   "WP20",
+   "WP21",
+   "WP22"
+  ],
+  "files": [
+   "adapters/dirgallery_sites.py",
+   "sites/dirgallery_sites.toml",
+   "tests/adapters/test_dirgallery_sites.py",
+   "tests/e2e/test_port_dirgallery_sites.py"
+  ],
+  "description": "One registry covers about 45 autoindex/jQuery galleries: brick_2221 ccds_cmds (5 regex presets become one page), sed_figures legacy/top100, the public brick_2221/nirspec_6927 gallery, the 2640/6927 pngs galleries when they are not built by family adapters, robitaille png_b (secure) and modelgrids/ccds, the w51/sgrb2/wd2/wd1/cloudc galleries flagged by the critic, and mislabeled headers fixed. Each portal entry declares visibility and target."
+ },
+ {
+  "id": "WP24",
+  "title": "Adapter: wd2 (wave 3)",
+  "depends_on": [
+   "WP13",
+   "WP12",
+   "WP08",
+   "WP09",
+   "WP10",
+   "WP11",
+   "WP23"
+  ],
+  "files": [
+   "adapters/wd2.py",
+   "sites/wd2.toml",
+   "tests/adapters/test_wd2.py",
+   "tests/e2e/test_port_wd2.py"
+  ],
+  "description": "Pages: map_ccd explorer, colorcolor explorer, wd2_manifold (164 dims, CPU projection), sabbi manifold, SED gallery, wavelength explorer. Isochrones come from build_isochrone_track. Preselects become saved selections. 2640 spectra are shared by URL. Target is web/public/jwst/wd2/nirspec_2640/unified/wd2/."
+ },
+ {
+  "id": "WP25",
+  "title": "Adapter: nirspec2640 (wave 3)",
+  "depends_on": [
+   "WP13",
+   "WP12",
+   "WP08",
+   "WP09",
+   "WP10",
+   "WP11",
+   "WP23"
+  ],
+  "files": [
+   "adapters/nirspec2640.py",
+   "sites/nirspec2640.toml",
+   "tests/adapters/test_nirspec2640.py",
+   "tests/e2e/test_port_nirspec2640.py"
+  ],
+  "description": "Pages: landing, map, colorcolor (pairs connectors, BD hist split), specviewer, pvgallery, sedgallery, red_excess (binned-stat background), manifold, one pngs gallery with 3 role presets. Product links are rewritten to the secure archive URL with a login-required badge. Target is web/public/jwst/wd2/nirspec_2640/unified/nirspec2640/; this resolves the public-copy drift."
+ },
+ {
+  "id": "WP26",
+  "title": "Adapter: sickle_brick (wave 3)",
+  "depends_on": [
+   "WP13",
+   "WP12",
+   "WP08",
+   "WP09",
+   "WP10",
+   "WP11",
+   "WP23"
+  ],
+  "files": [
+   "adapters/sickle_brick.py",
+   "sites/sickle_brick.toml",
+   "tests/adapters/test_sickle_brick.py",
+   "tests/e2e/test_port_sickle_brick.py"
+  ],
+  "description": "Pages: Sickle MIRI SED map explorer (SESHAT bars, F2550W FITS overlay URL through exposure), Sickle manifold, Brick2221 F1500W explorer (extended templates to 26 um, k55, normalization bands that exclude the MIRI excess). The sed_figures galleries join the F1500W catalog. Sickle is declared public to match its current exposure, pending the open question."
+ },
+ {
+  "id": "WP27",
+  "title": "Adapter: spherex (wave 4)",
+  "depends_on": [
+   "WP13",
+   "WP12",
+   "WP08",
+   "WP09",
+   "WP10",
+   "WP11",
+   "WP24",
+   "WP25",
+   "WP26"
+  ],
+  "files": [
+   "adapters/spherex.py",
+   "sites/spherex.toml",
+   "tests/adapters/test_spherex.py",
+   "tests/e2e/test_port_spherex.py"
+  ],
+  "description": "One shared catalog bundle feeds six pages: landing, colours explorer (Yoo locus overlay), browse spectra (cone search), map (bookmarks, Planck 857 overlay), sed (nuFnu toggle), manifold. Spectra go to pks1 shards. Replaces the rsync deploy_portal.sh flow with portalkit deploy. README deployed. Public."
+ },
+ {
+  "id": "WP28",
+  "title": "Adapter: jwst_archive incl. W51 archive_colors build (wave 4)",
+  "depends_on": [
+   "WP13",
+   "WP12",
+   "WP08",
+   "WP09",
+   "WP10",
+   "WP11",
+   "WP24",
+   "WP25",
+   "WP26"
+  ],
+  "files": [
+   "adapters/jwst_archive.py",
+   "sites/jwst_archive.toml",
+   "tests/adapters/test_jwst_archive.py",
+   "tests/e2e/test_port_jwst_archive.py",
+   "tests/py/test_no_checklist_write.py"
+  ],
+  "description": "Two [[portal]] entries: the archive portal (secure, jwst/spectra/portal/unified) and the W51 archive_colors build (secure, w51/portal/archive_colors/unified) with the W51 photometry as context dataset. Spectra ids are derived from the x1d filename prefix (fixes 695/1539 stale idx). Band-coverage validity bits. One archive gallery with facets replaces 11 legacy galleries (the PNGs are public through the web/public/jwst/spectra symlink, so the gallery portal is public and links to the secure colour portal). Checklist annotate mode plus archive-checklist-diff; never writes jwst_archive_spectra_checklist.csv (test enforces)."
+ },
+ {
+  "id": "WP29",
+  "title": "Adapter: w51 (wave 5)",
+  "depends_on": [
+   "WP13",
+   "WP12",
+   "WP08",
+   "WP09",
+   "WP10",
+   "WP11",
+   "WP27",
+   "WP28"
+  ],
+  "files": [
+   "adapters/w51.py",
+   "sites/w51.toml",
+   "tests/adapters/test_w51.py",
+   "tests/e2e/test_port_w51.py"
+  ],
+  "description": "Secure, at /orange/adamginsburg/w51/portal/unified (served via web/secure/w51/portal). Identity migration: positional ids with W51-000123 aliases. Two independent catalogs on map_ccd. GTC slits/tiers/rings overlays. spec2d PNG mode. Hexbin rasters plus 53k context density. spectra_candidate is BLOCKED until its tmp-scratchpad inputs are copied to /orange/adamginsburg/w51/gtc/candidate_xb5/ with user approval. The wavelength page uses rungs."
+ },
+ {
+  "id": "WP30",
+  "title": "Adapter: gc_manifold (wave 5)",
+  "depends_on": [
+   "WP13",
+   "WP12",
+   "WP08",
+   "WP09",
+   "WP10",
+   "WP11",
+   "WP27",
+   "WP28"
+  ],
+  "files": [
+   "adapters/gc_manifold.py",
+   "sites/gc_manifold.toml",
+   "tests/adapters/test_gc_manifold.py",
+   "tests/e2e/test_port_gc_manifold.py"
+  ],
+  "description": "Foreign GC schema-1 manifests are referenced in place via legacy/gc_manifest (no re-encode). Treasury (3.74M) and 11 field pages use the T2 GPU path. The gc-query grammar is mapped 1:1. FEATURE_CAVEATS become caveats. The red-clump preset is kept. served_by external (starformation.astro.ufl.edu): deploy writes to jwst/releases/site/<field>_manifold/unified, and verify runs against the external URL. The monitor is registered with status excluded."
+ },
+ {
+  "id": "WP31",
+  "title": "Adapter: nirspec6927 narrative pages + extras (wave 6)",
+  "depends_on": [
+   "WP13",
+   "WP12",
+   "WP08",
+   "WP09",
+   "WP10",
+   "WP11",
+   "WP29",
+   "WP30"
+  ],
+  "files": [
+   "adapters/nirspec6927_narrative.py",
+   "adapters/hips_tours.py",
+   "adapters/spitzer_spectra.py",
+   "sites/nirspec6927_narrative.toml",
+   "sites/hips_tours.toml",
+   "sites/spitzer_spectra.toml",
+   "tests/adapters/test_nirspec6927_narrative.py",
+   "tests/adapters/test_hips_tours.py",
+   "tests/adapters/test_spitzer_spectra.py",
+   "tests/e2e/test_port_nirspec6927_narrative.py",
+   "tests/e2e/test_port_extras.py"
+  ],
+  "description": "MSATA scrollytelling (15 beats, acquisition boxes, highlight cleanup), H2 report (VERDICTS imported, rotation-diagram scatter when a line table exists), refstar map (rings tool; refstar_map_data.json has no writer, so it is rebuilt from NIRSpec_6927_RefStar inputs or extracted with Tier A), refstar_check contact sheets. Extras: hips_tours (RGB and ACES wavelength tours), spitzer_spectra (cmz), jwst_gc_aladin explorer, cmd_explorer pre-binned explorer. The narrative family deploys into the same nirspec_6927/unified target using a separate [[portal]] id, with page files prefixed n_ to keep ownership disjoint."
+ }
+]
