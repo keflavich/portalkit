@@ -1,0 +1,106 @@
+/* Spectrum panes (spectrum1d, spectrum2d). Depends on tokens.css and base.css. */
+
+.pk-spec1d, .pk-spec2d {
+  display: flex; flex-direction: column;
+  width: 100%; height: 100%; min-width: 0; min-height: 0;
+  overflow: hidden;
+}
+
+/* ---------------------------------------------------------------- toolbar (wraps) */
+.pk-spec-bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--pk-sp-1) var(--pk-sp-2);
+  padding: var(--pk-sp-1) var(--pk-sp-2);
+  border-bottom: 1px solid var(--pk-border);
+  background: var(--pk-bg-2);
+  font-size: var(--pk-fs-0);
+  min-width: 0; max-width: 100%;
+  flex: 0 0 auto;
+}
+.pk-spec-bar .pk-btn, .pk-spec-bar select, .pk-spec-bar input {
+  min-height: 24px; padding-top: 1px; padding-bottom: 1px; font-size: var(--pk-fs-0);
+}
+.pk-spec-bar .pk-btn { padding-left: var(--pk-sp-2); padding-right: var(--pk-sp-2); }
+.pk-spec-bar select { max-width: 11em; }
+.pk-spec-bar label { display: inline-flex; align-items: center; gap: var(--pk-sp-1); white-space: nowrap; color: var(--pk-fg-2); }
+.pk-spec-bar [hidden] { display: none !important; }
+
+.pk-spec-segs, .pk-spec-bands, .pk-spec-pins, .pk-spec-toggles, .pk-feat-toggles {
+  display: inline-flex; flex-wrap: wrap; gap: 2px; min-width: 0; max-width: 100%;
+}
+.pk-spec-seg[aria-pressed="false"] { opacity: .55; text-decoration: line-through; }
+
+.pk-spec-pinchip {
+  display: inline-flex; align-items: center; gap: 2px;
+  max-width: 14em; padding-right: 0;
+  border-left: 3px solid var(--pk-pin-color, var(--pk-accent));
+}
+.pk-spec-pinchip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pk-spec-pinchip.pk-missing > span { color: var(--pk-fg-3); text-decoration: line-through; }
+.pk-spec-unpin {
+  border: 0; background: transparent; cursor: pointer; color: var(--pk-fg-3);
+  padding: 0 4px; line-height: 1; font-size: 1.1em;
+}
+.pk-spec-unpin:hover { color: var(--pk-fg); }
+
+.pk-spec-vel input { width: 6em; }
+
+/* "Overlays" disclosure: velocity, toggles, features, models */
+.pk-spec-more { min-width: 0; max-width: 100%; }
+.pk-spec-more > summary {
+  cursor: pointer; user-select: none; color: var(--pk-fg-2);
+  padding: 2px var(--pk-sp-1); border-radius: var(--pk-radius);
+}
+.pk-spec-more > summary:hover { background: var(--pk-bg-3); }
+.pk-spec-more[open] { flex-basis: 100%; }
+.pk-spec-more-body {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--pk-sp-1) var(--pk-sp-3);
+  padding: var(--pk-sp-1) 0;
+}
+
+/* feature family chips (spec/features.js featureToggles) */
+.pk-feat-chip { border-left: 3px solid var(--pk-feat-color, var(--pk-accent)); }
+.pk-feat-chip[aria-pressed="false"] { opacity: .7; }
+
+/* model controls (panes/sed.js modelControls; same rules in sed.css) */
+.pk-models { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--pk-sp-1) var(--pk-sp-2); min-width: 0; max-width: 100%; }
+.pk-models label { display: inline-flex; align-items: center; gap: var(--pk-sp-1); white-space: nowrap; color: var(--pk-fg-2); }
+.pk-models input[type="range"] { width: 8em; min-width: 5em; }
+.pk-models .pk-models-num { width: 4.5em; }
+.pk-models select { max-width: 12em; }
+.pk-models [hidden] { display: none !important; }
+
+/* ---------------------------------------------------------------- plot area */
+.pk-spec-wrap {
+  position: relative; flex: 1 1 auto;
+  min-width: 0; min-height: 80px; overflow: hidden;
+  background: var(--pk-plot-bg, var(--pk-bg));
+}
+.pk-spec-canvas {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  touch-action: none; cursor: grab;
+}
+.pk-spec-canvas:active { cursor: grabbing; }
+.pk-spec-canvas:focus-visible { outline: 2px solid var(--pk-focus); outline-offset: -2px; }
+.pk-spec-readout {
+  position: absolute; left: 60px; bottom: 38px; max-width: calc(100% - 70px);
+  padding: 1px var(--pk-sp-2);
+  background: color-mix(in srgb, var(--pk-bg) 88%, transparent);
+  border: 1px solid var(--pk-border); border-radius: var(--pk-radius);
+  font: var(--pk-fs-0)/1.4 var(--pk-mono); color: var(--pk-fg-2);
+  pointer-events: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.pk-spec-readout:empty, .pk-spec-readout[hidden] { display: none; }
+
+/* ---------------------------------------------------------------- narrow screens */
+@media (max-width: 899px) {
+  .pk-spec-bar { gap: 2px var(--pk-sp-1); padding: 2px var(--pk-sp-1); }
+  .pk-spec-bar select { max-width: 8.5em; }
+  .pk-models input[type="range"] { width: 6em; }
+  .pk-spec-readout { left: 4px; max-width: calc(100% - 8px); }
+  .pk-spec-wrap { min-height: 220px; }
+}
+@media (max-width: 420px) {
+  .pk-spec-pinchip { max-width: 9em; }
+  .pk-models select { max-width: 9em; }
+}

@@ -1,0 +1,78 @@
+/* SED pane. Depends on tokens.css and base.css. */
+
+.pk-sed {
+  display: flex; flex-direction: column;
+  width: 100%; height: 100%; min-width: 0; min-height: 0;
+  overflow: hidden;
+}
+.pk-sed-bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--pk-sp-1) var(--pk-sp-2);
+  padding: var(--pk-sp-1) var(--pk-sp-2);
+  border-bottom: 1px solid var(--pk-border);
+  background: var(--pk-bg-2);
+  font-size: var(--pk-fs-0);
+  min-width: 0; max-width: 100%;
+  flex: 0 0 auto;
+}
+.pk-sed-bar .pk-btn, .pk-sed-bar select, .pk-sed-bar input {
+  min-height: 24px; padding-top: 1px; padding-bottom: 1px; font-size: var(--pk-fs-0);
+}
+.pk-sed-bar .pk-btn { padding-left: var(--pk-sp-2); padding-right: var(--pk-sp-2); }
+.pk-sed-bar label { display: inline-flex; align-items: center; gap: var(--pk-sp-1); white-space: nowrap; color: var(--pk-fg-2); }
+.pk-sed-bar [hidden] { display: none !important; }
+.pk-sed-bb input { width: 5.5em; }
+
+/* model controls (panes/sed.js modelControls; same rules in spectrum.css) */
+.pk-models { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--pk-sp-1) var(--pk-sp-2); min-width: 0; max-width: 100%; }
+.pk-models label { display: inline-flex; align-items: center; gap: var(--pk-sp-1); white-space: nowrap; color: var(--pk-fg-2); }
+.pk-models input[type="range"] { width: 8em; min-width: 5em; }
+.pk-models .pk-models-num { width: 4.5em; }
+.pk-models select { max-width: 12em; }
+.pk-models [hidden] { display: none !important; }
+
+/* feature family chips (spec/features.js featureToggles) */
+.pk-feat-toggles { display: inline-flex; flex-wrap: wrap; gap: 2px; min-width: 0; max-width: 100%; }
+.pk-feat-toggles[hidden] { display: none; }
+.pk-feat-chip { border-left: 3px solid var(--pk-feat-color, var(--pk-accent)); }
+.pk-feat-chip[aria-pressed="false"] { opacity: .7; }
+
+/* ---------------------------------------------------------------- plot + tooltip */
+.pk-sed-wrap, .pk-sed-dialog-wrap {
+  position: relative; flex: 1 1 auto;
+  min-width: 0; min-height: 120px; overflow: hidden;
+  background: var(--pk-plot-bg, var(--pk-bg));
+}
+.pk-sed-canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+.pk-sed-canvas:focus-visible { outline: 2px solid var(--pk-focus); outline-offset: -2px; }
+.pk-sed-tip {
+  position: absolute; z-index: 2; max-width: min(260px, calc(100% - 8px));
+  padding: var(--pk-sp-1) var(--pk-sp-2);
+  background: var(--pk-bg); color: var(--pk-fg);
+  border: 1px solid var(--pk-border); border-radius: var(--pk-radius);
+  box-shadow: var(--pk-shadow);
+  font-size: var(--pk-fs-0); line-height: 1.4;
+  pointer-events: none;
+}
+.pk-sed-tip[hidden] { display: none; }
+
+/* ---------------------------------------------------------------- fullscreen dialog */
+.pk-sed-dialog {
+  width: min(1200px, 96vw); height: min(860px, 92vh); max-width: 96vw; max-height: 92vh;
+  padding: 0; display: none; flex-direction: column; overflow: hidden;
+}
+.pk-sed-dialog[open] { display: flex; }
+.pk-sed-dialog-head {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--pk-sp-2);
+  padding: var(--pk-sp-2) var(--pk-sp-3);
+  border-bottom: 1px solid var(--pk-border);
+  flex: 0 0 auto;
+}
+.pk-sed-dialog-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+@media (max-width: 899px) {
+  .pk-sed-bar { gap: 2px var(--pk-sp-1); padding: 2px var(--pk-sp-1); }
+  .pk-models input[type="range"] { width: 6em; }
+  .pk-models select { max-width: 9em; }
+  .pk-sed-wrap { min-height: 240px; }
+  .pk-sed-dialog { width: 100vw; height: 100dvh; max-width: 100vw; max-height: 100dvh; border-radius: 0; }
+}
