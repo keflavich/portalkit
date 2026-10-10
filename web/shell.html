@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="portalkit {{pk}}">
+<meta name="description" content="{{description}}">
+<title>{{title}}</title>
+<script>
+(function () {
+  var t = "auto";
+  try { t = window.localStorage.getItem("pk:theme") || "auto"; } catch (e) { t = "auto"; }
+  if (t === "light" || t === "dark") { document.documentElement.setAttribute("data-theme", t); }
+})();
+</script>
+<script>
+document.addEventListener("pk-fail", function (ev) {
+  var show = function () {
+    var el = document.getElementById("pk-fail"), d = document.getElementById("pk-fail-detail");
+    var b = document.getElementById("pk-boot"), err = ev.detail;
+    if (!el) { return; }
+    el.hidden = false;
+    if (d && err) { d.textContent = String(err.message ? err.message : err); }
+    if (b) { b.hidden = true; }
+  };
+  if (document.readyState === "loading") { document.addEventListener("DOMContentLoaded", show); } else { show(); }
+});
+</script>
+<style>
+#pk-boot,#pk-fail{font:14px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;margin:16px;max-width:42em}
+#pk-fail{border:1px solid #c0392b;border-radius:6px;padding:12px 16px}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) body{background:#0f1216;color:#e6e9ee}}
+:root[data-theme="dark"] body{background:#0f1216;color:#e6e9ee}
+</style>
+<link rel="stylesheet" href="{{assets}}css/tokens.css" onerror="document.dispatchEvent(new CustomEvent('pk-fail',{detail:'stylesheet tokens.css failed to load'}))">
+<link rel="stylesheet" href="{{assets}}css/base.css" onerror="document.dispatchEvent(new CustomEvent('pk-fail',{detail:'stylesheet base.css failed to load'}))">
+<link rel="stylesheet" href="{{assets}}css/layout.css" onerror="document.dispatchEvent(new CustomEvent('pk-fail',{detail:'stylesheet layout.css failed to load'}))">
+<link rel="stylesheet" href="{{assets}}css/print.css" media="print">
+</head>
+<body data-caps="{{caps}}" data-page="{{page_id}}" data-archetype="{{archetype}}">
+<div id="pk-root"><p id="pk-boot">Loading {{page_title}}&hellip;</p></div>
+<div id="pk-fail" role="alert" hidden>
+<p><strong>This page could not start.</strong> The viewer scripts or styles did not load from
+<code>{{assets}}</code>. Check the network connection and reload the page.</p>
+<p id="pk-fail-detail"></p>
+</div>
+<noscript><p style="margin:16px">This portal needs JavaScript to show its catalog, plots and sky map.</p></noscript>
+<script type="application/json" id="pk-page">{{page_json}}</script>
+<script type="module">
+import({{boot_url}}).then(function (m) { return m.boot(); }).catch(function (e) { document.dispatchEvent(new CustomEvent("pk-fail", {detail: e})); });
+</script>
+<script nomodule>document.getElementById("pk-fail").hidden = false;
+document.getElementById("pk-fail-detail").textContent = "this browser does not support JavaScript modules";</script>
+</body>
+</html>
