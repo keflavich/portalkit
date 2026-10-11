@@ -62,6 +62,8 @@ __all__ = [
     "PANE_TYPES",
     "PANE_OPTIONS",
     "OPTIONAL_PANE_OPTIONS",
+    "DETAIL_TEMPLATES",
+    "RASTER_KEYS",
     "DATASET_KINDS",
     "RECORD_KINDS",
     "GRAMMARS",
@@ -106,19 +108,28 @@ OVERLAY_KINDS = ("polygons", "circles", "markers", "polyline", "rings", "boxes",
 PRESET_KINDS = ("axes", "frame", "selection", "filter")
 PRODUCT_KINDS = ("fits", "png", "mast", "link")
 
+#: Named detail-pane templates (``web/js/panes/detail.js`` ``TEMPLATES``) plus ``auto``
+#: (IMPLEMENTATION_NOTES item 78).
+DETAIL_TEMPLATES = ("auto", "nirspec_source", "photometry", "compact")
+
+#: Keys of one scatter ``raster`` layer (item 78): ``extent`` is ``[x0, x1, y_bottom, y_top]``
+#: in data units (matplotlib order); ``x``/``y`` bind the layer to an axis pair, ``cell`` to a
+#: small-multiples grid cell.
+RASTER_KEYS = (("url", "extent"), ("x", "y", "cell", "opacity", "label"))
+
 #: Pane options from section 6.10. Value: a checker name (see ``_OPTION_CHECKS``) or None
 #: (any JSON value accepted).
 PANE_OPTIONS: dict[str, dict[str, str | None]] = {
     "list": {"columns": "strlist", "sort": None, "search": "bool", "virtual": "bool",
              "rowHeight": "posnum", "showSelectionOnly": "bool"},
-    "detail": {"template": "str", "products": "ds:records", "images": "ds:images", "bars": "strlist",
+    "detail": {"template": "enum:" + "|".join(DETAIL_TEMPLATES), "products": "ds:records", "images": "ds:images", "bars": "strlist",
                "prose": "strlist", "links": "bool", "clickToAxis": "bool"},
     "scatter": {"x": "str", "y": "str", "xlog": "bool", "ylog": "bool", "color": None,
-                "density": "enum:auto|on|off", "background": "ds:catalog", "raster": "list",
+                "density": "enum:auto|on|off", "background": "ds:catalog", "raster": "raster",
                 "overlays": "strlist", "pairs": "obj", "hollow_if": "str", "labels": "str",
                 "errorbars": "bool", "presets": "bool", "grid": "list"},
     "manifold": {"dims": "dims", "frame": "str", "trails": "bool", "compass": "bool", "tour": "bool",
-                 "background": "ds:catalog"},
+                 "background": "ds:catalog", "overlays": "strlist"},
     "hist": {"expr": "str", "bins": "posint", "brush": "bool"},
     "sky": {"hips": "ds:hips", "overlays": "strlist", "markers": "enum:auto|off", "brush": "bool",
             "rings": "numlist", "fits": "strlist"},
@@ -685,6 +696,10 @@ def _check_option(e: _E, path: str, kind: str | None, v: Any, datasets: dict) ->
                 e(path, f"{v!r}: expected a key list or 'group:<g>'")
         else:
             _strlist(e, path, v, nonempty=True)
+    elif kind == "raster":
+        if _list(e, path, v):
+            for i, r in enumerate(v):
+                _raster(e, _p(path, i), r)
     elif kind == "models":
         if _strlist(e, path, v):
             for i, m in enumerate(v):
@@ -707,6 +722,28 @@ def _check_option(e: _E, path: str, kind: str | None, v: Any, datasets: dict) ->
                 e(path, f"dataset {v!r} has kind {datasets[v].get('kind')!r}, expected {want!r}")
     else:  # pragma: no cover - table typo guard
         raise AssertionError(f"unknown option checker {kind!r}")
+
+
+def _raster(e: _E, path: str, r: Any) -> None:
+    """One scatter raster layer: ``{url, extent, x?, y?, cell?, opacity?, label?}``."""
+    if not _obj(e, path, r):
+        return
+    _keys(e, path, r, *RASTER_KEYS)
+    if "url" in r:
+        _str(e, _p(path, "url"), r["url"])
+    if "extent" in r and _numlist(e, _p(path, "extent"), r["extent"], length=4):
+        x0, x1, y0, y1 = r["extent"]
+        if x0 == x1 or y0 == y1:
+            e(_p(path, "extent"), f"degenerate extent {list(r['extent'])!r} (x0 == x1 or y0 == y1)")
+    for k in ("x", "y", "label"):
+        if k in r:
+            _str(e, _p(path, k), r[k])
+    if ("x" in r) != ("y" in r):
+        e(path, "'x' and 'y' bind a raster to an axis pair and go together")
+    if "cell" in r:
+        _num(e, _p(path, "cell"), r["cell"], 0, integer=True)
+    if "opacity" in r:
+        _num(e, _p(path, "opacity"), r["opacity"], 0.0, 1.0)
 
 
 def _layout(e: _E, path: str, node: Any, datasets: dict, pane_ids: dict, depth: int = 0) -> None:
@@ -757,6 +794,12 @@ def _layout(e: _E, path: str, node: Any, datasets: dict, pane_ids: dict, depth: 
                 if ov is None and ok in OPTIONAL_PANE_OPTIONS.get(ptype, ()):
                     continue
                 _check_option(e, op, table[ok], ov, datasets)
+            if ptype == "scatter" and _is_list(opts.get("raster")):
+                ncell = len(opts["grid"]) if _is_list(opts.get("grid")) else 0
+                for i, r in enumerate(opts["raster"]):
+                    if isinstance(r, dict) and _is_int(r.get("cell")) and r["cell"] >= ncell:
+                        e(_p(_p(_p(path, "options"), "raster"), i),
+                          f"cell {r['cell']} is outside the grid ({ncell} cell(s))")
 
 
 def _state(e: _E, st: dict, datasets: dict, pane_ids: dict) -> None:

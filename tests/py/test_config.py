@@ -594,3 +594,186 @@ def test_public_page_may_not_fetch_secure_data():
     assert doc["datasets"]["src"]["url"] == secure
     # a link (not fetched) to the secure tree is allowed on a public page
     assert _assemble(page, {"src": _cat()})["links"]["archive"].startswith("https://data.rc.ufl.edu/secure/")
+
+
+# ---------------------------------------------------------------------------
+# IMPLEMENTATION_NOTES 78: raster layers and detail templates
+# ---------------------------------------------------------------------------
+
+def _raster_page(raster, grid=None, x="f182m-f410m", y="f410m"):
+    opts = {"x": x, "y": y, "raster": raster}
+    if grid is not None:
+        opts["grid"] = grid
+    layout = {"row": [{"pane": "list", "dataset": "src"},
+                      {"pane": "scatter", "id": "ccd", "dataset": "src", "options": opts}]}
+    return PageSpec(id="r", archetype="explorer", title="R", datasets=["src"], layout=layout)
+
+
+def test_raster_layers_accept_x_y_cell():
+    raster = [{"url": "img/hex_all.png", "extent": [-1.0, 3.0, 18.0, 10.0]},
+              {"url": "img/hex_ccd.png", "extent": [0, 2, 16, 11], "x": "f182m-f410m", "y": "f410m",
+               "opacity": 0.5, "label": "Hexbin"},
+              {"url": "img/hex_c1.png", "extent": [0, 2, 16, 11], "cell": 1},
+              {"url": "{assets}img/x.png", "extent": [0, 1, 1, 0], "cell": 0, "_note": "kept"}]
+    doc = _assemble(_raster_page(raster, grid=[["f182m", "f410m"], ["f182m-f410m", "f405n"]]),
+                    {"src": _cat()})
+    assert validate_page(doc) == []
+    got = next(p for p in caps.iter_panes(doc["layout"]) if p.get("id") == "ccd")["options"]["raster"]
+    assert got == raster
+
+
+@pytest.mark.parametrize("entry,needle", [
+    ({"extent": [0, 1, 0, 1]}, "missing required key 'url'"),
+    ({"url": "a.png"}, "missing required key 'extent'"),
+    ({"url": "a.png", "extent": [0, 1, 0]}, "expected 4 values"),
+    ({"url": "a.png", "extent": [0, 1, 0, float("nan")]}, "finite"),
+    ({"url": "a.png", "extent": [0, 0, 0, 1]}, "degenerate"),
+    ({"url": "a.png", "extent": [0, 1, 0, 1], "x": "f182m"}, "go together"),
+    ({"url": "a.png", "extent": [0, 1, 0, 1], "x": "f182m", "y": "zz9"}, "zz9"),
+    ({"url": "a.png", "extent": [0, 1, 0, 1], "x": "f182m", "y": "note"}, "note"),
+    ({"url": "a.png", "extent": [0, 1, 0, 1], "cell": -1}, "below minimum"),
+    ({"url": "a.png", "extent": [0, 1, 0, 1], "cell": 1.5}, "expected integer"),
+    ({"url": "a.png", "extent": [0, 1, 0, 1], "cell": 2}, "outside the grid"),
+    ({"url": "a.png", "extent": [0, 1, 0, 1], "opacity": 1.5}, "above maximum"),
+    ({"url": "a.png", "extent": [0, 1, 0, 1], "zoom": 2}, "unknown key 'zoom'"),
+    ({"url": "../a.png", "extent": [0, 1, 0, 1]}, "leaves the staged tree"),
+    ("a.png", "expected object"),
+])
+def test_bad_raster_layers(entry, needle):
+    page = _raster_page([entry], grid=[["f182m", "f410m"], ["f405n", "f410m"]])
+    with pytest.raises(config.ConfigError) as ei:
+        _assemble(page, {"src": _cat()})
+    assert any(needle in e for e in ei.value.errors), ei.value.errors
+
+
+def test_raster_cell_without_grid_is_an_error():
+    page = _raster_page([{"url": "a.png", "extent": [0, 1, 0, 1], "cell": 0}])
+    with pytest.raises(config.ConfigError) as ei:
+        _assemble(page, {"src": _cat()})
+    assert any("outside the grid (0 cell(s))" in e for e in ei.value.errors), ei.value.errors
+
+
+@pytest.mark.parametrize("tpl", ["auto", "nirspec_source", "photometry", "compact"])
+def test_detail_templates_accepted(tpl):
+    layout = {"row": [{"pane": "list", "dataset": "src"},
+                      {"pane": "detail", "dataset": "src", "options": {"template": tpl}}]}
+    page = PageSpec(id="d", archetype="explorer", title="D", datasets=["src"], layout=layout)
+    doc = _assemble(page, {"src": _cat()})
+    assert validate_page(doc) == []
+
+
+def test_unknown_detail_template_is_an_error():
+    layout = {"row": [{"pane": "list", "dataset": "src"},
+                      {"pane": "detail", "dataset": "src", "options": {"template": "fancy"}}]}
+    page = PageSpec(id="d", archetype="explorer", title="D", datasets=["src"], layout=layout)
+    with pytest.raises(config.ConfigError) as ei:
+        _assemble(page, {"src": _cat()})
+    assert any("'fancy' not one of" in e and "photometry" in e for e in ei.value.errors)
+
+
+# ---------------------------------------------------------------------------
+# IMPLEMENTATION_NOTES 88: manifold overlays are dim layers
+# ---------------------------------------------------------------------------
+
+def test_manifold_overlays_checked():
+    ds = {"src": _cat(), "iso": _iso(), "ext": ExtinctionSpec()}
+    layout = {"row": [{"pane": "list", "dataset": "src"},
+                      {"pane": "manifold", "id": "m", "dataset": "src",
+                       "options": {"dims": ["f182m", "f405n", "f410m"], "overlays": ["mist_1myr", "g23_vector"]}}]}
+    page = PageSpec(id="m", archetype="manifold", title="M", datasets=["src", "iso", "ext"], layout=layout,
+                    manifold=True)
+    rr = {"extinction": "{res}extinction.9a8b7c6d.json"}
+    doc = _assemble(page, ds, res_refs=rr)
+    assert validate_page(doc) == []
+    layout["row"][1]["options"]["overlays"] = ["mist_1myr", "bogus_vector"]
+    with pytest.raises(config.ConfigError) as ei:
+        _assemble(page, ds, res_refs=rr)
+    assert any("bogus_vector" in e and "unknown dim overlay" in e for e in ei.value.errors)
+
+
+# ---------------------------------------------------------------------------
+# IMPLEMENTATION_NOTES 89: needs are checked against the assembled datasets
+# ---------------------------------------------------------------------------
+
+def _sed_page():
+    return PageSpec(id="w", archetype="explorer", title="W", datasets=["src"])
+
+
+def test_unattached_resources_move_caps_to_disabled_and_prune_panes():
+    ds = {"src": _cat()}
+    res = caps.resolve(_sed_page(), ds, {})          # default: shared resources attachable
+    assert {"live_sed_viewer", "labeled_features_overlay"} <= set(res.enabled)
+    assert "sed" in caps.pane_types(res.layout)
+    rr = {"templates": "{res}t.json"}
+    # no filters and no features dataset: both move to disabled with the item-89 reasons
+    doc = config.assemble(_sed_page(), ds, {}, res, portal=PORTAL, res_refs=rr,
+                          refs={"tpl": {"kind": "templates", "url": "{res}t.json"}})
+    for cap in ("live_sed_viewer", "labeled_features_overlay"):
+        assert cap not in doc["caps"]["enabled"]
+        assert doc["caps"]["disabled"][cap] == caps.NEEDS[cap][1]
+    assert caps.missing_providers(doc["layout"], doc["caps"]["enabled"]) == []
+    # without a filters dataset the added SED pane places no points, so it goes like in
+    # caps.resolve(resources=...) and the template overlay loses its provider
+    assert "sed" not in caps.pane_types(doc["layout"])
+    assert "model_template_overlay" in doc["caps"]["disabled"]
+    assert "no pane on this page" in doc["caps"]["disabled"]["model_template_overlay"]
+    plain = config.assemble(_sed_page(), ds, {}, None, portal=PORTAL, res_refs=rr,
+                            refs={"tpl": {"kind": "templates", "url": "{res}t.json"}})
+    assert caps.pane_types(plain["layout"]) == caps.pane_types(doc["layout"])
+    assert set(plain["caps"]["disabled"]) == set(doc["caps"]["disabled"])
+    assert validate_page(doc) == []
+    # with filters and features attached nothing moves
+    doc = config.assemble(_sed_page(), ds, {}, res, portal=PORTAL,
+                          refs={"flt": {"kind": "filters", "url": "{res}f.json"},
+                                "feat": {"kind": "features", "url": "{res}feat.json"}})
+    assert doc["caps"]["enabled"] == res.enabled
+    assert doc["caps"]["disabled"] == res.disabled
+
+
+def test_prune_drops_panes_that_only_served_dropped_caps():
+    ds = {"src": _cat()}
+    page = PageSpec(id="w", archetype="explorer", title="W", datasets=["src"],
+                    caps_disable={"model_template_overlay": "no templates here",
+                                  "av_slider": "fixed extinction"})
+    res = caps.resolve(page, ds, {})
+    assert "sed" in {p["pane"] for p in res.added_panes}
+    doc = config.assemble(page, ds, {}, res, portal=PORTAL)
+    assert "live_sed_viewer" in doc["caps"]["disabled"]
+    assert "sed" not in caps.pane_types(doc["layout"])
+    assert caps.missing_providers(doc["layout"], doc["caps"]["enabled"]) == []
+    assert validate_page(doc) == []
+
+
+def test_drop_pane_collapses_splits():
+    tree = {"row": [{"pane": "list"}, {"col": [{"pane": "detail"}, {"pane": "sed", "id": "sed"}], "size": 430}]}
+    assert config._drop_pane(tree, "sed") == {"row": [{"pane": "list"}, {"pane": "detail", "size": 430}]}
+    assert config._drop_pane({"pane": "sed"}, "sed") is None
+    assert config._drop_pane({"col": [{"pane": "sed"}]}, "sed") is None
+    assert config._drop_pane(tree, "nope") == tree
+
+
+def test_assemble_without_caps_takes_resources_from_refs():
+    ds = {"src": _cat()}
+    doc = config.assemble(_sed_page(), ds, {}, portal=PORTAL)
+    assert "live_sed_viewer" in doc["caps"]["disabled"]
+    assert "sed" not in caps.pane_types(doc["layout"])
+    doc = config.assemble(_sed_page(), ds, {}, portal=PORTAL,
+                          refs={"flt": {"kind": "filters", "url": "{res}f.json"}})
+    assert "live_sed_viewer" in doc["caps"]["enabled"]
+    assert "sed" in caps.pane_types(doc["layout"])
+    assert doc["datasets"]["flt"] == {"kind": "filters", "url": "{res}f.json"}
+
+
+def test_hips_needed_for_layer_stacking_in_page_json():
+    ds = _ds()
+    doc = _assemble(PageSpec(id="m", archetype="explorer", title="M", datasets=["src"]), ds)
+    assert "hips_layer_stacking" in doc["caps"]["disabled"]
+    doc = _assemble(PageSpec(id="m", archetype="explorer", title="M", datasets=["src", "hips"]), ds)
+    assert "hips_layer_stacking" in doc["caps"]["enabled"]
+
+
+def test_deploy_reexports_raise_for_plan():
+    import portalkit.deploy as dep
+    from portalkit.deploy.deploy import raise_for_plan
+    assert dep.raise_for_plan is raise_for_plan
+    assert "raise_for_plan" in dep.__all__

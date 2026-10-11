@@ -969,3 +969,73 @@ def test_validators_are_fast_on_large_documents():
     t0 = time.perf_counter()
     assert schema.validate_images(d) == []
     assert time.perf_counter() - t0 < 5.0
+
+
+# ---------------------------------------------------------------------------
+# IMPLEMENTATION_NOTES 78 and 88: raster layers, detail templates, manifold overlays
+# ---------------------------------------------------------------------------
+
+def _scatter(p):
+    scat = p["layout"]["row"][1]["col"][1]
+    assert scat["pane"] == "scatter"
+    return scat
+
+
+def test_page_raster_layers():
+    p = page_doc()
+    scat = _scatter(p)
+    scat["options"]["grid"] = [["f182m", "f410m"], ["f182m-f410m", "f410m"]]
+    scat["options"]["raster"] = [
+        {"url": "img/a.png", "extent": [0, 1, 2, 3]},
+        {"url": "img/b.png", "extent": [0.0, 1e30, -1e30, 3], "x": "f182m-f410m", "y": "f410m",
+         "opacity": 0, "label": "Hexbin ✓"},
+        {"url": "img/c.png", "extent": [0, 1, 2, 3], "cell": 1, "opacity": 1}]
+    assert schema.validate_page(p) == []
+    scat["options"]["raster"] = [
+        {"url": "", "extent": [0, 1, 2, 3]},
+        {"url": "a.png", "extent": [0, 1, 2, 3, 4]},
+        {"url": "a.png", "extent": [0, 1, 2, None]},
+        {"url": "a.png", "extent": [5, 5, 2, 3]},
+        {"url": "a.png", "extent": [0, 1, 2, 3], "y": "f410m"},
+        {"url": "a.png", "extent": [0, 1, 2, 3], "cell": 2},
+        {"url": "a.png", "extent": [0, 1, 2, 3], "cell": True},
+        {"url": "a.png", "extent": [0, 1, 2, 3], "opacity": -0.1},
+        {"url": "a.png", "extent": [0, 1, 2, 3], "x": 3, "y": "f410m"},
+        {"url": "a.png", "extent": [0, 1, 2, 3], "bogus": 1},
+        7]
+    errs = schema.validate_page(p)
+    assert _has(errs, "raster[0].url", "empty string")
+    assert _has(errs, "raster[1].extent", "expected 4 values")
+    assert _has(errs, "raster[2].extent[3]", "finite")
+    assert _has(errs, "raster[3].extent", "degenerate")
+    assert _has(errs, "raster[4]", "go together")
+    assert _has(errs, "raster[5]", "outside the grid (2 cell(s))")
+    assert _has(errs, "raster[6].cell", "expected integer")
+    assert _has(errs, "raster[7].opacity", "below minimum")
+    assert _has(errs, "raster[8].x", "expected string")
+    assert _has(errs, "raster[9]", "unknown key 'bogus'")
+    assert _has(errs, "raster[10]", "expected object")
+    scat["options"]["raster"] = {"url": "a.png"}
+    assert _has(schema.validate_page(p), "options.raster", "expected array")
+
+
+def test_page_detail_templates():
+    assert schema.DETAIL_TEMPLATES == ("auto", "nirspec_source", "photometry", "compact")
+    p = page_doc()
+    det = p["layout"]["row"][2]["col"][0]
+    assert det["pane"] == "detail"
+    for tpl in schema.DETAIL_TEMPLATES:
+        det["options"]["template"] = tpl
+        assert schema.validate_page(p) == [], tpl
+    det["options"]["template"] = "Photometry"
+    assert _has(schema.validate_page(p), "options.template", "not one of")
+
+
+def test_page_manifold_overlays_option():
+    p = page_doc()
+    p["layout"]["row"][1]["col"].append({"pane": "manifold", "dataset": "src",
+                                         "options": {"dims": ["f182m", "f410m"],
+                                                     "overlays": ["mist_1myr", "g23_vector"]}})
+    assert schema.validate_page(p) == []
+    p["layout"]["row"][1]["col"][-1]["options"]["overlays"] = "g23_vector"
+    assert _has(schema.validate_page(p), "options.overlays", "expected array")

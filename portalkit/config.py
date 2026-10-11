@@ -60,9 +60,8 @@ from .caps import CapsResult, CatInfo, PageData, iter_panes, page_data
 from .render import markdown_lite
 from .schema import OPTIONAL_PANE_OPTIONS, validate_hips, validate_isochrones, \
     validate_narrative, validate_overlays, validate_page
-from .spec import (CatalogSpec, DatasetSpec, ExtinctionSpec, FilterSetSpec, HipsSpec,
-                   ImageSetSpec, IsochroneSpec, NarrativeSpec, OverlaySpec, PageSpec, ReadmeSpec,
-                   RecordSetSpec, TemplateSpec)
+from .spec import (CatalogSpec, DatasetSpec, ExtinctionSpec, HipsSpec, ImageSetSpec,
+                   IsochroneSpec, NarrativeSpec, OverlaySpec, PageSpec, ReadmeSpec, RecordSetSpec)
 from .version import VERSION, asset_base, res_base
 
 __all__ = [
@@ -99,16 +98,10 @@ README_INLINE_MAX = 16384
 #: Dataset kinds served from the shared resource tree.
 RES_KINDS = ("templates", "filters", "extinction", "features")
 
-_SPEC_KIND: tuple[tuple[type, str], ...] = (
-    (CatalogSpec, "catalog"), (RecordSetSpec, "records"), (ImageSetSpec, "images"),
-    (TemplateSpec, "templates"), (FilterSetSpec, "filters"), (ExtinctionSpec, "extinction"),
-    (IsochroneSpec, "isochrones"), (HipsSpec, "hips"), (OverlaySpec, "overlays"),
-    (NarrativeSpec, "narrative"),
-)
+_SPEC_KIND: tuple[tuple[type, str], ...] = capsmod.SPEC_KINDS
 
 # pane options that name datasets (their targets are attached to the page automatically)
-_DS_OPTIONS = ("products", "images", "background", "hips", "markers", "narrative", "records",
-               "templates")
+_DS_OPTIONS = capsmod.DS_OPTIONS
 
 
 class ConfigError(ValueError):
@@ -126,10 +119,7 @@ class ConfigError(ValueError):
 # ---------------------------------------------------------------------------
 
 def _spec_kind(spec: DatasetSpec) -> str | None:
-    for cls, kind in _SPEC_KIND:
-        if isinstance(spec, cls):
-            return kind
-    return None
+    return capsmod.spec_kind(spec)
 
 
 def dataset_ref(ds: str, spec: DatasetSpec, refs: Mapping[str, Mapping] | None = None,
@@ -426,10 +416,9 @@ def _sky_layers(pd: PageData, refs: Mapping[str, Mapping]) -> tuple[set[str], se
     return sky, dim
 
 
-def overlay_slug(label: str) -> str:
-    """Overlay id of an isochrone track label: lower case, ``[a-z0-9]`` runs joined by ``_``
-    (``"MIST 1 Myr"`` -> ``mist_1_myr``, ``"mist_1myr"`` unchanged)."""
-    return re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")
+#: Overlay id of an isochrone track label (``"MIST 1 Myr"`` -> ``mist_1_myr``); defined in
+#: :mod:`portalkit.caps`, which uses it for the default overlays of scatter/manifold panes.
+overlay_slug = capsmod.overlay_slug
 
 
 def _computed_dim_layers(pd: PageData, refs: Mapping[str, Mapping]) -> set[str]:
@@ -476,6 +465,16 @@ def _image_roles(pd: PageData, ds: str | None) -> set[str] | None:
     if isinstance(spec, ImageSetSpec):
         return {r[0] for r in spec.roles}
     return None
+
+
+def _check_dim_overlays(errs: list[str], path: str, o: Mapping, dim_ids: set[str]) -> None:
+    ovs = o.get("overlays")
+    if not isinstance(ovs, (list, tuple)):
+        return
+    for lay in ovs:
+        if lay not in dim_ids:
+            errs.append(f"{path}.overlays: unknown dim overlay layer {lay!r} (not a dim "
+                        f"layer of an overlays dataset, an isochrone track or an extinction vector)")
 
 
 def validate_keys(doc: Mapping, pd: PageData) -> list[str]:
@@ -530,10 +529,12 @@ def validate_keys(doc: Mapping, pd: PageData) -> list[str]:
                 for k in ("x", "y"):
                     if o.get(k) is not None:
                         need(f"{path}.{k} (background {bg!r})", bg, o[k])
-            for lay in o.get("overlays") or []:
-                if lay not in dim_ids:
-                    errs.append(f"{path}.overlays: unknown dim overlay layer {lay!r} (not a dim "
-                            f"layer of an overlays dataset, an isochrone track or an extinction vector)")
+            _check_dim_overlays(errs, path, o, dim_ids)
+            for ri, r in enumerate(o.get("raster") or []):
+                if isinstance(r, Mapping):
+                    for k in ("x", "y"):
+                        if isinstance(r.get(k), str):
+                            need(f"{path}.raster[{ri}].{k}", cat, r[k])
         elif ptype == "list" or ptype == "table":
             for c in o.get("columns") or []:
                 need(f"{path}.columns", cat, c, numeric=False)
@@ -559,6 +560,7 @@ def validate_keys(doc: Mapping, pd: PageData) -> list[str]:
             elif isinstance(dims, list):
                 for d in dims:
                     need(f"{path}.dims", cat, d)
+            _check_dim_overlays(errs, path, o, dim_ids)
             fr = o.get("frame")
             if isinstance(fr, str) and fr != "pca" and info is not None and fr not in info.frames:
                 errs.append(f"{path}.frame: unknown frame preset {fr!r} (known: "
@@ -697,19 +699,76 @@ def _clean_layout(node: Any) -> Any:
     return out
 
 
-def _used_datasets(layout: Any) -> list[str]:
-    out: list[str] = []
-    for leaf in iter_panes(layout):
-        names = [leaf.get("dataset")]
-        o = leaf.get("options") or {}
-        names += [o.get(k) for k in _DS_OPTIONS]
-        for m in o.get("models") or []:
-            if isinstance(m, str) and m.startswith("sedcurve:"):
-                names.append(m[len("sedcurve:"):])
-        for n in names:
-            if isinstance(n, str) and n not in out:
-                out.append(n)
+def _drop_pane(node: Any, pid: str) -> Any:
+    """Copy of ``node`` without the pane leaf ``pid``; a split left with one child becomes
+    that child (keeping the split's size), an empty one disappears (``None``)."""
+    if not isinstance(node, dict):
+        return node
+    if "pane" in node:
+        return None if node.get("id", node.get("pane")) == pid else node
+    for k in ("row", "col"):
+        if isinstance(node.get(k), list):
+            kids = [c for c in (_drop_pane(c, pid) for c in node[k]) if c is not None]
+            if not kids:
+                return None
+            if len(kids) == 1:
+                only = dict(kids[0])
+                if "size" in node and "size" not in only:
+                    only["size"] = node["size"]
+                return only
+            return {**node, k: kids}
+    return node
+
+
+def _prune_added(layout: Any, added: list[dict], enabled: list[str], dropped: Mapping[str, str],
+                 kinds: Iterable[str] | None = None) -> Any:
+    """Remove the collapsed panes the resolver added that only served capabilities in
+    ``dropped``: a pane goes when no enabled capability loses its last provider. An added
+    SED pane also goes when ``kinds`` (the page's dataset kinds) lacks ``filters``: without a
+    filters dataset it places no points (``caps._make_pane`` does not build it either)."""
+    types = {t for c in dropped for t in capsmod.PROVIDERS.get(c, ())}
+    no_filters = kinds is not None and "filters" not in set(kinds)
+    for leaf in reversed(added):
+        forced = no_filters and leaf.get("pane") == "sed"
+        if leaf.get("pane") not in types and not forced:
+            continue
+        trial = _drop_pane(layout, leaf.get("id", leaf.get("pane")))
+        if trial is None:
+            continue
+        if forced or set(capsmod.missing_providers(trial, enabled)) <= set(
+                capsmod.missing_providers(layout, enabled)):
+            layout = trial
+    return layout
+
+
+def _drop_overlay(node: Any, oid: str, ids: set[str] | None) -> Any:
+    """Copy of ``node`` whose scatter / manifold panes (those with an id in ``ids``; every
+    one when ``ids`` is None) no longer list the dim overlay ``oid``."""
+    if not isinstance(node, dict):
+        return node
+    for k in ("row", "col"):
+        if isinstance(node.get(k), list):
+            return {**node, k: [_drop_overlay(c, oid, ids) for c in node[k]]}
+    if node.get("pane") not in ("scatter", "manifold"):
+        return node
+    if ids is not None and node.get("id", node.get("pane")) not in ids:
+        return node
+    opts = node.get("options")
+    if not isinstance(opts, dict) or not isinstance(opts.get("overlays"), list) \
+            or oid not in opts["overlays"]:
+        return node
+    o = dict(opts)
+    o["overlays"] = [x for x in opts["overlays"] if x != oid]
+    if not o["overlays"]:
+        del o["overlays"]
+    out = {**node, "options": o}
+    if not o:
+        del out["options"]
     return out
+
+
+def _used_datasets(layout: Any) -> list[str]:
+    return capsmod.layout_datasets(layout)
 
 
 def _json_number(v: float) -> float | None:
@@ -735,7 +794,9 @@ def assemble(page: PageSpec, datasets: Mapping[str, DatasetSpec], manifests: Map
     refs = dict(refs or {})
     known_prefixes = tuple(known_prefixes)
     if caps is None:
-        caps = capsmod.resolve(page, dict(datasets), dict(manifests))
+        extra = {r.get("kind") for k, r in refs.items() if k not in datasets and isinstance(r, Mapping)}
+        caps = capsmod.resolve(page, dict(datasets), dict(manifests),
+                               resources=[k for k in capsmod.SHARED_RESOURCES if k in extra])
     errs: list[str] = []
     pd = page_data(page, datasets, manifests)
 
@@ -743,6 +804,8 @@ def assemble(page: PageSpec, datasets: Mapping[str, DatasetSpec], manifests: Map
     if layout is None:
         raise ConfigError(["no layout: the CapsResult has none and PageSpec.layout is None"], page.id)
     layout = _clean_layout(layout)
+    enabled = list(caps.enabled)
+    disabled = dict(caps.disabled)
 
     # datasets: page datasets, implied catalogs, layout targets, extra refs
     ds_ids = [k for k in pd.ids if not isinstance(datasets[k], ReadmeSpec)]
@@ -769,6 +832,28 @@ def assemble(page: PageSpec, datasets: Mapping[str, DatasetSpec], manifests: Map
         pid = "portal" if "portal" not in ds_refs else "portal_registry"
         ds_refs[pid] = {"kind": "portal", "url": "portal.json"}
 
+    # capabilities that need a document the page does not carry (IMPLEMENTATION_NOTES item 89)
+    kinds = {r.get("kind") for r in ds_refs.values()}
+    unmet = capsmod.unmet_needs(enabled, kinds)
+    if unmet:
+        enabled = [c for c in enabled if c not in unmet]
+        disabled.update(unmet)
+    before = set(capsmod.missing_providers(layout, enabled))
+    layout = _prune_added(layout, caps.added_panes, enabled, unmet, kinds)
+    if "extinction" not in kinds:
+        # the resolver's shared-resource vector (caps.default_overlays) has no document here;
+        # only resolver-built panes lose it (an adapter's overlay list is validated as given)
+        built = None if page.layout is None else {
+            p.get("id", p.get("pane")) for p in caps.added_panes}
+        layout = _drop_overlay(layout, capsmod.SHARED_EXTINCTION_VECTOR, built)
+    for cap in capsmod.missing_providers(layout, enabled):
+        if cap in before:
+            continue
+        needs = capsmod.PROVIDERS.get(cap) or ()
+        disabled[cap] = ("the page has a single pane" if cap == "resizable_panels" else
+                         f"no pane on this page can provide it (needs one of: {', '.join(needs)})")
+        enabled.remove(cap)
+
     doc: dict[str, Any] = {
         "schema": "pk-page/1",
         "pk": pk,
@@ -780,7 +865,7 @@ def assemble(page: PageSpec, datasets: Mapping[str, DatasetSpec], manifests: Map
         "datasets": ds_refs,
         "layout": layout,
         "state": copy.deepcopy(page.state),
-        "caps": {"enabled": list(caps.enabled), "disabled": dict(caps.disabled)},
+        "caps": {"enabled": enabled, "disabled": disabled},
     }
     if page.subtitle:
         doc["page"]["subtitle"] = page.subtitle

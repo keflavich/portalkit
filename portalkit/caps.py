@@ -14,24 +14,46 @@ tree.
 ``manifests`` maps dataset ids to written documents (catalog manifests, records indexes,
 hips.json, ...). They take precedence over the specs, so a foreign (GC) catalog without a
 table resolves from its manifest.
+
+Capabilities that draw on a document of a given kind (:data:`NEEDS`, IMPLEMENTATION_NOTES
+item 89) stay off unless the page has one: ``hips_layer_stacking`` needs a HiPS document,
+``live_sed_viewer`` a filters dataset and ``labeled_features_overlay`` a features dataset.
+The kinds available to a page are those of its dataset specs and of the datasets its
+adapter layout names in pane options (``sky options.hips`` and the like), plus ``resources``, the shared
+resource kinds the caller attaches by reference (default :data:`SHARED_RESOURCES`: the
+build publishes templates, filters, extinction and features once and refers to them on
+demand). A caller that attaches only some of them (a test fixture, a page without shared
+resources) passes the kinds it attaches; ``resources=()`` means none.
+
+Default panes carry their data wiring (item 88): scatter and manifold panes built by the
+resolver list the isochrone tracks (slugs, :func:`overlay_slug`) and the ``<law>_vector`` of
+first attached isochrones / extinction dataset (or of the shared extinction resource, G23)
+in ``options.overlays`` when ``isochrones_or_tracks`` / ``extinction_vectors_on_ccd`` are on,
+and a manifold pane takes ``options.dims`` as an explicit key list: the catalog manifest's
+``manifold.dims``, else the keys of its first all-numeric group of 3+ dims, else every
+numeric dim.
 """
 
 from __future__ import annotations
 
 import copy
+import re
 from dataclasses import dataclass, field
-from typing import Any, Iterator, Mapping
+from typing import Any, Iterable, Iterator, Mapping
 
 from .constants import T0_MAX
 from .expr import ExprError, compile as compile_expr
-from .spec import (NUMERIC_ROLES, CatalogSpec, DatasetSpec, HipsSpec, ImageSetSpec,
-                   IsochroneSpec, NarrativeSpec, OverlaySpec, PageSpec, RecordSetSpec, TemplateSpec)
+from .spec import (NUMERIC_ROLES, CatalogSpec, DatasetSpec, ExtinctionSpec, FilterSetSpec,
+                   HipsSpec, ImageSetSpec, IsochroneSpec, NarrativeSpec, OverlaySpec, PageSpec,
+                   RecordSetSpec, TemplateSpec)
 
 __all__ = [
     "CAPS", "FLAGS", "ALWAYS", "RULES", "PROVIDERS", "ADD_PANES", "TEMPLATES", "CORE",
     "CapsResult", "CatInfo", "PageData", "resolve", "catalog_info", "page_data", "derive_flags",
     "caps_from_flags", "iter_panes", "pane_types", "missing_providers", "default_axes",
-    "insert_panes", "default_layout", "manifold_group",
+    "insert_panes", "default_layout", "manifold_group", "SPEC_KINDS", "SHARED_RESOURCES",
+    "NEEDS", "spec_kind", "available_kinds", "unmet_needs", "overlay_slug", "default_overlays",
+    "DS_OPTIONS", "layout_datasets", "SHARED_EXTINCTION_VECTOR",
 ]
 
 #: The 39 capabilities of section 8.2, in table order.
@@ -178,6 +200,30 @@ CORE: dict[str, tuple[str, ...]] = {
 
 _SLOT_SIZE = {0: 250, 2: 430}   # px sizes of the first and third template columns
 
+#: DatasetRef kind of each dataset spec class (section 4.3); ReadmeSpec has none.
+SPEC_KINDS: tuple[tuple[type, str], ...] = (
+    (CatalogSpec, "catalog"), (RecordSetSpec, "records"), (ImageSetSpec, "images"),
+    (TemplateSpec, "templates"), (FilterSetSpec, "filters"), (ExtinctionSpec, "extinction"),
+    (IsochroneSpec, "isochrones"), (HipsSpec, "hips"), (OverlaySpec, "overlays"),
+    (NarrativeSpec, "narrative"),
+)
+
+#: Resource kinds served from the shared ``{res}`` tree (section 5.10); a page may refer to
+#: them without a dataset spec.
+SHARED_RESOURCES: tuple[str, ...] = ("templates", "filters", "extinction", "features")
+
+#: Pane options that name datasets; ``config.assemble`` attaches their targets to the page.
+DS_OPTIONS: tuple[str, ...] = ("products", "images", "background", "hips", "markers", "narrative",
+                               "records", "templates")
+
+#: Capabilities that need a document of one dataset kind on the page (IMPLEMENTATION_NOTES
+#: item 89): cap -> (kind, reason given when it is missing).
+NEEDS: dict[str, tuple[str, str]] = {
+    "hips_layer_stacking": ("hips", "no HiPS document (hips dataset) is attached to this page"),
+    "live_sed_viewer": ("filters", "no filters dataset is attached to this page"),
+    "labeled_features_overlay": ("features", "no features dataset is attached to this page"),
+}
+
 
 @dataclass
 class CapsResult:
@@ -322,6 +368,8 @@ class PageData:
     manifests: dict[str, Any]
     cats: dict[str, CatInfo]                        # every catalog on the page
     all_specs: dict[str, DatasetSpec]
+    #: dataset kinds the page can use (:func:`available_kinds`); None until resolved
+    available: frozenset[str] | None = None
 
     def of(self, *types: type) -> list[str]:
         return [k for k in self.ids if isinstance(self.specs[k], types)]
@@ -379,6 +427,101 @@ def page_data(page: PageSpec, datasets: Mapping[str, DatasetSpec],
             if isinstance(s, CatalogSpec)}
     return PageData(page=page, ids=ids, specs=specs, manifests=manifests, cats=cats,
                     all_specs=dict(datasets))
+
+
+def spec_kind(spec: Any) -> str | None:
+    """DatasetRef kind of a dataset spec (:data:`SPEC_KINDS`), None for a ReadmeSpec."""
+    for cls, kind in SPEC_KINDS:
+        if isinstance(spec, cls):
+            return kind
+    return None
+
+
+def layout_datasets(layout: Any) -> list[str]:
+    """Dataset ids a pane tree names (``dataset``, the :data:`DS_OPTIONS` options and
+    ``sedcurve:<id>`` SED models), in tree order; ``config.assemble`` attaches them."""
+    out: list[str] = []
+    for leaf in iter_panes(layout):
+        names = [leaf.get("dataset")]
+        o = leaf.get("options") or {}
+        names += [o.get(k) for k in DS_OPTIONS]
+        for m in o.get("models") or []:
+            if isinstance(m, str) and m.startswith("sedcurve:"):
+                names.append(m[len("sedcurve:"):])
+        for n in names:
+            if isinstance(n, str) and n not in out:
+                out.append(n)
+    return out
+
+
+def available_kinds(pd: PageData, resources: Iterable[str] | None = None,
+                    layout: Any = None) -> frozenset[str]:
+    """Dataset kinds a page can use: the kinds of its dataset specs, of the datasets that
+    the pane tree ``layout`` names (attached by ``config.assemble``), plus ``resources``
+    (shared resource kinds attached by reference; None means :data:`SHARED_RESOURCES`)."""
+    res = SHARED_RESOURCES if resources is None else tuple(resources)
+    for r in res:
+        if r not in SHARED_RESOURCES:
+            raise ValueError(f"resources: {r!r} is not a shared resource kind "
+                             f"({', '.join(SHARED_RESOURCES)})")
+    kinds = {spec_kind(pd.specs[k]) for k in pd.ids}
+    if layout is not None:
+        kinds |= {spec_kind(pd.all_specs[n]) for n in layout_datasets(layout) if n in pd.all_specs}
+    kinds.discard(None)
+    return frozenset(kinds | set(res))
+
+
+def unmet_needs(caps: Iterable[str], kinds: Iterable[str]) -> dict[str, str]:
+    """``{cap: reason}`` for the capabilities of ``caps`` whose :data:`NEEDS` kind is not in
+    ``kinds``."""
+    kinds = set(kinds)
+    return {c: NEEDS[c][1] for c in caps if c in NEEDS and NEEDS[c][0] not in kinds}
+
+
+def overlay_slug(label: str) -> str:
+    """Overlay id of an isochrone track label: lower case, runs of characters other than
+    ``[a-z0-9]`` become ``_`` (``"MIST 1 Myr"`` -> ``mist_1_myr``; IMPLEMENTATION_NOTES
+    item 22). ``web/js/plot/overlays.js`` has the same rule."""
+    return re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")
+
+
+#: Overlay id of the vector drawn from the shared ``{res}`` extinction document (the default
+#: :class:`ExtinctionSpec` law, G23); ``config`` takes a spec-less extinction ref as G23 too.
+SHARED_EXTINCTION_VECTOR: str = f"{overlay_slug(ExtinctionSpec().law)}_vector"
+
+
+def default_overlays(pd: PageData, enabled: Iterable[str]) -> list[str]:
+    """Dim overlay ids for a resolver-built scatter / manifold pane (item 88): the track
+    slugs of the page's first isochrones dataset when ``isochrones_or_tracks`` is on, then
+    the ``<law>_vector`` of its first extinction dataset when ``extinction_vectors_on_ccd``
+    is on. The panes read one document per kind (the first in page order, ``docOf`` in
+    ``scatter.js``), so later datasets of a kind add nothing. A page without an extinction
+    dataset whose available kinds include the shared extinction resource gets
+    :data:`SHARED_EXTINCTION_VECTOR`."""
+    enabled = set(enabled)
+    out: list[str] = []
+    if "isochrones_or_tracks" in enabled:
+        k = pd.first(IsochroneSpec)
+        if k is not None:
+            doc = pd.manifests.get(k)
+            if isinstance(doc, Mapping) and isinstance(doc.get("tracks"), list):
+                labels = [t.get("label") for t in doc["tracks"] if isinstance(t, Mapping)]
+            else:
+                labels = [t.label for t in pd.specs[k].tracks]
+            for lab in labels:
+                if isinstance(lab, str) and overlay_slug(lab) and overlay_slug(lab) not in out:
+                    out.append(overlay_slug(lab))
+    if "extinction_vectors_on_ccd" in enabled:
+        k = pd.first(ExtinctionSpec)
+        vid = None
+        if k is not None:
+            law = pd.specs[k].law
+            vid = f"{overlay_slug(law)}_vector" if isinstance(law, str) and overlay_slug(law) else None
+        elif pd.available is not None and "extinction" in pd.available:
+            vid = SHARED_EXTINCTION_VECTOR
+        if vid and vid not in out:
+            out.append(vid)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -491,11 +634,15 @@ def _make_pane(ptype: str, pd: PageData) -> dict | None:
             return None
         leaf["dataset"] = prim
         dims = info.manifold_dims
-        if not dims:
+        if dims:
+            # the manifest's dims as an explicit key list (item 88), the list build.py
+            # resolve_manifold_dims writes for dim-indexed legacy grammars
+            opts["dims"] = list(dims)
+        else:
             grp = manifold_group(info)
             if grp is not None:
-                opts["dims"] = f"group:{grp}"
-                dims = info.groups[grp]
+                # the group's keys, as build.resolve_manifold_dims expands "group:<g>"
+                opts["dims"] = dims = list(info.groups[grp])
             else:
                 opts["dims"] = dims = list(info.numeric)
         for c in pd.context_cats:
@@ -542,7 +689,10 @@ def _make_pane(ptype: str, pd: PageData) -> dict | None:
         leaf["dataset"] = recs[0]
         opts["records"] = recs[0]
     elif ptype == "sed":
+        # the SED places magnitudes by filter: without a filters dataset it has no points
         if info is None or not info.role_keys("mag", "flux"):
+            return None
+        if pd.available is not None and "filters" not in pd.available:
             return None
         leaf["dataset"] = prim
         curves = pd.records("sedcurve")
@@ -765,8 +915,14 @@ def missing_providers(tree: dict | None, enabled: list[str] | set[str]) -> list[
     return out
 
 
-def resolve(page: PageSpec, datasets: dict[str, DatasetSpec], manifests: dict[str, dict]) -> CapsResult:
-    """Resolve the capabilities of ``page`` (section 8.1) and the pane tree that hosts them."""
+def resolve(page: PageSpec, datasets: dict[str, DatasetSpec], manifests: dict[str, dict], *,
+            resources: Iterable[str] | None = None) -> CapsResult:
+    """Resolve the capabilities of ``page`` (section 8.1) and the pane tree that hosts them.
+
+    ``resources`` lists the shared resource kinds (:data:`SHARED_RESOURCES`) the caller
+    attaches to the page by reference in addition to its dataset specs; None means all of
+    them (what ``build.py`` does on demand). A capability of :data:`NEEDS` whose kind the page
+    lacks is disabled with a reason."""
     if page.archetype not in TEMPLATES:
         raise ValueError(f"page {page.id!r}: unknown archetype {page.archetype!r}")
     for cap, reason in page.caps_disable.items():
@@ -775,6 +931,7 @@ def resolve(page: PageSpec, datasets: dict[str, DatasetSpec], manifests: dict[st
         if not isinstance(reason, str) or not reason.strip():
             raise ValueError(f"page {page.id!r}: caps_disable[{cap!r}] needs a reason")
     pd = page_data(page, datasets, manifests)
+    pd.available = available_kinds(pd, resources, page.layout)
     explicit = page.layout is not None
     base = [] if explicit else _core_panes(pd)
     added: list[dict] = []
@@ -795,6 +952,7 @@ def resolve(page: PageSpec, datasets: dict[str, DatasetSpec], manifests: dict[st
     for _ in range(8):
         flags = derive_flags(pd, tree)
         enabled = caps_from_flags(flags) - set(page.caps_disable)
+        enabled -= set(unmet_needs(enabled, pd.available))
         new: list[dict] = []
         have = pane_types(tree)
         for cap in sorted(enabled, key=CAPS.index):
@@ -815,6 +973,16 @@ def resolve(page: PageSpec, datasets: dict[str, DatasetSpec], manifests: dict[st
         added.extend(new)
         tree = build()
     disabled = dict(page.caps_disable)
+    flagged = caps_from_flags(flags) - set(page.caps_disable)
+    disabled.update(unmet_needs(flagged, pd.available))
+    ov = default_overlays(pd, enabled)
+    if ov:
+        for leaf in base + added:
+            if leaf["pane"] in ("scatter", "manifold"):
+                opts = leaf.setdefault("options", {})
+                if "overlays" not in opts:
+                    opts["overlays"] = list(ov)
+        tree = build()
     for cap in missing_providers(tree, enabled):
         needs = PROVIDERS.get(cap) or ()
         if cap == "resizable_panels":

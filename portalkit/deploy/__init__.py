@@ -94,7 +94,7 @@ from .stage import (  # noqa: E402
 from .deploy import (  # noqa: E402
     MANIFEST_NAME, DeployPlan, DeployResult, PublishResult, atomic_write, gc_target,
     is_shared_legacy_dir, load_manifest, plan_deploy, publish_assets, publish_immutable,
-    resolve_target, select_portal, shared_legacy_dirs,
+    raise_for_plan, resolve_target, select_portal, shared_legacy_dirs,
 )
 from .deploy import deploy as run_deploy  # noqa: E402
 from .backup import (  # noqa: E402
@@ -117,7 +117,7 @@ __all__ = [
     "prune_stage", "read_build_report",
     "MANIFEST_NAME", "DeployPlan", "DeployResult", "PublishResult", "atomic_write", "run_deploy",
     "gc_target", "is_shared_legacy_dir", "load_manifest", "plan_deploy", "publish_assets",
-    "publish_immutable", "resolve_target", "select_portal", "shared_legacy_dirs",
+    "publish_immutable", "raise_for_plan", "resolve_target", "select_portal", "shared_legacy_dirs",
     "BACKUP_DIRNAME", "RollbackResult", "backup_files", "read_backup", "rollback",
     "rollback_portal", "stub_html",
     "FileCheck", "VerifyReport", "verify", "verify_http", "verify_local",
