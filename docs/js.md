@@ -38,6 +38,12 @@ web/css/{tokens,base,layout,print}.css, web/css/panes/ui.css
    defaults).
    Consumed query keys are removed from the URL with `replaceState`, and the canonical hash is
    written once boot finishes.
+   Boot then starts importing the module graphs of the panes the layout will show at load
+   (`warmPaneModules(norm, registry, {portalId, pageId, tabMode})`: layout `shownAtLoad`, i.e.
+   the saved fold state over the spec's `collapsed`, and only the active tab in tab mode;
+   types registered in memory, `registry.isOverridden(type)`, are skipped). This fetches and
+   evaluates code only: no data is read and nothing renders; `registry.load()` still attaches
+   pane CSS and reports load errors at step 5.
 3. `createHub(page, store)` from `data/hub.js`; manifests of every catalog used by a
    non-collapsed pane (and pane `background` catalogs) are fetched at once.
 4. Runtime probe: WebGL2, `EXT_color_buffer_float`, `DecompressionStream`,
@@ -48,7 +54,10 @@ web/css/{tokens,base,layout,print}.css, web/css/panes/ui.css
    pane mounts.
 6. `<body data-caps="...">` (enabled caps, sorted, space separated) and
    `<body data-tier="pane:T1 ...">`.
-7. `bindHash`, `bindKeys`, `bindTheme`, test hooks.
+7. `bindHash` (with `applyInitial: false`; the hash was applied at step 2), `bindKeys`,
+   `bindTheme`, test hooks. Panes mount before the hash binds, so a pane write made in
+   between (for example a sky pane settling a beat view) would not reach the hash; `bindHash`
+   detects that the store differs from `location.hash` at bind time and schedules one write.
 8. `store.emit('ready', {ms})`.
 9. `app.afterFirstPaint()` resolves (see below); boot then calls `client.allowPositions()` on
    every catalog opened so far and on each one opened later.
@@ -279,6 +288,25 @@ for colour), e.g. `#c=none&feat=-&tpl=-`. `hashToPatch` reads `-` for every key 
 `wl` no range, `sky` no centre, `base` null, `ovl` `[]`, `view` no pop-out, `sel` empty), so
 a reload or Back keeps the cleared state.
 
+Narrative beats (WPD2): the store `sky` value may carry two markers, `sky.beatView` (hash.js
+`BEAT_VIEW`) and `sky.beatOvl` (`BEAT_OVL`): the beat id whose view, respectively overlay set,
+the value holds; `''` stands for the first beat of a page opened without `beat=`. A marker equal
+to `state.beat` (or `''` while no beat is set) means that part is implied by the beat:
+`skyImplied(state)` reports it and `stateToHash` leaves it out of `sky=`/`ovl=`, so a page on
+beat b3 with b3's view writes `#beat=b3`, and a reload reproduces it. `hashToPatch` marks the
+parts a `beat=` hash leaves out, and an explicit `sky=`/`ovl=` (including `-`) clears the
+marker; the narrative pane then keeps a view marker only when loading `beat=` alone reproduces
+that view (`beatSky`: a beat without its own sky view or with `suppress_view` drops it, so the
+view is written as `sky=`). On navigation, page defaults are still restored for parts the beat does not imply.
+An unknown beat id falls back to the first beat and is canonicalized to it. The sky pane
+records what last moved the viewer (`store`, `beat`, `explicit` or `user`; user = capture
+listeners for pointerdown/wheel/touchstart/keydown/dblclick on the stage, `USER_VIEW_EVENTS`):
+a settle after a store-origin goto writes nothing (Aladin's rounding is absorbed), beat-origin
+settles are written marked, explicit and user settles drop `beatView`, and layer-panel changes
+drop `beatOvl`. The sky pane's store listener moves the viewer only when the stored view
+changes. Helpers: `settledSky`, `layersSky` in panes/sky.js; `explicitSky`, `beatSky`,
+`sameSky` in panes/narrative.js.
+
 Overlays (IMPLEMENTATION_NOTES 72): `sky.overlays` undefined means "the layout default"
 (`options.overlays` of each pane) and writes no `ovl`; an array writes `ovl=<list>`, and an
 empty array writes `ovl=-`, independent of the page default, so an explicit "no overlays"
@@ -330,6 +358,12 @@ LayoutNode: `{row: [...]}`, `{col: [...]}` or a pane leaf
   Sizes are measured only from a laid-out desktop split: in tab mode (and for a split with an
   unmeasurable visible cell) the previous sizes are kept, fold buttons are inert and out of the
   tab order, and a saved split with any non-positive entry is ignored on load.
+- Skeletons (`.pk-skeleton`, base.css) are static: an animated placeholder re-rasters every
+  frame and, under software GL, delays first paint by seconds (WPD3).
+  `shownAtLoad(norm, {portalId, pageId, tabMode})` returns the pane ids shown (and so mounted)
+  at load; `tabModeQuery()` is the media query of tab mode. Folded panes carry `pk-collapsed`
+  from creation, and all split classes are set before the first measurement, so no CSS
+  transition runs at startup.
 - Panes mount lazily the first time they become visible. A `ResizeObserver` calls
   `handle.resize(w, h, dpr)` once per frame and emits `pane:resize {pane, w, h}`.
 - Pane state (IMPLEMENTATION_NOTES 112): `section.pk-pane[data-state]` is `loading` from the
@@ -448,7 +482,7 @@ Store events are synchronous. Topics used by the core:
 | `hash:sel-dropped` | `{ds, length}` | hash |
 | `caps:change` | `{cap, enabled, reason}` | `app.disableCap` |
 | `brush:commit` | `{pane, ds, shape, op, count}` | brushing panes, test hooks |
-| `narrative:highlight` | `{pane, ds, ids, beat, goto?}` | narrative pane (note 71): beat `beat` highlights source ids `ids` of `ds`; `pane` is the beat's target pane id (else the sticky pane type); an empty `ids` clears the highlight; `goto: true` asks the target to bring the rows into view (set when the beat has a non-sky view that is not suppressed). Scatter, manifold and sky panes listen |
+| `narrative:highlight` | `{pane, ds, ids, beat, goto?}` | narrative pane (note 71): beat `beat` highlights source ids `ids` of `ds`; `pane` is the beat's target pane id (else the sticky pane type); an empty `ids` clears the highlight; `goto: true` asks the target to bring the rows into view (set when the beat has a highlight, no sky view, no `suppress_view`, and no explicit `sky=` deep-link view kept over the beat). Scatter, manifold and sky panes listen |
 | `narrative:sync` | `{pane}` | a scatter, manifold or sky pane at mount: asks the narrative pane to re-emit its current `narrative:highlight`, so a pane that mounts after the beat still shows it |
 
 **Offer protocol.** Keyboard actions that a pane or widget may own are emitted with a payload

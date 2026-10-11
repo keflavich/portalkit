@@ -100,5 +100,10 @@ export function load(type) {
 }
 
 /** The registry object passed to mountLayout as ctx.registry. */
-export const registry = Object.freeze({types: PANE_TYPES, titles: PANE_TITLES, has, modulePath, load, register});
+/** Whether `type` was registered in memory through register() (its module is not fetched). */
+export function isOverridden(type) {
+  return overrides.has(type);
+}
+
+export const registry = Object.freeze({types: PANE_TYPES, titles: PANE_TITLES, has, isOverridden, modulePath, load, register});
 export default registry;

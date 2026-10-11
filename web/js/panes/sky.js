@@ -33,7 +33,7 @@
 
 import {T0_MAX, T1_MAX, SETTLE_MS} from '../core/constants.js';
 import {fmtCount, fmtRA, fmtDec, fmtAngle} from '../core/fmt.js';
-import {aladinFor, errorNote, errorText, libState, retryAladinOnce} from '../sky/aladin.js';
+import {aladinFor, errorNote, errorText, libState, retryAladinOnce, surveyUrl} from '../sky/aladin.js';
 import {SkyLayers, defaultBase} from '../sky/layers.js';
 import {SkyMarkers} from '../sky/markers.js';
 import {VectorOverlays, ShapeSet} from '../sky/overlays.js';
@@ -392,7 +392,7 @@ export function mount(el, ctx) {
     const sky = store.get('sky') || {};
     const view = initialView(sky, hips, client && client.manifest);
     const baseEntry = (hips && ((sky.base && hips.base.find((b) => b.id === sky.base)) || defaultBase(hips))) || null;
-    const survey = baseEntry ? hub.resolve(baseEntry.url).toString() : null;
+    const survey = baseEntry ? surveyUrl(baseEntry.url, hub.resolve) : null;
     const hd = aladinFor(id, {page: app.page, view, survey});
     S.h = hd;
     hd.attach(stage);

@@ -313,3 +313,12 @@ test('importSelection: counts, modes and matching through ui/export.js (note 93)
   assert.equal(out.count, 0, 'replace with no match empties the selection');
   await assert.rejects(importSelection('A', {sel, client, io, resolveIds, mode: 'xor'}), TypeError);
 });
+
+test('registry.isOverridden reports in-memory registrations only', async () => {
+  const {registry} = await import('../../web/js/core/registry.js');
+  assert.equal(registry.isOverridden('readme'), false);
+  assert.equal(registry.isOverridden('pk-test-only-type'), false);
+  registry.register('pk-test-only-type', {meta: {}, mount: () => ({})});
+  assert.equal(registry.isOverridden('pk-test-only-type'), true);
+  assert.equal(registry.has('pk-test-only-type'), true);
+});
