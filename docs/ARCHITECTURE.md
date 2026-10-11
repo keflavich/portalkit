@@ -1619,7 +1619,7 @@ Exit codes:
 | 6 | legacy import failure (Tier B) |
 
 Defaults:
-- Stage root is `/orange/adamginsburg/portalkit_stage`. `build` refuses a stage root that `exposure.classify` reports as served.
+- Stage root is `/blue/adamginsburg/adamginsburg/portalkit_stage` (or `$PK_STAGE_ROOT`). `build` refuses a stage root that `exposure.classify` reports as served. Every path under `/orange/adamginsburg` is served (secure) through `web/secure/abulatek/brick -> /blue/adamginsburg/abulatek/brick/` whose `symlinks/orange -> /orange/adamginsburg`, so the stage root lives on /blue.
 - `--yes` is required for a non-dry-run deploy when stdin is not a TTY.
 
 ---

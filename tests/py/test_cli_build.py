@@ -341,6 +341,31 @@ def test_thumbs(env, tmp_path, monkeypatch, capsys):
     assert len(thumbs) == 1
 
 
+def test_build_thumb_urls_resolve_from_page(env, tmp_path, monkeypatch):
+    """Thumbnail URLs in images.json are page-relative (IMPLEMENTATION_NOTES 81) and pass check."""
+    img = tmp_path / "img"
+    img.mkdir()
+    (img / "S001.png").write_bytes(png_bytes(900, 40))
+    monkeypatch.setenv("PK_CLI_IMG", str(img))
+    monkeypatch.setenv("PK_CACHE_DIR", str(tmp_path / "cache"))
+    assert buildmod.make_thumbs(FAMILY, max_px=480, sites_dir=env["sites"], log=lambda s: None)["made"] == 1
+    stage = tmp_path / "stage"
+    code = cli.main(["--sites-dir", str(env["sites"]), "build", FAMILY, "--allow-tmp-inputs",
+                     "--stage-root", str(stage)])
+    assert code == 0
+    portal = sorted(p for p in (stage / FAMILY).iterdir() if p.is_dir())[-1] / "main"
+    docs = list((portal / "data" / "img").glob("*.json"))
+    thumbs = [rv["thumb"] for d in docs for it in json.loads(d.read_text()).get("items", [])
+              for rv in it.get("roles", {}).values() if rv.get("thumb")]
+    assert len(thumbs) == 1 and thumbs[0].startswith("data/img/")
+    assert (portal / thumbs[0]).is_file()
+    # a thumb written relative to the dataset dir would 404 from the page: check reports it
+    errors: list[str] = []
+    buildmod._check_files(buildmod._portal_root(portal / "data" / "img"),
+                          [thumbs[0][len("data/img/"):]], "img", errors, label="thumbnail")
+    assert errors
+
+
 # ---------------------------------------------------------------------------
 # status / deploy guards / prune-stage
 # ---------------------------------------------------------------------------

@@ -29,8 +29,8 @@ regular `pip install .` produces a builder that cannot find the viewer.
 
 ```bash
 portalkit build nirspec6927 --limit 50          # fixture-mode build into the stage root
-portalkit check /orange/adamginsburg/portalkit_stage/nirspec6927/<build_id>/nirspec6927
-portalkit serve /orange/adamginsburg/portalkit_stage/nirspec6927/<build_id>/nirspec6927 --port 8765
+portalkit check /blue/adamginsburg/adamginsburg/portalkit_stage/nirspec6927/<build_id>/nirspec6927
+portalkit serve /blue/adamginsburg/adamginsburg/portalkit_stage/nirspec6927/<build_id>/nirspec6927 --port 8765
 portalkit deploy nirspec6927 <build_id> --dry-run
 portalkit deploy nirspec6927 <build_id> --yes   # writes <legacy_dir>/unified/
 portalkit verify nirspec6927 --http

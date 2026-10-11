@@ -104,8 +104,8 @@ leaves it empty.
 portalkit caps myfield                    # capability matrix per page (fixture mode, writes nothing)
 portalkit build myfield --limit 50        # fixture build into $PK_STAGE_ROOT/myfield/<build_id>/
 portalkit build myfield --tier B --jobs 2
-portalkit check /orange/adamginsburg/portalkit_stage/myfield/<build_id> --gate G1
-portalkit serve /orange/adamginsburg/portalkit_stage/myfield/<build_id>/main
+portalkit check /blue/adamginsburg/adamginsburg/portalkit_stage/myfield/<build_id> --gate G1
+portalkit serve /blue/adamginsburg/adamginsburg/portalkit_stage/myfield/<build_id>/main
 portalkit status myfield
 ```
 

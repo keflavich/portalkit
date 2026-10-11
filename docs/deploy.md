@@ -26,7 +26,7 @@ Exit codes: `1` verify or check failure, `2` usage error, `3` exposure or symlin
 * A build id is `YYYYMMDDTHHMMSSZ-<8 hex>`; the hex digits hash the adapter sha and the
   input records, so the same inputs give the same suffix (`stage.make_build_id`).
 * The stage root is `--stage-root`, else `$PK_STAGE_ROOT`, else
-  `/orange/adamginsburg/portalkit_stage`. `stage.check_stage_root` refuses (exit 3) a stage
+  `/blue/adamginsburg/adamginsburg/portalkit_stage`. `stage.check_stage_root` refuses (exit 3) a stage
   root that the web server can reach.
 * `build_report.json` sits next to `portal.json` in the staged portal (or in the build
   directory). Deploy reads it for provenance and never copies it into the target. Deploy
@@ -39,7 +39,7 @@ Exit codes: `1` verify or check failure, `2` usage error, `3` exposure or symlin
 ## 2. Review with the development server
 
 ```
-portalkit serve /orange/adamginsburg/portalkit_stage/FAMILY/BUILD_ID/PORTAL --port 8765
+portalkit serve /blue/adamginsburg/adamginsburg/portalkit_stage/FAMILY/BUILD_ID/PORTAL --port 8765
 python -m portalkit.deploy.devserver BUILD_DIR --auth user:pw --content-encoding gzip --no-range
 ```
 

@@ -505,7 +505,7 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--tier", choices=("A", "B", "C"))
     b.add_argument("--pages", help="comma-separated page ids")
     b.add_argument("--limit", type=_positive, help="fixture mode: rows per catalog")
-    b.add_argument("--stage-root", help="default $PK_STAGE_ROOT or /orange/adamginsburg/portalkit_stage")
+    b.add_argument("--stage-root", help="default $PK_STAGE_ROOT or /blue/adamginsburg/adamginsburg/portalkit_stage")
     b.add_argument("--allow-tmp-inputs", action="store_true")
     b.add_argument("--vendor-assets", action="store_true")
     b.add_argument("--no-cache", action="store_true")

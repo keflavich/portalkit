@@ -231,7 +231,10 @@ def _thumb_hook(cache_dir: Path, writer: BundleWriter, max_px: int) -> Callable[
             return None
         stem = re.sub(r"[^A-Za-z0-9_.-]+", "_", f"{item_id}_{role}").strip("_")[:80] or "thumb"
         with lock:
-            return writer.put("thumbs", stem, p.read_bytes(), "png", kind="images")
+            rel = writer.put("thumbs", stem, p.read_bytes(), "png", kind="images")
+        # images.json role URLs (thumb included) resolve against the page URL (IMPLEMENTATION_NOTES 81);
+        # pages sit at the portal root, so prefix the dataset directory
+        return f"{writer.base}/{rel}" if writer.base else rel
     return hook
 
 
@@ -1047,7 +1050,7 @@ def _doc_file_refs(doc: Any) -> list[str]:
     def walk(v: Any, parent: str | None = None) -> None:
         if isinstance(v, Mapping):
             for k, x in v.items():
-                if k in ("file", "files", "chunk_files", "thumb", "pages", "png"):
+                if k in ("file", "files", "chunk_files", "pages", "png"):
                     add(x)
                 elif k == "url" and parent in ("roles",):
                     add(x)
@@ -1062,6 +1065,26 @@ def _doc_file_refs(doc: Any) -> list[str]:
                 walk(x, parent)
     walk(doc)
     return out
+
+
+def _thumb_refs(doc: Any) -> list[str]:
+    """Local ``thumb`` URLs of an images document or page (page-relative, IMPLEMENTATION_NOTES 81)."""
+    out: list[str] = []
+    for it in (doc.get("items") or []) if isinstance(doc, Mapping) else []:
+        roles = it.get("roles") if isinstance(it, Mapping) else None
+        for rv in (roles or {}).values() if isinstance(roles, Mapping) else []:
+            t = rv.get("thumb") if isinstance(rv, Mapping) else None
+            if isinstance(t, str) and _is_local_ref(t):
+                out.append(t)
+    return out
+
+
+def _portal_root(base: Path) -> Path:
+    """The staged portal directory holding ``base`` (the nearest one with portal.json)."""
+    for d in (base, *base.parents):
+        if (d / "portal.json").is_file():
+            return d
+    return base
 
 
 def _check_files(base: Path, rels: Iterable[str], where: str, errors: list[str],
@@ -1215,12 +1238,15 @@ def _check_doc(p: Path, kind: str | None, dsid: str, gate: str | None, fp_by_ds:
         refs = _doc_file_refs(doc)
         pages = [x for x in doc.get("pages") or [] if isinstance(x, str)]
         _check_files(base, refs, where, errors, label="image file")
+        root = _portal_root(base)
+        _check_files(root, _thumb_refs(doc), where, errors, label="thumbnail")
         for pg in pages:
             try:
                 sub = _load_json(base / _strip(pg))
             except (OSError, ValueError):
                 continue
             _check_files(base, _doc_file_refs(sub), where, errors, label="image file")
+            _check_files(root, _thumb_refs(sub), where, errors, label="thumbnail")
 
 
 def check_build(path: os.PathLike | str, gate: str | None = None) -> CheckReport:

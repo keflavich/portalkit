@@ -21,7 +21,7 @@ from . import DeployError, ExposureRefusal
 from .exposure import ExposureMap, classify
 
 #: Default stage root (section 10).
-DEFAULT_STAGE_ROOT = Path("/orange/adamginsburg/portalkit_stage")
+DEFAULT_STAGE_ROOT = Path("/blue/adamginsburg/adamginsburg/portalkit_stage")
 
 #: ``YYYYMMDDTHHMMSSZ-<8 hex>``
 BUILD_ID_RE = re.compile(r"^(\d{8}T\d{6}Z)-([0-9a-f]{8})$")
