@@ -14,6 +14,8 @@
 // rows asked for (record(i) none at all when the row chunk carries the id); find, query (text or
 // id filters), export, order('id') and resolveIds load every ids chunk. rows() and record() on the
 // quantized fallback (no row chunks) read pos only with {pos: true} or when it is already decoded.
+// record(i) on a catalog with row chunks merges the quantized cells of the stored columns the row
+// chunk omits (exact: false) and lists their keys in `_qkeys`.
 // Manifest prefetch (note 101): started as data.worker.js?m=<manifest url>, the worker fetches the
 // manifest from top-level code and `open` reuses that in-flight request.
 
@@ -751,10 +753,80 @@ export function createEngine(opts = {}) {
     return v === null || v === undefined ? null : String(v);
   }
 
-  /** One row with `_id` and `_limits`. opts.pos as for rows(). */
+  /** Keys a row-chunk row carries: `rows.cols` when the manifest lists it, else the row's own keys. */
+  function rowChunkKeys(r) {
+    if (S.man.rows && Array.isArray(S.man.rows.cols)) return S.man.rows.cols;
+    return Object.keys(r).filter((k) => k !== '_i');
+  }
+
+  /**
+   * User stored columns an exact row-chunk row omits (columns with `exact: false` are left out of
+   * row chunks). Internal columns (keys starting with '_', e.g. the single-file `_src_index` of a
+   * reordered catalog) are never merged: they are not displayed and a single-file column would be
+   * loaded whole (IMPLEMENTATION_NOTES 99).
+   */
+  function omittedKeys(r) {
+    const has = new Set(rowChunkKeys(r));
+    return S.man.cols.filter((c) => !c.key.startsWith('_') && !has.has(c.key)).map((c) => c.key);
+  }
+
+  /**
+   * True when the row chunk carries no positions although the catalog has pos. The builder puts
+   * the configured ra/dec input columns (any name, e.g. RAJ2000) right after the id key and never
+   * stores them as columns when pos exists; the only row keys that are not stored columns are the
+   * id, ra/dec and rows-only text/url/image columns. So a row chunk whose keys, apart from the id
+   * (first key), are all stored columns lacks ra/dec (they were declared `exact: false`). Any other
+   * extra key counts as a position, so an ambiguous row chunk never pulls pos.
+   */
+  function rowChunkLacksPos(r) {
+    if (!S.man.pos) return false;
+    const stored = new Set(S.man.cols.map((c) => c.key));
+    return rowChunkKeys(r).slice(1).every((k) => stored.has(k));
+  }
+
+  /**
+   * Complete an exact row-chunk row with the quantized cell values of the user stored columns the
+   * row chunk omits (read through cellSource, i.e. only the column chunk that holds row i) and list
+   * those keys in `_qkeys`. When the row chunk carries no positions (rowChunkLacksPos) and the
+   * catalog has pos, ra/dec come from pos as for quantized rows (`_posDeferred` until pos is
+   * decoded or `wantPos` asks for it); they are quantized too and listed in `_qkeys`.
+   */
+  async function mergeQuantized(r, i, signal, wantPos) {
+    const keys = omittedKeys(r);
+    const posGap = rowChunkLacksPos(r);
+    if (!keys.length && !posGap) return;
+    const [srcs] = await Promise.all([
+      Promise.all(keys.map((k) => cellSource(k, i, signal))),
+      posGap && wantPos ? ensurePos(signal) : null,
+    ]);
+    const q = [];
+    keys.forEach((k, j) => {
+      r[k] = cellValue(srcs[j], i);
+      q.push(k);
+    });
+    if (posGap) {
+      if (S.pos) {
+        r.ra = Number.isFinite(S.pos.ra[i]) ? S.pos.ra[i] : null;
+        r.dec = Number.isFinite(S.pos.dec[i]) ? S.pos.dec[i] : null;
+        q.push('ra', 'dec');
+      } else {
+        r.ra = null;
+        r.dec = null;
+        r._posDeferred = true;
+      }
+    }
+    if (q.length) r._qkeys = q;
+  }
+
+  /**
+   * One row with `_id` and `_limits`. opts.pos as for rows(). An exact row-chunk row also carries
+   * the quantized values of the stored columns the row chunk omits, listed in `_qkeys`
+   * (mergeQuantized).
+   */
   async function record(i, signal, {pos = false} = {}) {
     const [r] = await rows(i, i + 1, signal, {pos});
     if (!r) return null;
+    if (!r._quantized) await mergeQuantized(r, r._i, signal, !!pos);
     // the row chunk carries the id: no ids file is read (IMPLEMENTATION_NOTES 99)
     const cid = carriedId(r);
     r._id = cid !== null ? cid : await idAt(r._i, signal);

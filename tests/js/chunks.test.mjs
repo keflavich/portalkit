@@ -94,7 +94,9 @@ const pieces = (arr, starts = STARTS, n = N) => starts.map((a, k) => arr.slice(a
  * Bundle with chunk_starts [0, 3, 7]: chunked u16q, cat8, str, bits validity and validity-masked
  * f32 columns, one single-file f32 column, three ids chunks and an alias file.
  * opts: {rows (exact row chunks with the id), chunkStarts (false = drop it), chunkRows, idsFile,
- * pos (single-file u32lin ra/dec), idCol (a chunked f32 stored column keyed 'id')}.
+ * pos (single-file u32lin ra/dec), idCol (a chunked f32 stored column keyed 'id'), rowCols ('all':
+ * the row chunks carry every stored column; default: only the id and `mag`, the other stored
+ * columns being exact:false)}.
  */
 function bundle(opts = {}) {
   const starts = opts.starts || STARTS;
@@ -119,7 +121,11 @@ function bundle(opts = {}) {
     man.bbox = BBOX;
   }
   if (opts.idCol) man.cols.push({key: 'id', role: 'value', enc: 'f32', shuffle: false, chunk_files: cf('id')});
-  if (opts.rows) man.rows = {chunk: 4, files: ['rows/r0.bin', 'rows/r1.bin', 'rows/r2.bin'], cols: ['source_id', 'mag']};
+  const allCols = opts.rowCols === 'all';
+  if (opts.rows) {
+    man.rows = {chunk: 4, files: ['rows/r0.bin', 'rows/r1.bin', 'rows/r2.bin'],
+      cols: allCols ? ['source_id', ...man.cols.map((c) => c.key)] : ['source_id', 'mag']};
+  }
   const files = new Map([['manifest.json', JSON.stringify(man)], ['aliases.json', JSON.stringify({ALIAS7: 7, 'Älias': 2, far: 99})]]);
   pieces(MAG, starts).forEach((p, k) => files.set(`cols/mag.c${k}.bin`, gz(u16b(p))));
   pieces(CLS, starts).forEach((p, k) => files.set(`cols/cls.c${k}.bin`, gz(new Uint8Array(p))));
@@ -137,7 +143,15 @@ function bundle(opts = {}) {
   if (opts.rows) {
     for (let c = 0; c < 3; c++) {
       const rows = [];
-      for (let i = 4 * c; i < Math.min(N, 4 * c + 4); i++) rows.push({source_id: IDS[i], mag: 10 + 0.01 * (MAG[i] - 1) + 0.001});
+      for (let i = 4 * c; i < Math.min(N, 4 * c + 4); i++) {
+        const o = {source_id: IDS[i], mag: 10 + 0.01 * (MAG[i] - 1) + 0.001};
+        if (allCols) {
+          Object.assign(o, {err: ERR[i], cls: CLS[i] === 255 ? null : ['star', 'yso'][CLS[i]], ok: OK[i],
+            flux: OK[i] ? FLUX[i] : null, name: NAME[i]});
+          if (opts.idCol) o.id = IDCOL[i];
+        }
+        rows.push(o);
+      }
       files.set(`rows/r${c}.bin`, gz(te.encode(JSON.stringify(rows))));
     }
   }
@@ -320,15 +334,129 @@ test('record(i) reads no ids file when the row chunk carries the id', async () =
   const r = await h.record({i: 6}, ctx());
   assert.equal(r._id, 'dup');
   assert.equal(r.source_id, 'dup');
-  assert.deepEqual(f.names(), ['r1.bin']);
+  assert.ok(f.names().includes('r1.bin'));
+  assert.ok(f.names().every((n) => !n.startsWith('ids.')), f.names().join(' '));
   assert.equal(S.idChunks.size, 0);
   assert.equal(S.ids, null);
+  // a row chunk that carries every stored column reads nothing but the row chunk
+  const full = await openEngine({rows: true, rowCols: 'all'});
+  const rf = await full.h.record({i: 6}, ctx());
+  assert.deepEqual(full.f.names(), ['r1.bin']);
+  assert.equal(rf._qkeys, undefined);
+  assert.equal(rf.name, 'n6');
   // a row chunk whose id is null falls back to the ids chunk of that row
-  const files = bundle({rows: true});
+  const files = bundle({rows: true, rowCols: 'all'});
   files.set(B + 'rows/r0.bin', gz(te.encode(JSON.stringify([{source_id: null, mag: 1}, {mag: 2}, {source_id: 'a2'}, {source_id: 'a3'}]))));
   const o = await openEngine({files, rows: true});
   assert.equal((await o.h.record({i: 0}, ctx()))._id, 'a0');
   assert.deepEqual(o.f.names(), ['r0.bin', 'ids.c0.bin']);
+});
+
+test('record(i) with row chunks merges quantized cells of the omitted (exact:false) columns into _qkeys', async () => {
+  const {f, h, S} = await openEngine({rows: true});
+  const r = await h.record({i: 8}, ctx());
+  // exact columns come from the row chunk, untouched
+  assert.equal(r.source_id, 'a8');
+  assert.equal(r.mag, 10 + 0.01 * (MAG[8] - 1) + 0.001);
+  assert.equal(r._quantized, undefined);
+  // omitted stored columns come from the column chunk holding row 8 only
+  assert.deepEqual(r._qkeys, ['err', 'cls', 'ok', 'flux', 'name']);
+  assert.equal(r.cls, 'yso');
+  assert.equal(r.ok, 1);
+  assert.equal(r.flux, 18);
+  assert.equal(r.name, 'n8');
+  assert.ok(Math.abs(r.err - 0.9) < 1e-6);
+  assert.deepEqual(f.names().sort(), ['cls.c2.bin', 'err.bin', 'flux.c2.bin', 'name.c2.bin', 'ok.c2.bin', 'r2.bin']);
+  assert.equal(S.idChunks.size, 0);
+  // validity masking and missing codes apply to merged cells too
+  const r5 = await h.record({i: 5}, ctx());
+  assert.equal(r5.flux, null);
+  assert.equal(r5.ok, 0);
+  assert.ok(r5._qkeys.includes('flux'));
+  const r4 = await h.record({i: 4}, ctx());
+  assert.equal(r4.cls, null);                        // cat8 missing code 255
+  // rows() are left as the row chunk has them (list/table read exact rows only)
+  const rows = await h.rows({i0: 0, i1: 2}, ctx());
+  assert.ok(rows.every((o) => o._qkeys === undefined && !('name' in o)));
+  // N = 1 edge and out of range
+  assert.equal(await h.record({i: N}, ctx()), null);
+  assert.equal(await h.record({i: -1}, ctx()), null);
+});
+
+test('record(i) with row chunks lacking ra/dec fills them from pos only when asked or decoded', async () => {
+  const {f, h} = await openEngine({rows: true, rowCols: 'all', pos: true});
+  const r = await h.record({i: 3}, ctx());
+  assert.equal(r.ra, null);
+  assert.equal(r.dec, null);
+  assert.equal(r._posDeferred, true);
+  assert.equal(r._qkeys, undefined);
+  assert.ok(f.names().every((n) => n !== 'ra.bin' && n !== 'dec.bin'), f.names().join(' '));
+  const rp = await h.record({i: 3, pos: true}, ctx());
+  assert.ok(Math.abs(rp.ra - 10.3) < 1e-6 && Math.abs(rp.dec + 0.3) < 1e-6);
+  assert.deepEqual(rp._qkeys, ['ra', 'dec']);
+  assert.equal(rp._posDeferred, undefined);
+  // a row chunk that carries the positions (any spelling) keeps them and reads no pos file
+  const files = bundle({rows: true, rowCols: 'all', pos: true});
+  const man = JSON.parse(files.get(B + 'manifest.json'));
+  man.rows.cols.push('RA', 'Dec');
+  files.set(B + 'manifest.json', JSON.stringify(man));
+  files.set(B + 'rows/r0.bin', gz(te.encode(JSON.stringify([0, 1, 2, 3].map((i) => ({source_id: IDS[i], RA: RA[i], Dec: DEC[i]}))))));
+  const o = await openEngine({files});
+  const ro = await o.h.record({i: 1, pos: true}, ctx());
+  assert.equal(ro.RA, RA[1]);
+  assert.equal(ro.ra, undefined);
+  assert.ok(o.f.names().every((n) => n !== 'ra.bin'), o.f.names().join(' '));
+});
+
+test('record(i) on a reordered row-chunk catalog never merges the internal _src_index column', async () => {
+  // catalog.py appends a single-file u32 `_src_index` to manifest.cols (not to rows.cols) when
+  // the order is not identity; merging it would load the whole column for one record
+  const files = bundle({rows: true, rowCols: 'all'});
+  const man = JSON.parse(files.get(B + 'manifest.json'));
+  man.cols.push({key: '_src_index', label: 'input row', role: 'value', enc: 'u32', shuffle: false,
+    file: 'cols/_src_index.bin'});
+  files.set(B + 'manifest.json', JSON.stringify(man));
+  files.set(B + 'cols/_src_index.bin', gz(u32b([9, 8, 7, 6, 5, 4, 3, 2, 1, 0])));
+  const {f, h, S} = await openEngine({files});
+  const r = await h.record({i: 6, pos: true}, ctx());
+  assert.deepEqual(f.names(), ['r1.bin']);
+  assert.equal(r._qkeys, undefined);
+  assert.equal(r._src_index, undefined);
+  assert.equal(S.cols.has('_src_index'), false);
+  // an exact:false user column is still merged next to it
+  const files2 = bundle({rows: true});
+  const man2 = JSON.parse(files2.get(B + 'manifest.json'));
+  man2.cols.push({key: '_src_index', role: 'value', enc: 'u32', shuffle: false, file: 'cols/_src_index.bin'});
+  files2.set(B + 'manifest.json', JSON.stringify(man2));
+  const o = await openEngine({files: files2});
+  const r2 = await o.h.record({i: 8}, ctx());
+  assert.deepEqual(r2._qkeys, ['err', 'cls', 'ok', 'flux', 'name']);
+  assert.ok(o.f.names().every((n) => !n.startsWith('_src_index')), o.f.names().join(' '));
+});
+
+test('record(i) keeps row-chunk positions stored under the configured names (RAJ2000/DEJ2000)', async () => {
+  // the builder writes ra/dec into row chunks under spec.ra/spec.dec right after the id key
+  const files = bundle({rows: true, rowCols: 'all', pos: true});
+  const man = JSON.parse(files.get(B + 'manifest.json'));
+  man.rows.cols.splice(1, 0, 'RAJ2000', 'DEJ2000');
+  files.set(B + 'manifest.json', JSON.stringify(man));
+  files.set(B + 'rows/r0.bin', gz(te.encode(JSON.stringify([0, 1, 2, 3].map((i) => ({
+    source_id: IDS[i], RAJ2000: RA[i], DEJ2000: DEC[i], mag: 10, err: ERR[i], cls: 'star', ok: 1, flux: FLUX[i], name: NAME[i],
+  }))))));
+  const o = await openEngine({files});
+  const r = await o.h.record({i: 1}, ctx());
+  assert.equal(r.RAJ2000, RA[1]);
+  assert.equal(r.ra, undefined);
+  assert.equal(r._posDeferred, undefined, 'a row that carries coordinates is not deferred');
+  assert.equal(r._qkeys, undefined);
+  const rp = await o.h.record({i: 1, pos: true}, ctx());
+  assert.equal(rp._posDeferred, undefined);
+  assert.equal(rp.ra, undefined);
+  assert.deepEqual(o.f.names(), ['r0.bin'], 'no pos file is read');
+  // the same row chunk with the pos file missing still reads (pos is never needed)
+  files.delete(B + 'pos/ra.bin');
+  const m = await openEngine({files});
+  assert.equal((await m.h.record({i: 2, pos: true}, ctx())).DEJ2000, DEC[2]);
 });
 
 test('quantized rows()/record() read no pos file unless asked; ra/dec fill once pos is decoded', async () => {

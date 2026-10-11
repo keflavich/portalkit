@@ -8,7 +8,8 @@
 //             `exclude`, normally the legend's colour-by key) with counts; a click toggles the
 //             level in filters:<ds>.cats[key]; alt-click shows only that level. A column's
 //             `default_off` levels are applied by the filter owner (data/hub.js, when the
-//             catalog opens; IMPLEMENTATION_NOTES 70); the chips only render the filter state.
+//             catalog opens; IMPLEMENTATION_NOTES 70); the chips only render the filter state and
+//             toggle with legend.toggleLevel(..., {defaultOff: hasDefaultOff(meta)}) (note 104).
 //   flag      tri-state chip per flag column: any -> 1 -> 0 -> any (filters:<ds>.flags[key])
 //   S/N       "S/N ≥ k" chip cycling off -> 3 -> 5 -> 10 -> off, scoped to the active projection
 //             (filters:<ds>.snr = {min, scope: 'projection'}; hub.js derives the bands)
@@ -21,7 +22,7 @@
 import {opFromEvent, Selection, unpackBits} from '../core/selection.js';
 import {fmtCount, plural} from '../core/fmt.js';
 import {IDS_IN_HASH_MAX} from '../core/constants.js';
-import {isCategory, toggleLevel} from './legend.js';
+import {hasDefaultOff, isCategory, toggleLevel} from './legend.js';
 
 export const MAX_LEVELS = 16;
 export const MAX_CAT_COLUMNS = 4;
@@ -132,7 +133,9 @@ export function createChips(host, opts) {
       if (counts) b.append(el('span', 'pk-chip-n pk-num', fmtCount(counts[i] || 0)));
       b.classList.toggle('pk-muted', !on);
       b.addEventListener('click', (e) => {
-        setFilters(toggleLevel(filters(), c.key, lv, {only: e.altKey, levels: c.levels}));
+        // defaultOff: re-showing every level of a default_off column keeps cats[key] = []
+        // (explicit "all levels on", IMPLEMENTATION_NOTES 104) so a reload does not hide them again
+        setFilters(toggleLevel(filters(), c.key, lv, {only: e.altKey, levels: c.levels, defaultOff: hasDefaultOff(c)}));
         render();
       });
       row.append(b);

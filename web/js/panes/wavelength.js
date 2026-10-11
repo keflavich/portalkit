@@ -12,11 +12,14 @@
 // (1.2 s per rung divided by the speed factor), reset view. Keys inside the pane: ArrowUp/Right
 // next rung, ArrowDown/Left previous rung, Space play/pause.
 // Store: writes `rung` (nearest rung id) and `sky` {ra, dec, fov} after pans (SETTLE_MS);
-// reads both (hash or other panes). Optional catalog markers via sky/markers.js.
+// reads both (hash or other panes). Optional catalog markers via sky/markers.js; setup does not
+// wait for them (their positions load after app.afterFirstPaint()), and the view listeners are
+// registered as soon as the viewer is ready. The Aladin library load goes through
+// retryAladinOnce like sky.js (IMPLEMENTATION_NOTES 109).
 
 import {SETTLE_MS} from '../core/constants.js';
 import {fmtCount, fmtRA, fmtDec, fmtAngle, escapeHtml} from '../core/fmt.js';
-import {aladinFor, addImageLayer, errorNote, errorText, hasOpacity, libState, loadAladin, removeImageLayer,
+import {aladinFor, addImageLayer, errorNote, errorText, hasOpacity, libState, removeImageLayer, retryAladinOnce,
   setLayerOpacity} from '../sky/aladin.js';
 import {defaultBase} from '../sky/layers.js';
 import {SkyMarkers} from '../sky/markers.js';
@@ -117,7 +120,10 @@ export function mount(el, ctx) {
   root.append(stage, notice, rail);
   el.append(root);
 
-  loadAladin(app.page).catch(() => {});
+  // Start the library download right away (shared by every sky pane of the page). After a failed
+  // load (e.g. an earlier prefetch), the first sky pane that mounts retries once, as sky.js does
+  // (IMPLEMENTATION_NOTES 109); aladinFor() then restarts this pane's viewer on that retry.
+  retryAladinOnce(app.page).catch(() => {});
 
   const sf = speedFactor(cfg);
   const speeds = SPEEDS.slice();
@@ -405,18 +411,7 @@ export function mount(el, ctx) {
     if (Number.isFinite(+cur.ra) && Number.isFinite(+cur.dec)) hd.goto(initialView(cur, hips, null));
     scheduleApply();
 
-    if (cfg.markers) {
-      const client = await app.catalog(cfg.markers).catch(() => null);
-      if (client && client.manifest.pos && !destroyed) {
-        S.client = client;
-        S.markers = new SkyMarkers({h: hd, app, store, ds: cfg.markers, pane: id, client, tokens,
-          onNotice: setNotice, canvas: density, mode: 'auto'});
-        await S.markers.refresh({force: true});
-        offs.push(store.on([`vis:${cfg.markers}`, `tier:${id}`], () => S.markers && S.markers.refresh({force: true})));
-        offs.push(store.on(['color', 'theme'], () => S.markers && S.markers.restyle()));
-        offs.push(store.on([`sel:${cfg.markers}`], () => S.markers && S.markers.refreshSelected()));
-      }
-    }
+    // View listeners first: the markers below do not hold them back.
     const moved = () => {
       if (S.markers) S.markers.viewChanged();
       clearTimeout(S.writeTimer);
@@ -424,6 +419,26 @@ export function mount(el, ctx) {
     };
     offs.push(hd.on('positionChanged', moved));
     offs.push(hd.on('zoomChanged', moved));
+    offs.push(hd.on('resizeChanged', () => { if (S.markers) S.markers.viewChanged(); }));
+
+    if (cfg.markers) {
+      const client = await app.catalog(cfg.markers).catch(() => null);
+      if (client && client.manifest.pos && !destroyed) {
+        S.client = client;
+        S.markers = new SkyMarkers({h: hd, app, store, ds: cfg.markers, pane: id, client, tokens,
+          onNotice: setNotice, canvas: density, mode: 'auto'});
+        offs.push(store.on([`vis:${cfg.markers}`, `tier:${id}`], () => S.markers && S.markers.refresh({force: true})));
+        offs.push(store.on(['color', 'theme'], () => S.markers && S.markers.restyle()));
+        offs.push(store.on([`sel:${cfg.markers}`], () => S.markers && S.markers.refreshSelected()));
+        // Not awaited: positions load after app.afterFirstPaint(), which waits for this pane.
+        S.markers.refresh({force: true}).catch((err) => {
+          if (destroyed || (err && err.name === 'AbortError')) return;
+          console.warn(`wavelength ${id}: catalog markers failed`, err);
+          setNotice(`Catalog markers unavailable: ${err && err.message ? err.message : err}`);
+        });
+      }
+    }
+    if (destroyed) return;
     const v = hd.view();
     if ([v.ra, v.dec, v.fov].every(Number.isFinite)) {
       ctx.setStatus(`${S.rungs.length} rungs${S.client ? ` · ${fmtCount(S.client.n)} sources` : ''}`);

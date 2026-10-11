@@ -4,6 +4,10 @@
 // {columns, rows}). Only the visible rows are in the DOM; row blocks are fetched on demand.
 // JSON tables sort by clicking a header (NaN and missing last). Clicking a catalog row focuses
 // the source; hover writes `hover`.
+// Positions (IMPLEMENTATION_NOTES 99): on the quantized fallback pos is one whole-catalog file, so
+// row blocks read before first paint carry ra = dec = null (`_posDeferred`). Once
+// app.afterFirstPaint() resolves, those blocks (and blocks still in flight) are dropped and
+// re-read with {pos: true}; later blocks are read with {pos: true} directly.
 
 import {fmtCount, fmtValue, MISSING} from '../core/fmt.js';
 import {fetchJSON, FetchError} from '../data/fetch.js';
@@ -113,6 +117,7 @@ export function mount(root, ctx) {
   let destroyed = false;
   let raf = 0;
   let hoverI = -1;
+  let posReady = false;          // after first paint: quantized blocks are read with {pos: true}
   const pool = [];
   const offs = [];
   let offTools = null;
@@ -176,17 +181,38 @@ export function mount(root, ctx) {
     const blk = blocks.get(b);
     if (Array.isArray(blk)) return blk[i - b * BLOCK] || null;
     if (!blk && client) {
-      const p = client.rows(b * BLOCK, Math.min(total, (b + 1) * BLOCK)).then((rows) => {
+      const opts = posReady ? {pos: true} : {};
+      const p = client.rows(b * BLOCK, Math.min(total, (b + 1) * BLOCK), opts).then((rows) => {
+        // a block dropped meanwhile (re-read with positions after first paint) is ignored
+        if (destroyed || blocks.get(b) !== p) return;
         blocks.set(b, rows);
         while (blocks.size > MAX_BLOCKS) blocks.delete(blocks.keys().next().value);
         paint(true);
       }, (err) => {
-        blocks.delete(b);
+        if (blocks.get(b) === p) blocks.delete(b);
         report(err);
       });
       blocks.set(b, p);
     }
     return null;
+  }
+
+  /**
+   * After first paint: drop the blocks read without positions (rows with `_posDeferred`, and
+   * blocks still in flight, which were requested without {pos: true}) and repaint, so the
+   * visible rows are re-read with {pos: true}. Returns the number of blocks dropped.
+   */
+  function rereadDeferred() {
+    posReady = true;
+    let dropped = 0;
+    for (const [b, blk] of Array.from(blocks)) {
+      if (!Array.isArray(blk) || blk.some((r) => r && r._posDeferred)) {
+        blocks.delete(b);
+        dropped++;
+      }
+    }
+    if (dropped) paint(true);
+    return dropped;
   }
 
   function cellText(row, c) {
@@ -310,6 +336,13 @@ export function mount(root, ctx) {
         renderHead();
         layout();
         ctx.setStatus(man.rows ? '' : 'quantized', man.rows ? '' : 'Exact rows are not published; values are shown at the stored precision.');
+        const quantizedPos = !(man.rows && Array.isArray(man.rows.files) && man.rows.files.length) && !!man.pos;
+        // without app.afterFirstPaint (no boot) the client's own default applies (allowPositions)
+        if (quantizedPos && app && typeof app.afterFirstPaint === 'function') {
+          Promise.resolve(app.afterFirstPaint()).then(() => {
+            if (!destroyed) rereadDeferred();
+          });
+        }
       })().catch((err) => {
         report(err);
         fail(`The table could not be loaded: ${err.message}`);
@@ -334,7 +367,7 @@ export function mount(root, ctx) {
       blocks.clear();
     },
     stats() {
-      return {rows: total, blocks: blocks.size};
+      return {rows: total, blocks: blocks.size, posReady};
     },
   };
 }

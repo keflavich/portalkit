@@ -14,7 +14,10 @@
 // `narrative:sync` {pane} once the viewer is ready; listens to `narrative:highlight`
 // {pane, ds, ids, beat, goto?} addressed to this pane id, to 'sky' or to no pane, and draws
 // circles around those rows (centring on them with `goto`). A highlight received while Aladin is
-// still loading is kept and drawn when the viewer is ready.
+// still loading is kept and drawn when the viewer is ready. Highlight rows are read with
+// {pos: true}, so a highlight from the URL gets coordinates before first paint.
+// Setup does not wait for the markers (their positions load after app.afterFirstPaint()): the
+// view listeners and `narrative:sync` are registered as soon as the viewer is ready.
 // The Aladin library loads once per page and each sky pane owns one viewer (sky/aladin.js,
 // IMPLEMENTATION_NOTES 82); the viewer survives remounts. A failed load is retried once per page
 // by the first sky pane that mounts after it (IMPLEMENTATION_NOTES 109). When
@@ -213,7 +216,9 @@ export function mount(el, ctx) {
     const ds = p.ds || ctx.dataset;
     const idx = (await app.resolveIds(ds, p.ids.map(String))).filter((i) => i >= 0);
     const client = await app.catalog(ds);
-    const recs = await Promise.all(idx.map((i) => client.record(i)));
+    // {pos: true}: a highlight set from the URL before first paint still gets coordinates on a
+    // quantized catalog (positions are otherwise deferred until after first paint)
+    const recs = await Promise.all(idx.map((i) => client.record(i, {pos: true})));
     if (tok !== S.hlTok || destroyed) return;
     const pts = recs.filter((r) => r && Number.isFinite(r.ra) && Number.isFinite(r.dec));
     const r = Math.max(0.55 / 3600, ringRadius() * 0.7);
@@ -326,9 +331,12 @@ export function mount(el, ctx) {
       if (!store.get(`tier:${id}`)) store.set({[`tier:${id}`]: localTier(client.n, app.runtime)}, {source: id});
       S.markers = new SkyMarkers({h: hd, app, store, ds: ctx.dataset, pane: id, client, tokens,
         onNotice: setNotice, canvas: density, mode: cfg.markers === 'off' ? 'off' : 'auto'});
-      await S.markers.refresh({force: true});
-      if (destroyed) return;
-      drawRings();
+      // Not awaited: the markers load positions after app.afterFirstPaint(), which itself waits
+      // for the visible panes (this one included) to finish loading. The view listeners and the
+      // narrative:sync emit below are registered right away.
+      S.markers.refresh({force: true}).then(() => {
+        if (!destroyed) drawRings();
+      }, markersErr);
       ctx.setStatus(`${fmtCount(client.n)} sources`);
     }
 
@@ -347,6 +355,12 @@ export function mount(el, ctx) {
     if (S.hl) drawHighlight(S.hl).catch(highlightErr);
     store.emit('narrative:sync', {pane: id, type: 'sky'});
   };
+
+  function markersErr(err) {
+    if (destroyed || (err && err.name === 'AbortError')) return;
+    console.warn(`sky ${id}: catalog markers failed`, err);
+    setNotice(`Catalog markers unavailable: ${err && err.message ? err.message : err}`);
+  }
 
   function highlightErr(err) {
     if (err && err.name === 'AbortError') return;

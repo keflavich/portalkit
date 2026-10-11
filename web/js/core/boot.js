@@ -7,7 +7,8 @@
 //  3. hub; start fetching manifests of every catalog a non-collapsed pane uses
 //  4. runtime capabilities (WebGL2, EXT_color_buffer_float, DecompressionStream, deviceMemory);
 //     per-pane tiers once N is known
-//  5. mount the layout (pane modules imported lazily through core/registry.js)
+//  5. mount the layout (pane modules imported lazily through core/registry.js) once the base
+//     sheets and css/panes/ui.css have loaded
 //  6. <body data-caps> (enabled caps, space separated) and data-tier ("pane:tier ...")
 //  7. bind hash, keys and theme; install window.__pk when ?pktest=1
 //  8. emit 'ready' {ms}; app.afterFirstPaint() resolves once no visible pane is loading, at the
@@ -335,9 +336,13 @@ async function bootInner(t0, hooks) {
   const primaryDs = primaryDataset(page, norm);
   const portalId = (page.portal && page.portal.id) || 'portal';
   const assetBase = new URL('../../', import.meta.url).href;
+  // ui.css (shared widget rules, IMPLEMENTATION_NOTES 108) loads with the base sheets, before
+  // mountLayout: its <link> precedes every pane sheet the registry adds, and panes that mount
+  // widgets (controls, chips, legends) never paint unstyled.
   const cssReady = Promise.all([
     loadCSS(`${assetBase}css/tokens.css`), loadCSS(`${assetBase}css/base.css`),
-    loadCSS(`${assetBase}css/layout.css`), loadCSS(`${assetBase}css/print.css`, {media: 'print'}),
+    loadCSS(`${assetBase}css/layout.css`), loadCSS(`${assetBase}css/panes/ui.css`),
+    loadCSS(`${assetBase}css/print.css`, {media: 'print'}),
   ]);
 
   // 2. store -----------------------------------------------------------------------------
@@ -862,8 +867,8 @@ async function bootInner(t0, hooks) {
     });
   }
 
-  // UI widgets (WP11): optional modules exporting install(app).
-  await loadCSS(`${assetBase}css/panes/ui.css`);
+  // UI widgets (WP11): optional modules exporting install(app). Their CSS (ui.css) loaded with
+  // cssReady, before mountLayout.
   await Promise.all(UI_MODULES.map(async (name) => {
     let mod;
     try {

@@ -18,6 +18,11 @@ import {annotateOptions, catalogSortKey, orderByRank, rankOf} from '../../web/js
 import {searchManifests} from '../../web/js/panes/landing.js';
 import {importResultText} from '../../web/js/ui/export.js';
 import * as legend from '../../web/js/ui/legend.js';
+import {mount as mountTable} from '../../web/js/panes/table.js';
+import {mount as mountDetail, propertyText, quantizedKey} from '../../web/js/panes/detail.js';
+import {mount as mountSky} from '../../web/js/panes/sky.js';
+import {mount as mountWavelength} from '../../web/js/panes/wavelength.js';
+import * as aladin from '../../web/js/sky/aladin.js';
 
 const PAGE = 'https://example.org/portal/brick/index.html';
 
@@ -473,6 +478,22 @@ class FakeEl {
     return null;
   }
   getBoundingClientRect() { return {width: 100, height: 40, left: 0, top: 0}; }
+  get parentNode() { return this.parent; }
+  appendChild(c) { if (c.parent) c.remove(); this.append(c); return c; }
+  removeChild(c) { c.remove(); return c; }
+  prepend(...cs) { for (const c of cs.reverse()) { if (c && typeof c === 'object') { c.parent = this; this.children.unshift(c); } } }
+  insertBefore(c, ref) { const k = this.children.indexOf(ref); c.parent = this; this.children.splice(k < 0 ? this.children.length : k, 0, c); return c; }
+  replaceChildren(...cs) { this.children = []; this._text = ''; this.append(...cs); }
+  querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
+  get childNodes() { return this.children; }
+  get lastChild() { return this.children[this.children.length - 1] || null; }
+  getContext() {
+    const nop = () => {};
+    return {save: nop, restore: nop, setTransform: nop, clearRect: nop, fillRect: nop, beginPath: nop, arc: nop,
+      fill: nop, stroke: nop, moveTo: nop, lineTo: nop, closePath: nop, rect: nop, scale: nop, translate: nop,
+      createImageData: (w, h) => ({data: new Uint8ClampedArray(w * h * 4), width: w, height: h}), putImageData: nop,
+      drawImage: nop, fillText: nop, measureText: () => ({width: 0})};
+  }
   all() { return this.children.flatMap((c) => [c, ...c.all()]); }
   querySelectorAll(sel) {
     const m = /^\.([\w-]+)$/.exec(sel);
@@ -486,7 +507,8 @@ async function withDom(fn) {
   const body = new FakeEl('body');
   const docEl = new FakeEl('html');
   globalThis.document = {createElement: (t) => new FakeEl(t), activeElement: null, body, documentElement: docEl,
-    createTextNode: (t) => ({textContent: t}), baseURI: 'https://example.org/p/index.html'};
+    createTextNode: (t) => ({textContent: t}), createDocumentFragment: () => new FakeEl('#fragment'),
+    baseURI: 'https://example.org/p/index.html'};
   globalThis.window = {addEventListener() {}, innerWidth: 1000, innerHeight: 800, devicePixelRatio: 1};
   globalThis.requestAnimationFrame = (f) => setTimeout(f, 0);
   globalThis.cancelAnimationFrame = (h) => clearTimeout(h);
@@ -768,3 +790,233 @@ test('SkyMarkers: destroyed before first paint reads nothing', async () => {
   await p;
   assert.deepEqual(client.calls.values, []);
 });
+
+// ------------------------------------------------------------------ deferred positions (WPC1)
+
+/**
+ * Quantized-catalog client (no row chunks) with positions: rows()/record() leave ra/dec null with
+ * `_posDeferred` unless called with {pos: true}, like the worker before first paint.
+ */
+function quantizedPosClient(n = 50) {
+  const calls = {rows: [], record: [], values: []};
+  const cols = [{key: 'f115w', role: 'mag', enc: 'u16q', step: 0.001, lo: 10, hi: 20}];
+  const row = (i, pos) => Object.assign({id: `s${i}`, _id: `s${i}`, f115w: 10 + i / 100, _quantized: true, _i: i},
+    pos ? {ra: 10 + i / 1000, dec: -1 + i / 1000} : {ra: null, dec: null, _posDeferred: true});
+  return {
+    calls, n,
+    manifest: {cols, pos: {enc: 'u32lin'}, bbox: {ra: [10, 11], dec: [-1, 1]}},
+    col: (k) => cols.find((c) => c.key === k) || null,
+    rows(a, b, opts = {}) {
+      calls.rows.push([a, b, !!opts.pos]);
+      const out = [];
+      for (let i = a; i < Math.min(b, n); i++) out.push(row(i, !!opts.pos));
+      return Promise.resolve(out);
+    },
+    record(i, opts = {}) {
+      calls.record.push([i, opts]);
+      return Promise.resolve(i >= 0 && i < n ? row(i, !!opts.pos) : null);
+    },
+    values(k) {
+      calls.values.push(k);
+      return Promise.resolve(new Float64Array(n));
+    },
+  };
+}
+
+test('table: quantized blocks read before first paint are re-read with {pos: true} after it', () => withDom(async () => {
+  const client = quantizedPosClient(50);
+  const store = createStore({});
+  const fp = gate();
+  const app = {page: {datasets: {cat: {kind: 'catalog'}}}, catalog: async () => client, afterFirstPaint: () => fp.p};
+  const root = new FakeEl('div');
+  const pane = mountTable(root, {id: 't1', config: {}, store, app, dataset: 'cat', setStatus() {}, tools: null});
+  await settle();
+  assert.deepEqual(client.calls.rows, [[0, 50, false]], 'first screen without positions');
+  const raCell = () => {
+    const r = root.querySelectorAll('.pk-list-row')[1];
+    return r.children[1].textContent;
+  };
+  assert.equal(raCell(), MISSING, 'ra deferred before first paint');
+  assert.equal(pane.stats().posReady, false);
+  fp.release();
+  await settle();
+  assert.deepEqual(client.calls.rows, [[0, 50, false], [0, 50, true]], 'the deferred block is re-read once with pos');
+  assert.notEqual(raCell(), MISSING, 'ra filled after first paint');
+  assert.equal(pane.stats().posReady, true);
+  assert.deepEqual(client.calls.values, [], 'no whole column read');
+  pane.destroy();
+}));
+
+test('table: a block in flight at first paint is dropped and re-read; row-chunk catalogs are not re-read', () => withDom(async () => {
+  const client = quantizedPosClient(30);
+  const slow = gate();
+  const rows0 = client.rows.bind(client);
+  const order = [];
+  client.rows = (a, b, o = {}) => {
+    order.push([a, b, !!o.pos]);
+    return o.pos ? rows0(a, b, o) : slow.p.then(() => rows0(a, b, o));
+  };
+  const store = createStore({});
+  const fp = gate();
+  const app = {page: {datasets: {cat: {kind: 'catalog'}}}, catalog: async () => client, afterFirstPaint: () => fp.p};
+  const root = new FakeEl('div');
+  const pane = mountTable(root, {id: 't1', config: {}, store, app, dataset: 'cat', setStatus() {}, tools: null});
+  await settle();
+  fp.release();
+  await settle();
+  slow.release();                       // the stale pos-less answer arrives last and is ignored
+  await settle();
+  assert.deepEqual(order, [[0, 30, false], [0, 30, true]]);
+  const r = root.querySelectorAll('.pk-list-row')[2];
+  assert.notEqual(r.children[1].textContent, MISSING);
+  pane.destroy();
+
+  // exact row chunks carry their own ra/dec: nothing is re-read after first paint
+  const exact = fakeClient(20);
+  exact.manifest.pos = {enc: 'u32lin'};
+  const fp2 = gate();
+  const app2 = {page: {datasets: {cat: {kind: 'catalog'}}}, catalog: async () => exact, afterFirstPaint: () => fp2.p};
+  const p2 = mountTable(new FakeEl('div'), {id: 't2', config: {}, store, app: app2, dataset: 'cat', setStatus() {}, tools: null});
+  await settle();
+  fp2.release();
+  await settle();
+  assert.equal(exact.calls.rows.length, 1);
+  p2.destroy();
+}));
+
+test('detail: the focus record is read with {pos: true}; _qkeys values show as quantized', () => withDom(async () => {
+  const client = quantizedPosClient(10);
+  const store = createStore({focus: {ds: 'cat', i: 4, id: 's4'}});
+  const app = {page: {datasets: {cat: {kind: 'catalog'}}}, catalog: async () => client, resolveIds: async () => [4],
+    afterFirstPaint: () => new Promise(() => {})};
+  const root = new FakeEl('div');
+  const ctx = {id: 'd1', config: {}, store, app, dataset: 'cat', setStatus() {}, setTitle() {}, tools: null,
+    hub: {json: async () => null, records: async () => null, resolve: (u) => new URL(u, PAGE)}};
+  const pane = mountDetail(root, ctx);
+  await settle();
+  assert.equal(client.calls.record.length, 1);
+  assert.equal(client.calls.record[0][0], 4);
+  assert.equal(client.calls.record[0][1].pos, true, 'focus from the URL before first paint gets coordinates');
+  assert.equal(client.calls.record[0][1].channel, 'detail:d1');
+  assert.ok(root.querySelectorAll('.pk-detail-pos').length, 'position shown');
+  pane.destroy();
+
+  // _qkeys: an exact row-chunk record with merged quantized cells
+  const meta = {key: 'f200w', role: 'mag', step: 0.001};
+  const row = {f115w: 12.3456789, f200w: 13.123456789, _qkeys: ['f200w']};
+  assert.equal(quantizedKey(row, 'f200w'), true);
+  assert.equal(quantizedKey(row, 'f115w'), false);
+  assert.equal(quantizedKey({_qkeys: {f200w: true}}, 'f200w'), true);
+  assert.equal(quantizedKey({}, 'f200w'), false);
+  assert.equal(quantizedKey(null, 'f200w'), false);
+  const q = propertyText(row, 'f200w', meta, !quantizedKey(row, 'f200w'));
+  const e = propertyText(row, 'f200w', meta, true);
+  assert.equal(q.text, '13.123');
+  assert.notEqual(e.text, q.text);
+}));
+
+function fakeAladinLib() {
+  const shapes = [];
+  const al = {
+    on() {}, getRaDec: () => [10.02, -0.98], getFov: () => [1, 1], addOverlay() {}, addCatalog() {},
+    gotoRaDec() {}, setFoV() {}, world2pix: () => [50, 20], pix2world: () => [10, -1], removeOverlay() {},
+  };
+  const A = {
+    init: Promise.resolve(),
+    aladin: () => al,
+    graphicOverlay: () => ({add(sh) { shapes.push(sh); }, removeAll() { shapes.length = 0; }}),
+    circle: (ra, dec, r) => ({ra, dec, r}),
+    polygon: (pts) => ({pts}),
+    catalog: () => ({addSources() {}, removeAll() {}}),
+  };
+  return {A, al, shapes};
+}
+
+const DEAD_ALADIN = {cdn: 'https://127.0.0.1:9/none.js', mirror: 'https://127.0.0.1:9/none2.js'};
+
+function skyApp(client, fp) {
+  return {
+    page: {datasets: {cat: {kind: 'catalog'}}, aladin: DEAD_ALADIN},
+    catalog: async () => client,
+    afterFirstPaint: () => fp.p,
+    resolveIds: async (ds, ids) => ids.map((s) => Number(String(s).slice(1))),
+    runtime: {webgl2: true},
+    notes: {},
+    idOf: async (ds, i) => `s${i}`,
+  };
+}
+
+test('sky: setup does not wait for the markers; listeners and narrative:sync come first; highlight reads {pos: true}', () => withDom(async () => {
+  aladin.resetAladin();
+  const {A, shapes} = fakeAladinLib();
+  globalThis.window.A = A;
+  const client = quantizedPosClient(20);
+  const store = createStore({});
+  const fp = gate();
+  const syncs = [];
+  store.onEvent('narrative:sync', (p) => syncs.push(p));
+  const root = new FakeEl('div');
+  const ctx = {id: 'sky1', config: {brush: false}, store, app: skyApp(client, fp), dataset: 'cat', setStatus() {},
+    theme: () => ({}), tools: null, hub: {json: async () => null, resolve: (u) => new URL(u, PAGE)}};
+  const pane = mountSky(root, ctx);
+  let done = false;
+  pane.ready.then(() => { done = true; });
+  await settle(10);
+  assert.equal(done, true, 'ready resolves while first paint is still pending');
+  assert.deepEqual(syncs.map((p) => p.pane), ['sky1']);
+  const h = aladin.aladinHandles().find((x) => x.owner === 'sky1');
+  for (const ev of ['positionChanged', 'zoomChanged', 'resizeChanged']) {
+    assert.ok(h._listeners.has(ev) && h._listeners.get(ev).size >= 1, ev);
+  }
+  assert.deepEqual(client.calls.values, [], 'no positions before first paint');
+  // a narrative highlight (e.g. from the URL) before first paint still finds coordinates
+  store.emit('narrative:highlight', {pane: 'sky1', ds: 'cat', ids: ['s3'], beat: 1});
+  await settle(10);
+  assert.deepEqual(client.calls.record.map(([i, o]) => [i, o.pos]), [[3, true]]);
+  assert.equal(pane.stats().highlight, 1);
+  assert.ok(shapes.some((sh) => Math.abs(sh.ra - 10.003) < 1e-9 && Math.abs(sh.dec + 0.997) < 1e-9), JSON.stringify(shapes));
+  pane.destroy();
+  fp.release();
+  await settle();
+  delete globalThis.window.A;
+  aladin.resetAladin();
+}));
+
+test('wavelength: mount retries a failed Aladin prefetch; view listeners before the markers settle', () => withDom(async () => {
+  aladin.resetAladin();
+  const pre = aladin.loadAladin({aladin: DEAD_ALADIN}, {timeout: 50});   // fire-and-forget prefetch
+  await assert.rejects(pre);
+  await tick();
+  assert.equal(aladin.libState().state, 'error');
+  const {A} = fakeAladinLib();
+  globalThis.window.A = A;
+  const client = quantizedPosClient(20);
+  const store = createStore({});
+  const fp = gate();
+  const hips = gate();
+  const root = new FakeEl('div');
+  const app = skyApp(client, fp);
+  const ctx = {id: 'wl1', config: {hips: 'hips', markers: 'cat'}, store, app, dataset: null, setStatus() {},
+    theme: () => ({}), tools: null, hub: {json: () => hips.p, resolve: (u) => new URL(u, PAGE)}};
+  const pane = mountWavelength(root, ctx);
+  // the retry starts at mount (retryAladinOnce), before setup reaches aladinFor
+  assert.equal(aladin.aladinRetried(), true);
+  assert.equal(aladin.aladinHandles().length, 0);
+  hips.release(null);
+  let done = false;
+  pane.ready.then(() => { done = true; });
+  await settle(10);
+  assert.equal(done, true, 'ready resolves while first paint is still pending');
+  assert.equal(pane.stats().aladin, 'preloaded');
+  const h = aladin.aladinHandles().find((x) => x.owner === 'wl1');
+  for (const ev of ['positionChanged', 'zoomChanged', 'resizeChanged']) {
+    assert.ok(h._listeners.has(ev) && h._listeners.get(ev).size >= 1, ev);
+  }
+  assert.deepEqual(client.calls.values, [], 'no positions before first paint');
+  assert.ok(pane.stats().markers, 'markers created');
+  pane.destroy();
+  fp.release();
+  await settle();
+  delete globalThis.window.A;
+  aladin.resetAladin();
+}));

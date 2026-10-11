@@ -614,6 +614,21 @@ test('filter chip click (ui/chips.js) on a default_off column also writes cats[k
   ch.destroy();
 }));
 
+test('filter chip click on a plain column: re-showing every level deletes cats[key] (defaultOff false)', () => withDom(async () => {
+  const meta = {key: 'cls', role: 'category', enc: 'cat8', levels: ['star', 'yso', 'agb']};
+  const client = {n: 3, manifest: {cols: [meta]}, hist: async () => ({counts: new Float64Array([1, 1, 1])})};
+  const store = createStore({'filters:src': {cats: {cls: ['agb']}}, 'sel:src': {}});
+  const host = new FakeEl('div');
+  const ch = chips.createChips(host, {store, client, ds: 'src', pane: 'chips1',
+    show: {cats: true, flags: false, snr: false, presets: false, saved: false}});
+  await tick();
+  const chipFor = (lv) => ch.el.find((e) => e.classList.contains('pk-chip') && e.textContent.startsWith(lv));
+  chipFor('agb').fire('click');
+  await tick();
+  assert.deepEqual(store.get('filters:src'), {});
+  ch.destroy();
+}));
+
 // ------------------------------------------------------------------ Aladin prefetch retry (note 109)
 
 const DEAD_PAGE = {aladin: {cdn: 'https://127.0.0.1:9/none.js', mirror: 'https://127.0.0.1:9/none2.js'}};
@@ -737,14 +752,16 @@ test('aladinFor restarts a viewer that failed on the prefetch once the retry is 
   aladin.resetAladin();
 }));
 
-test('aladinFor: a wavelength-style pane (no retryAladinOnce at mount) also retries a failed prefetch', () => withDom(async () => {
+// panes/wavelength.js mounts through retryAladinOnce(app.page) like panes/sky.js (note 109); this
+// covers a pane that reaches aladinFor without that call (the handle still starts the one retry).
+test('aladinFor: a pane that skips retryAladinOnce at mount also retries a failed prefetch', () => withDom(async () => {
   aladin.resetAladin();
   const pre = aladin.loadAladin(DEAD_PAGE, {timeout: 50});      // the fire-and-forget prefetch
   await assert.rejects(pre);
   await tick();
   const {A, made} = fakeAladinLib();
   await withWindow({A}, async () => {
-    // panes/wavelength.js mount: loadAladin(page) returns the cached rejection, no retry
+    // loadAladin(page) returns the cached rejection, no retry
     assert.equal(aladin.loadAladin(DEAD_PAGE), pre);
     const hw = aladin.aladinFor('wl1', {page: DEAD_PAGE, timeout: 50, view: {ra: 1, dec: 2, fov: 3}});
     assert.equal(aladin.aladinRetried(), true);

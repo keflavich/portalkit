@@ -14,7 +14,9 @@
 // URLs (IMPLEMENTATION_NOTES 81): figure URLs from images.json resolve against the page URL;
 // product links resolve against the products records index URL; both substitute {res}/{assets}.
 // Rows are read on the record channel `detail:<pane id>` (note 73), so another pane's record
-// request does not cancel this one.
+// request does not cancel this one, and with {pos: true}, so a focus from the URL gets its
+// position before first paint. Keys listed in the record's `_qkeys` (stored columns the row chunk
+// omits, merged in from the quantized column chunks) are shown like quantized values.
 
 import {fmtBytes, fmtDec, fmtNum, fmtQuant, fmtRA, fmtValue, MISSING} from '../core/fmt.js';
 import {carryTo, loginBadge} from '../ui/nav.js';
@@ -133,6 +135,16 @@ export function buildSections(row, manifest, template = null, skip = []) {
   take('Values', bucket((m) => m && m.role === 'value'));
   take('Other', keys);
   return out;
+}
+
+/**
+ * True when an exact (row-chunk) record carries `key` as a quantized value: stored columns the row
+ * chunk omits are merged in by the worker and listed in `_qkeys` (an array, or an object of flags).
+ */
+export function quantizedKey(row, key) {
+  const q = row && row._qkeys;
+  if (Array.isArray(q)) return q.includes(key);
+  return !!(q && typeof q === 'object' && q[key]);
 }
 
 const LIMIT_TEXT = {1: 'upper limit', 2: 'lower limit', 3: 'clamped at the low end of the encoded range', 4: 'clamped at the high end of the encoded range'};
@@ -425,7 +437,7 @@ export function mount(root, ctx) {
       const tb = el('tbody');
       for (const k of s.keys) {
         const m = client.col(k);
-        const {text, title, numeric} = propertyText(row, k, m, exact);
+        const {text, title, numeric} = propertyText(row, k, m, exact && !quantizedKey(row, k));
         const tr = el('tr');
         const th = el('th', null, (m && m.label) || k);
         th.scope = 'row';
@@ -561,7 +573,9 @@ export function mount(root, ctx) {
     // already discards superseded responses.
     let row;
     try {
-      row = await client.record(i, {channel: `detail:${ctx.id}`});
+      // {pos: true}: a focus set from the URL before first paint still gets its coordinates on a
+      // quantized catalog (positions are otherwise deferred until after first paint)
+      row = await client.record(i, {channel: `detail:${ctx.id}`, pos: true});
     } catch (err) {
       if (my === token) wanted = -1;
       throw err;

@@ -20,7 +20,9 @@ web/js/core/registry.js    pane type -> module path and CSS
 web/js/core/testhooks.js   window.__pk (only with ?pktest=1)
 web/js/core/fmt.js         number/coordinate/text formatting
 web/js/layout/layout.js    split panes, folds, pop-out, mobile tabs
-web/css/{tokens,base,layout,print}.css
+web/js/data/client.js      DataClient: the main-thread side of one catalog's data worker
+web/js/workers/data.worker.js  catalog engine (chunk decode, rows/record, query, resolveIds)
+web/css/{tokens,base,layout,print}.css, web/css/panes/ui.css
 ```
 
 ## 1. Boot
@@ -40,11 +42,16 @@ web/css/{tokens,base,layout,print}.css
    non-collapsed pane (and pane `background` catalogs) are fetched at once.
 4. Runtime probe: WebGL2, `EXT_color_buffer_float`, `DecompressionStream`,
    `navigator.deviceMemory`. Each tiered pane gets `tier:<pane>` once its catalog's N is known.
-5. Header chrome and `mountLayout` (pane modules load lazily through the registry).
+5. Header chrome and `mountLayout` (pane modules load lazily through the registry). Boot loads
+   `css/tokens.css`, `base.css`, `layout.css`, `css/panes/ui.css` and `print.css` (media print) and awaits
+   them before `mountLayout`, so the shared widget rules (note 108) are in place when the first
+   pane mounts.
 6. `<body data-caps="...">` (enabled caps, sorted, space separated) and
    `<body data-tier="pane:T1 ...">`.
 7. `bindHash`, `bindKeys`, `bindTheme`, test hooks.
 8. `store.emit('ready', {ms})`.
+9. `app.afterFirstPaint()` resolves (see below); boot then calls `client.allowPositions()` on
+   every catalog opened so far and on each one opened later.
 
 On failure boot shows a `.pk-error-note` and rethrows, so the shell's fallback message also
 appears and `__pk.ready` rejects.
@@ -81,7 +88,8 @@ output in `page.caps.enabled`; `app.notes` records the runtime reason.
 | `theme()` | `theme.tokens()` |
 | `catalog(ds)` | cached `hub.catalog(ds)`; also creates the dataset's Selection |
 | `selectionFor(ds)` | `Promise<Selection>` |
-| `resolveIds(ds, ids)` | `Promise<number[]>` stored row indices, -1 when not found. A row matches when its id equals the text or the text is one of its aliases (exact lookup in the manifest's `ids.alias_file`, loaded on first need); substring hits never count. Ids already in the id cache resolve at once. `RESOLVE_BATCH_MIN` (16) or more unknown ids are matched in one pass over `client.export({mask: 'all', format: 'ids'})` (`matchIdList`, first row wins) and then the alias file. The id list text is fetched once per dataset and kept (about 12 bytes per row), after which every lookup uses it. Fewer ids before that, and ids containing line breaks, go through `client.find` one at a time (about 0.1 s per id at 1M rows) |
+| `afterFirstPaint()` | the page's first-paint promise (note 100), the same promise on every call; see below |
+| `resolveIds(ds, ids)` | `Promise<number[]>` stored row indices, -1 when not found. A row matches when its id equals the text exactly (first stored row wins) or the text is one of its aliases (manifest `ids.alias_file`); substring hits never count. Ids already in the id cache, or resolved by an earlier call, answer at once. The rest (deduplicated) go to the worker in one `client.resolveIds(uniq, {aliases: true})` pass (note 102), which loads every ids chunk and the alias file once; resolved rows are memoised per dataset. Clients without `resolveIds` (test doubles) use the older path: `RESOLVE_BATCH_MIN` (16) or more unknown ids are matched in one pass over `client.export({mask: 'all', format: 'ids'})` (`matchIdList`) and the alias file, fewer go through `client.find` one at a time |
 | `idOf(ds, i)` | `Promise<string>` cached id lookup |
 | `applySelection(ds, str)` | apply an `ids:`/`bits:`/`r:` string as one replace (recipes replay on an empty scratch Selection through `client.brush`, `client.query` and presets, then load with `sel.replaceWith`) |
 | `carryPayload()` | `{ds, focusId, sel}` for `stashCarry` |
@@ -103,6 +111,20 @@ missing, missingLabels (first 50), rows, count, summary}`, where `count` is the 
 afterwards and `summary` is the one-line `importSummary` text. Text with no recognisable entry
 leaves the selection unchanged. The pure core is exported as `importSelection(text, {mode, sel,
 client, io, resolveIds, radiusArcsec})` for tests.
+
+**First paint** (`app.afterFirstPaint()`, IMPLEMENTATION_NOTES 99/100). One promise per page,
+created before any pane mounts, so panes may call it during mount. `whenFirstPaint(root)`
+resolves it after the `ready` event, once no visible `section.pk-pane` has
+`data-state="loading"`, at the next idle callback (`requestIdleCallback`, timeout
+`FIRST_PAINT_IDLE_TIMEOUT_MS` = 1500 ms). It resolves anyway, with a console warning,
+`FIRST_PAINT_MAX_WAIT_MS` (30 s) after `ready`, so a pane whose mount waits on deferred data
+cannot hold it back for good. Whole-column reads, the ids and pos wait on it: sky markers load
+pos after it, the list loads full columns after it, and boot calls `client.allowPositions()`
+(section 11) once it resolves. A pane must therefore never await work that itself waits on
+first paint before it leaves the loading state: sky and wavelength panes start
+`markers.refresh({force: true})` without awaiting it and register their view listeners
+(`positionChanged`, `zoomChanged`, `resizeChanged`) right away; the sky pane also emits
+`narrative:sync` without waiting for the markers.
 
 Selections: boot uses `client.selection()` when it returns an object with `apply`, `mask` and
 `onChange` (a `core/selection.js` Selection); otherwise it creates `new Selection(client.n)`.
@@ -186,7 +208,7 @@ Serialization (`serialize(idOf)` / `Selection.parse(s)`):
 | `r:<b64url>` | recipe form of any other complete recipe | base64url(deflate-raw(UTF-8 JSON RecipeOp[])); `r:[...]` raw JSON is also accepted |
 | `bits:<b64url>` | n <= 200 000 | base64url(deflate-raw(packed bits, LSB first)) |
 
-Choice of form (IMPLEMENTATION_NOTES 92): `serialize(idOf)` computes the recipe form
+Choice of form (IMPLEMENTATION_NOTES 92, refined by 107): `serialize(idOf)` computes the recipe form
 (`recipeForm(idOf)`: `ids:` or `r:`, `''` when the recipe is incomplete) and the bitmask form
 (`bitsForm()`, `''` above 200 000 rows) and writes the one that is shorter in the URL
 (`hashLength(s)` = length after `encodeHashValue`, so `%`-escaped ids count as written); a tie
@@ -398,7 +420,8 @@ A list pane should handle `nav:step` (filtered, sorted order); a brushing pane s
 ## 8. UI widgets
 
 Boot imports `ui/toast.js`, `ui/nav.js`, `ui/help.js`, `ui/hover.js` and `ui/lightbox.js`
-(after loading `css/panes/ui.css`). Each module may export `install(app)`; boot awaits it.
+(`css/panes/ui.css` is already loaded, before `mountLayout`). Each module may export
+`install(app)`; boot awaits it.
 A module absent from the build logs a warning; a module that fails to load for another
 reason, or whose `install` throws, logs `console.error` (so `__pk.errors` records it). The page
 continues either way. A configured `legacyhash.js` that fails to load is also an error. Widgets place themselves
@@ -439,10 +462,57 @@ Missing values print as an en dash.
   `register(type, mod)` injects modules for tests. `PANE_CSS` (note 69) loads
   `[<pane>.css, controls.css]` for scatter and manifold and `[controls.css]` for hist (its rules
   live in controls.css; there is no hist.css). Every listed file exists, so no stylesheet
-  request 404s; UI widget styles live in `css/panes/ui.css`, loaded by boot.
+  request 404s; UI widget styles live in `css/panes/ui.css`, which boot loads before
+  `mountLayout` and `load(type)` also attaches (once, deduplicated by href) before the sheets
+  of a widget pane (note 108).
 - `keys.js`: shortcut table `KEYMAP`; shortcuts are ignored while typing in inputs (except
   Esc), and arrow keys are left to focused separators, sliders, list boxes, tab lists and grids.
   `k` (keep only) sets `filters:<ds>.ids` for up to 5000 selected rows.
+
+### Data client (`data/client.js`) and worker (`workers/data.worker.js`)
+
+One `DataClient` per catalog dataset (`hub.catalog(ds)`), backed by a module worker, or by the
+same engine in-thread when module workers are unavailable.
+
+- `workerUrl(manifestUrl, base?)` returns
+  `<.../workers/data.worker.js>?m=<encodeURIComponent(manifestUrl)>`. The worker reads `m` and
+  starts the manifest fetch from its top-level code; the `open` call reuses that in-flight
+  promise (note 101).
+- `rows(i0, i1, {signal, pos})` returns rows `[i0, i1)` from the exact row chunks, or, without
+  row chunks, the quantized fallback built from the column chunks that hold those rows
+  (`_quantized: true`, head chunks first, note 98). `pos` is one whole-catalog file, so on the
+  fallback ra/dec are filled only when pos is already decoded or the read asks for it:
+  `opts.pos` true. When `opts.pos` is absent the client's default applies, which is false until
+  `allowPositions()` and true after it. A row read without positions carries
+  `ra = dec = null` and `_posDeferred: true`.
+- `allowPositions()` switches that default on; boot calls it after `app.afterFirstPaint()`.
+  Reads that need coordinates before first paint pass `{pos: true}`: the sky highlight and the
+  detail focus record do. The table re-reads, with `{pos: true}`, the blocks it read without
+  positions (rows with `_posDeferred`, and blocks still in flight) once first paint has
+  happened, on a quantized catalog with `pos`.
+- `record(i, {channel, token, signal, pos})` (also `record(ds, i, opts)`) reads one row and
+  loads only the chunk that holds row i (for a single-file column that chunk is the whole
+  column), never the whole ids or pos (unless `pos` is asked for and the row lacks positions). On a catalog with row chunks the worker merges the
+  quantized cells, read through `cellSource`, of the stored columns the row chunk omits (the
+  `exact: false` columns, i.e. those missing from `manifest.rows.cols`) and lists their keys in
+  `_qkeys`. Internal columns (keys starting with `_`, such as the single-file `_src_index` of a
+  reordered catalog) are never merged. A row chunk keeps the positions it carries under the
+  configured ra/dec names (e.g. `RAJ2000`). Only a row chunk whose keys, apart from the id (the
+  first key), are all stored columns lacks positions (ra/dec declared `exact: false`); it gets
+  ra/dec from pos under the same `pos` rule (listed in `_qkeys` when filled, `_posDeferred`
+  otherwise). After `allowPositions()` the default `pos` is true, so such a record (a hover card
+  included) loads pos when it is not yet decoded. Displays format a `_qkeys`
+  column (or every column of a `_quantized` row) with `fmtQuant` (section 10). Records are
+  kept in an LRU; a cached record with `_posDeferred` is read again when positions are wanted.
+- Record channels (note 105): a new call on a channel aborts the previous unfinished call on
+  that channel, which resolves to null. Panes use `<pane type>:<pane id>` (e.g. `detail:d1`);
+  the app-level hover card uses `HOVER_CHANNEL` = `'hover:card'` (`ui/hover.js`).
+- `resolveIds(ids, {aliases = true, signal})` -> `Int32Array` aligned with `ids` (-1 when
+  missing), from the worker op `resolveIds({ids, aliases})`: one pass over every ids chunk
+  (`IdIndex.rowsOf`), exact id first (first stored row wins), then the alias file. The result
+  buffer is transferred.
+- `id(i)` reads only the ids chunk that holds row i; `find`, `query` with id filters, `export`,
+  `order('id')` and `resolveIds` load every ids chunk.
 
 ## 12. Test hooks
 
@@ -464,9 +534,14 @@ shorter-of form choice (note 92) and that `serialize` gives the same string befo
 timers, including the `ovl=-` / absent-`ovl` round trips (note 72) and a reload of each `sel`
 form through a real Selection. `store.test.mjs` also checks that every `PANE_CSS` file exists
 (note 69), the `options.title` seeding (note 77) and `importSelection` against the real
-`ui/export.js` (note 93). The full suite is `node --test tests/js/*.test.mjs`.
+`ui/export.js` (note 93). `chunks.test.mjs` drives the worker engine on in-memory bundles (head chunks, row chunks, the
+quantized fallback, `_posDeferred`, `_qkeys` merging and which files each read fetches).
+`listpanes.test.mjs` mounts the table, detail, sky and wavelength panes with fake clients
+(deferred-position re-reads, `{pos: true}` reads, setup that does not wait for first paint);
+`plotpanes.test.mjs` covers chips/legend `default_off` and the Aladin retry. The full suite is
+`node --test tests/js/*.test.mjs`.
 
-## 14. Runtime contracts from IMPLEMENTATION_NOTES 68-93
+## 14. Runtime contracts from IMPLEMENTATION_NOTES 68-109
 
 Where each JS-facing note lives (details in the module headers):
 
@@ -494,3 +569,14 @@ Where each JS-facing note lives (details in the module headers):
 | 91 | `<manifold>.frame=<preset>` accepts `axes` presets as well as `frame` presets | `panes/manifold.js` |
 | 92 | `sel=` form = shorter (in the URL) of the recipe form and `bits:`; brush recipes compete only above 200 000 rows | `core/selection.js` (section 3) |
 | 93 | `app.importCsv(text, {mode, ds, radiusArcsec})` | `core/boot.js` (section 1), `ui/export.js` |
+| 98 | `chunk_starts` head chunks; pos stays one file | `workers/data.worker.js` |
+| 99 | no whole column, ids or pos before first paint; `rows`/`record` `opts.pos`, `allowPositions()`, `_posDeferred`; `record(i)` reads one chunk and merges `_qkeys` cells | section 11 (data client), `panes/table.js`, `panes/sky.js`, `ui/hover.js` |
+| 100 | `app.afterFirstPaint()` | `core/boot.js` (section 1) |
+| 101 | `workerUrl(manifestUrl)` (`?m=`) | `data/client.js`, `workers/data.worker.js` |
+| 102 | `DataClient.resolveIds` and the worker `resolveIds` op; `app.resolveIds` uses them | section 1, section 11 |
+| 104 | `toggleLevel(filters, key, level, {only, levels, defaultOff})` keeps `cats[key] = []` for a `default_off` column; legend and chips pass `defaultOff: hasDefaultOff(meta)` | `ui/legend.js`, `ui/chips.js` |
+| 105 | record channels `<pane type>:<pane id>`; hover card `'hover:card'` | section 11 (data client) |
+| 106 | `options.title` seeds every title; `ctx.setTitle` for record-following panes | `layout/layout.js`, `panes/detail.js` |
+| 107 | `sel=` form: recipe competes with `bits:` only when view-independent; shorter wins, tie to recipe | `core/selection.js` (section 3) |
+| 108 | widget CSS only in `css/panes/ui.css`, loaded by boot before `mountLayout` | `core/boot.js`, `core/registry.js` |
+| 109 | a failed Aladin prefetch is retried once per page; sky and wavelength mount through `retryAladinOnce(app.page)` | `sky/aladin.js`, `panes/sky.js`, `panes/wavelength.js` |

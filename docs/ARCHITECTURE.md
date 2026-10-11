@@ -670,7 +670,7 @@ Row chunks (`rows/rNNNN.bin`) are gz JSON arrays of objects, 4096 rows per chunk
 - Written by default when N ≤ 1,000,000 (`EXACT_ROWS_MAX_N`).
 - Above that, written only if `CatalogSpec.exact_rows=True`.
 
-Detail panes always prefer row chunks. When no chunk exists, they show quantized values with `fmt.stepDigits(step)` decimals and a "±step/2" tooltip. Hover cards use quantized values with step-aware precision and never fetch row chunks.
+Detail panes and hover cards read one row with `client.record(i)` (IMPLEMENTATION_NOTES 99). The worker loads only the chunk that holds row i: the row chunk when the catalog has row chunks, else the column chunks of the quantized fallback (for a single-file column that chunk is the whole column). A record reads no ids file when the row chunk carries the id. It loads pos (one whole-catalog file) only when the row lacks positions and the read wants them: before first paint only with `{pos: true}`, as the detail focus read and the sky highlight do; after boot calls `client.allowPositions()` the client default is `pos: true` (section 11, docs/js.md). On a catalog with row chunks, the user stored columns the row chunk omits (`exact: false`) are merged from their quantized column chunks and listed in the record's `_qkeys`; internal columns (keys starting with `_`, e.g. `_src_index`) are never merged. A row chunk keeps the positions it carries under the configured ra/dec names; ra/dec come from pos only when the row chunk carries none (ra/dec declared `exact: false`). Quantized values (every column of a fallback row, and the `_qkeys` columns) show `fmt.stepDigits(step)` decimals and a "±step/2" tooltip; row-chunk values show full precision. The hover card reads on the app-level record channel `'hover:card'`.
 
 ### 5.6 Record sets and shards (spectra, 2D spectra, products, SED curves)
 
@@ -899,12 +899,17 @@ Semantics **[FROZEN]**:
 
 `RecipeOp = {op, kind:'rect'|'circle'|'lasso'|'ids'|'filter'|'preset', view:{ds, x?:expr, y?:expr, frame?:{preset?|F}}, shape?:{x0,y0,x1,y1}|{cx,cy,r}|{pts:[[x,y]...]}, ids?:string[]}`. Shapes are in data coordinates of the view.
 
-Hash serialization (`sel=`), checked in this order:
-1. If `count ≤ 300` (`IDS_IN_HASH_MAX`): `ids:<comma-separated url-encoded ids>`.
-2. Else if `n ≤ 200000` (`BITS_IN_HASH_MAX_N`): `bits:<base64url(deflate-raw(mask packed LSB-first))>`.
-3. Else: `r:<base64url(deflate-raw(JSON(recipe)))>`. The recipe is replayed on load, after the columns it needs are ensured.
+Hash serialization (`sel=`, IMPLEMENTATION_NOTES 92 and 107). Two candidate forms:
+- Recipe form: `ids:<comma-separated url-encoded ids>` when the recipe is a single `replace` ids op with at most 300 ids (`IDS_IN_HASH_MAX`; `ids:` is the compact spelling of that recipe), else `r:<base64url(deflate-raw(JSON(recipe)))>`. The recipe is replayed on load, after the columns it needs are ensured. The recipe form is empty when the recipe is incomplete (e.g. an index-only ids op whose ids are not cached yet).
+- Bitmask form: `bits:<base64url(deflate-raw(mask packed LSB-first))>`, available when `n ≤ 200000` (`BITS_IN_HASH_MAX_N`).
 
-If a hash would exceed 8000 characters, `sel` is dropped from the hash and the "copy link" action shows a warning.
+Choice:
+1. When a `bits:` form exists, the recipe form competes with it only when the recipe is view-independent (`recipeExact`: every op is an `ids`, `preset`, or `filter` op that carries its filters). The shorter of the two in the URL (length after hash encoding) wins; a tie goes to the recipe. Brush recipes (`rect`/`circle`/`lasso`) depend on the filters in force at load time, so brush selections on catalogs up to 200 000 rows are written as `bits:`.
+2. With no `bits:` form (`n > 200000`), the recipe form is used, brush ops included.
+3. When the recipe form is empty but would be allowed to compete (no `bits:` form, or an exact recipe whose ids cannot all be spelled yet) and at most 300 rows are selected with every id known, `ids:` lists the selected rows; it then competes with `bits:` as in 1.
+4. With neither form, `sel` is empty and the selection stays out of the URL (boot records it as omitted for history navigation).
+
+The choice depends only on the selection (its recipe and mask), so a selection restored from the URL writes the same form before and after a reload. If a hash would exceed 8000 characters (`HASH_MAX_CHARS`), `sel` is dropped from the hash and the "copy link" action shows a warning.
 
 ### 6.4 Hash (`core/hash.js`) and legacy grammars (`core/legacyhash.js`)
 
