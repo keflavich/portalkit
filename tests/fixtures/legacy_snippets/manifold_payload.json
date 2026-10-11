@@ -1,0 +1,192 @@
+{
+ "stars": [
+  {
+   "n": "M0",
+   "obs": "o1",
+   "ra": 266.0,
+   "dec": -29.0,
+   "verdict": "ice"
+  },
+  {
+   "n": "M1",
+   "obs": "o1",
+   "ra": 266.01,
+   "dec": -28.99,
+   "verdict": "noice"
+  },
+  {
+   "n": "M2",
+   "obs": "o1",
+   "ra": 266.02,
+   "dec": -28.98,
+   "verdict": "ice"
+  },
+  {
+   "n": "M3",
+   "obs": "o1",
+   "ra": 266.03,
+   "dec": -28.97,
+   "verdict": "unsure"
+  },
+  {
+   "n": "M4",
+   "obs": "o1",
+   "ra": 266.04,
+   "dec": -28.96,
+   "verdict": "ice"
+  },
+  {
+   "n": "M5",
+   "obs": "o1",
+   "ra": 266.05,
+   "dec": -28.95,
+   "verdict": "noice"
+  },
+  {
+   "n": "M6",
+   "obs": "o1",
+   "ra": 266.06,
+   "dec": -28.94,
+   "verdict": "ice"
+  },
+  {
+   "n": "M7",
+   "obs": "o1",
+   "ra": 266.07,
+   "dec": -28.93,
+   "verdict": "unsure"
+  }
+ ],
+ "dims": [
+  {
+   "key": "tau3",
+   "label": "tau 3um",
+   "unit": "",
+   "group": "ice",
+   "center": 0.5,
+   "scale": 0.2,
+   "range": [
+    0,
+    1.2
+   ],
+   "v": [
+    0.1,
+    0.3,
+    null,
+    0.9,
+    1.1,
+    0.5,
+    0.7,
+    0.2
+   ],
+   "k": [
+    "v",
+    "v",
+    null,
+    "lo",
+    "v",
+    "up",
+    "v",
+    "v"
+   ]
+  },
+  {
+   "key": "co",
+   "label": "CO depth",
+   "group": "ice",
+   "log": true,
+   "center": -1,
+   "scale": -0.5,
+   "range": [
+    -2,
+    0
+   ],
+   "v": [
+    -1.5,
+    -1.2,
+    -0.8,
+    -0.5,
+    -1.9,
+    -1.1,
+    -0.3,
+    -0.7
+   ],
+   "k": null
+  },
+  {
+   "key": "h2o",
+   "label": "H2O",
+   "unit": "1e18 cm-2",
+   "group": "col",
+   "center": 2,
+   "scale": 1,
+   "range": [
+    0,
+    5
+   ],
+   "v": [
+    1,
+    2,
+    3,
+    4,
+    0.5,
+    2.5,
+    3.5,
+    1.5
+   ]
+  }
+ ],
+ "groups": [
+  [
+   "ice",
+   "Ice features"
+  ],
+  [
+   "col",
+   "Columns"
+  ]
+ ],
+ "presets": [
+  {
+   "id": "ax",
+   "code": "A",
+   "name": "tau vs CO",
+   "x": {
+    "tau3": 1
+   },
+   "y": {
+    "co": 1
+   },
+   "color": "verdict"
+  },
+  {
+   "id": "pca",
+   "name": "PCA",
+   "x": {
+    "tau3": 0.7,
+    "co": 0.3
+   },
+   "y": {
+    "h2o": 1,
+    "co": -0.5
+   },
+   "note": "fixed weights"
+  },
+  {
+   "id": "live",
+   "name": "computed",
+   "x": null,
+   "y": null
+  }
+ ],
+ "categories": [
+  {
+   "key": "verdict",
+   "label": "Verdict",
+   "colors": {
+    "ice": "#06c",
+    "noice": "#c60"
+   }
+  }
+ ]
+}

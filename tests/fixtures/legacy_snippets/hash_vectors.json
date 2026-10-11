@@ -1,0 +1,1022 @@
+{
+ "comment": "Shared legacy URL grammar vectors (web/js/core/legacyhash.js and portalkit/legacy/hashmap.py). 'decoded' holds the decoded sel=r: recipes and <pane>.frame vectors; deflate output differs between implementations, so r: values are compared after inflating.",
+ "cases": [
+  {
+   "name": "bare name",
+   "grammars": [
+    "bare-name"
+   ],
+   "loc": {
+    "hash": "#2MASS_J1745-2900"
+   },
+   "hash": {
+    "id": "2MASS_J1745-2900"
+   },
+   "consumedSearch": [],
+   "decoded": {}
+  },
+  {
+   "name": "bare name url-encoded",
+   "grammars": [
+    "specviewer"
+   ],
+   "loc": {
+    "hash": "#src%20one"
+   },
+   "hash": {
+    "id": "src one"
+   },
+   "consumedSearch": [],
+   "decoded": {}
+  },
+  {
+   "name": "bare name skips kv",
+   "grammars": [
+    "bare-name"
+   ],
+   "loc": {
+    "hash": "#name=x"
+   },
+   "hash": {},
+   "consumedSearch": [],
+   "decoded": {}
+  },
+  {
+   "name": "kv-view name+view",
+   "grammars": [
+    "kv-view"
+   ],
+   "loc": {
+    "hash": "#name=W51-12&view=sed"
+   },
+   "hash": {
+    "id": "W51-12",
+    "view": "sed:full"
+   },
+   "consumedSearch": [],
+   "decoded": {}
+  },
+  {
+   "name": "kv-view view with mode",
+   "grammars": [
+    "kv-view"
+   ],
+   "loc": {
+    "hash": "#src=abc&view=sky:max&c=f200w"
+   },
+   "hash": {
+    "view": "sky:max",
+    "c": "f200w",
+    "id": "abc"
+   },
+   "consumedSearch": [],
+   "decoded": {}
+  },
+  {
+   "name": "kv-view canonical untouched",
+   "grammars": [
+    "kv-view"
+   ],
+   "loc": {
+    "hash": "#id=X&c=f200w"
+   },
+   "hash": {},
+   "consumedSearch": [],
+   "decoded": {}
+  },
+  {
+   "name": "first hash grammar wins",
+   "grammars": [
+    "bare-name",
+    "kv-view"
+   ],
+   "loc": {
+    "hash": "#star=s1"
+   },
+   "hash": {
+    "id": "s1"
+   },
+   "consumedSearch": [],
+   "decoded": {}
+  },
+  {
+   "name": "unknown grammar ignored",
+   "grammars": [
+    "nope",
+    "bare-name"
+   ],
+   "loc": {
+    "hash": "#s7"
+   },
+   "hash": {
+    "id": "s7"
+   },
+   "consumedSearch": [],
+   "decoded": {}
+  },
+  {
+   "name": "wavelength compact",
+   "grammars": [
+    "wavelength"
+   ],
+   "loc": {
+    "hash": "#rgb,266.4,-28.9,0.1"
+   },
+   "hash": {
+    "rung": "rgb",
+    "sky": "266.4,-28.9,0.1"
+   },
+   "consumedSearch": [],
+   "decoded": {}
+  },
+  {
+   "name": "wavelength compact no fov",
+   "grammars": [
+    "wavelength"
+   ],
+   "loc": {
+    "hash": "#mir,10.5,-5"
+   },
+   "hash": {
+    "rung": "mir",
+    "sky": "10.5,-5,0.25"
+   },
+   "consumedSearch": [],
+   "decoded": {}
+  },
+  {
+   "name": "wavelength kv + speed",
+   "grammars": [
+    "wavelength"
+   ],
+   "loc": {
+    "hash": "#ra=10&dec=-5&rung=nir",
+    "search": "?speed=2"
+   },
+   "hash": {
+    "rung": "nir",
+    "sky": "10,-5,0.25"
+   },
+   "consumedSearch": [
+    "speed"
+   ],
+   "decoded": {}
+  },
+  {
+   "name": "wavelength speed only on canonical hash",
+   "grammars": [
+    "wavelength"
+   ],
+   "loc": {
+    "hash": "#rung=nir",
+    "search": "?speed=2"
+   },
+   "hash": {},
+   "consumedSearch": [
+    "speed"
+   ],
+   "decoded": {}
+  },
+  {
+   "name": "beat",
+   "grammars": [
+    "beat"
+   ],
+   "loc": {
+    "hash": "#beat=3&x=1"
+   },
+   "hash": {
+    "beat": "3"
+   },
+   "consumedSearch": [],
+   "decoded": {}
+  },
+  {
+   "name": "gallery index",
+   "grammars": [
+    "gallery-index"
+   ],
+   "loc": {
+    "hash": "#012"
+   },
+   "hash": {
+    "lb": "12"
+   },
+   "consumedSearch": [],
+   "decoded": {}
+  },
+  {
+   "name": "gallery img id",
+   "grammars": [
+    "gallery-index"
+   ],
+   "loc": {
+    "hash": "#img=foo_bar"
+   },
+   "hash": {
+    "id": "foo_bar"
+   },
+   "consumedSearch": [],
+   "decoded": {}
+  },
+  {
+   "name": "gallery img set,index",
+   "grammars": [
+    "gallery-index"
+   ],
+   "loc": {
+    "hash": "#img=rgb,3"
+   },
+   "hash": {
+    "lb": "rgb,3"
+   },
+   "consumedSearch": [],
+   "decoded": {}
+  },
+  {
+   "name": "w51 rowid",
+   "grammars": [
+    "w51-rowid"
+   ],
+   "loc": {
+    "hash": "#w51-0012"
+   },
+   "hash": {
+    "id": "W51-0012"
+   },
+   "consumedSearch": [],
+   "decoded": {}
+  },
+  {
+   "name": "w51 rowid miss",
+   "grammars": [
+    "w51-rowid"
+   ],
+   "loc": {
+    "hash": "#x51-0012"
+   },
+   "hash": {},
+   "consumedSearch": [],
+   "decoded": {}
+  },
+  {
+   "name": "gc a/b/m",
+   "grammars": [
+    "gc-query"
+   ],
+   "loc": {
+    "search": "?a=0&b=1&m=2",
+    "dims": [
+     "f115w",
+     "f200w",
+     "f356w",
+     "f444w"
+    ],
+    "ds": "src"
+   },
+   "hash": {
+    "manifold.frame": "b64:AACAPwAAgL8AAAAAAAAAAAAAAAAAAAAAAACAvwAAAAA"
+   },
+   "consumedSearch": [
+    "a",
+    "b",
+    "m"
+   ],
+   "decoded": {
+    "manifold.frame": [
+     1.0,
+     -1.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     -1.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "name": "gc a/b/m scaled",
+   "grammars": [
+    "gc-query"
+   ],
+   "loc": {
+    "search": "?a=0&b=1&m=2",
+    "dims": [
+     {
+      "key": "f115w",
+      "scale": 2.0
+     },
+     {
+      "key": "f200w",
+      "scale": 0.5
+     },
+     "f356w",
+     "f444w"
+    ],
+    "ds": "src",
+    "pane": "mf"
+   },
+   "hash": {
+    "mf.frame": "b64:AAAAQAAAAL8AAAAAAAAAAAAAAAAAAAAAAACAvwAAAAA"
+   },
+   "consumedSearch": [
+    "a",
+    "b",
+    "m"
+   ],
+   "decoded": {
+    "mf.frame": [
+     2.0,
+     -0.5,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     -1.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "name": "gc ccd",
+   "grammars": [
+    "gc-query"
+   ],
+   "loc": {
+    "search": "?p=ccd&x1=0&x2=1&y1=1&y2=3",
+    "dims": [
+     "f115w",
+     "f200w",
+     "f356w",
+     "f444w"
+    ]
+   },
+   "hash": {
+    "manifold.frame": "b64:AACAPwAAgL8AAAAAAAAAAAAAAAAAAIA_AAAAAAAAgL8"
+   },
+   "consumedSearch": [
+    "p",
+    "x1",
+    "x2",
+    "y1",
+    "y2"
+   ],
+   "decoded": {
+    "manifold.frame": [
+     1.0,
+     -1.0,
+     0.0,
+     0.0,
+     0.0,
+     1.0,
+     0.0,
+     -1.0
+    ]
+   }
+  },
+  {
+   "name": "gc y key",
+   "grammars": [
+    "gc-query"
+   ],
+   "loc": {
+    "search": "?y=f356w",
+    "dims": [
+     "f115w",
+     "f200w",
+     "f356w",
+     "f444w"
+    ]
+   },
+   "hash": {
+    "manifold.frame": "b64:AACAPwAAgL8AAAAAAAAAAAAAAAAAAAAAAACAvwAAAAA"
+   },
+   "consumedSearch": [
+    "y"
+   ],
+   "decoded": {
+    "manifold.frame": [
+     1.0,
+     -1.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     -1.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "name": "gc y unknown",
+   "grammars": [
+    "gc-query"
+   ],
+   "loc": {
+    "search": "?y=other",
+    "dims": [
+     "f115w",
+     "f200w",
+     "f356w",
+     "f444w"
+    ]
+   },
+   "hash": {},
+   "consumedSearch": [
+    "y"
+   ],
+   "decoded": {}
+  },
+  {
+   "name": "gc colour by",
+   "grammars": [
+    "gc-query"
+   ],
+   "loc": {
+    "search": "?cb=2",
+    "dims": [
+     "f115w",
+     "f200w",
+     "f356w",
+     "f444w"
+    ]
+   },
+   "hash": {
+    "c": "f356w"
+   },
+   "consumedSearch": [
+    "cb"
+   ],
+   "decoded": {}
+  },
+  {
+   "name": "gc colour none",
+   "grammars": [
+    "gc-query"
+   ],
+   "loc": {
+    "search": "?cb=-1",
+    "dims": [
+     "f115w",
+     "f200w",
+     "f356w",
+     "f444w"
+    ]
+   },
+   "hash": {},
+   "consumedSearch": [
+    "cb"
+   ],
+   "decoded": {}
+  },
+  {
+   "name": "gc cut filter",
+   "grammars": [
+    "gc-query"
+   ],
+   "loc": {
+    "search": "?cd=1&cl=10&ch=20.5",
+    "dims": [
+     "f115w",
+     "f200w",
+     "f356w",
+     "f444w"
+    ],
+    "ds": "src"
+   },
+   "hash": {
+    "f": "eyJyYW5nZXMiOnsiZjIwMHciOlsxMCwyMC41XX19"
+   },
+   "consumedSearch": [
+    "cd",
+    "cl",
+    "ch"
+   ],
+   "decoded": {}
+  },
+  {
+   "name": "gc cut open",
+   "grammars": [
+    "gc-query"
+   ],
+   "loc": {
+    "search": "?cd=0&ch=1.25e-8",
+    "dims": [
+     "f115w",
+     "f200w",
+     "f356w",
+     "f444w"
+    ],
+    "ds": "src"
+   },
+   "hash": {
+    "f": "eyJyYW5nZXMiOnsiZjExNXciOlstMWUrMzAwLDEuMjVlLThdfX0"
+   },
+   "consumedSearch": [
+    "cd",
+    "ch"
+   ],
+   "decoded": {}
+  },
+  {
+   "name": "gc cut highlight",
+   "grammars": [
+    "gc-query"
+   ],
+   "loc": {
+    "search": "?cd=1&cm=h&cl=10",
+    "dims": [
+     "f115w",
+     "f200w",
+     "f356w",
+     "f444w"
+    ],
+    "ds": "src"
+   },
+   "hash": {
+    "sel": "r:i65Wyi9QslIqSi3ISUxOVdJRys7MSwEKpGXmlKQWAfllmanlSlbVSinFQNHiomSlWh2oZDFIuCgxLz0VzEozMjAAqow2NNAxTNU2NjCIra2tjQUA"
+   },
+   "consumedSearch": [
+    "cd",
+    "cm",
+    "cl"
+   ],
+   "decoded": {
+    "sel": [
+     {
+      "op": "replace",
+      "kind": "filter",
+      "view": {
+       "ds": "src"
+      },
+      "filters": {
+       "ranges": {
+        "f200w": [
+         10,
+         1e+300
+        ]
+       }
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "gc rv",
+   "grammars": [
+    "gc-query"
+   ],
+   "loc": {
+    "search": "?rv=5.5&g=1&fa=2"
+   },
+   "hash": {
+    "rv": "5.5"
+   },
+   "consumedSearch": [
+    "rv",
+    "g",
+    "fa"
+   ],
+   "decoded": {}
+  },
+  {
+   "name": "gc rv=1 left",
+   "grammars": [
+    "gc-query"
+   ],
+   "loc": {
+    "search": "?rv=1"
+   },
+   "hash": {},
+   "consumedSearch": [
+    "rv"
+   ],
+   "decoded": {}
+  },
+  {
+   "name": "gc sel radec",
+   "grammars": [
+    "gc-query"
+   ],
+   "loc": {
+    "search": "?sel=266.1,-29",
+    "dims": [
+     "f115w",
+     "f200w",
+     "f356w",
+     "f444w"
+    ],
+    "ds": "src"
+   },
+   "hash": {
+    "sel": "r:dYvBCsMgEET_Zc42aEI0-islB1mFSkMrCm1C8N-7Hgq9dE8z781eTzwzHErMm6cIgXt6BAaUCm29v1J8w50IlWktxGjvD57DwSFEQhOoN59j3xHbUetBCRD7y2gFCpwcpJRqXoy1ymhpp1lpw2b_r46vmpbfs62tHw"
+   },
+   "consumedSearch": [
+    "sel"
+   ],
+   "decoded": {
+    "sel": [
+     {
+      "op": "replace",
+      "kind": "circle",
+      "view": {
+       "ds": "src",
+       "x": "ra",
+       "y": "dec"
+      },
+      "shape": {
+       "cx": 266.1,
+       "cy": -29,
+       "r": 0.0001587991760935167,
+       "rx": 0.0001587991760935167,
+       "ry": 0.0001388888888888889
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "gc sel encoded",
+   "grammars": [
+    "gc-query"
+   ],
+   "loc": {
+    "search": "?sel=ids:abc",
+    "dims": [
+     "f115w",
+     "f200w",
+     "f356w",
+     "f444w"
+    ]
+   },
+   "hash": {
+    "sel": "ids:abc"
+   },
+   "consumedSearch": [
+    "sel"
+   ],
+   "decoded": {}
+  },
+  {
+   "name": "gc dims from page",
+   "grammars": [
+    "gc-query"
+   ],
+   "loc": {
+    "search": "?a=0&b=2&m=1&cb=1",
+    "page": {
+     "layout": {
+      "row": [
+       {
+        "pane": "sky",
+        "id": "sky"
+       },
+       {
+        "col": [
+         {
+          "pane": "manifold",
+          "id": "man",
+          "dataset": "gc",
+          "options": {
+           "dims": [
+            "a1",
+            "a2",
+            "a3"
+           ]
+          }
+         }
+        ]
+       }
+      ]
+     },
+     "datasets": {
+      "gc": {}
+     }
+    }
+   },
+   "hash": {
+    "man.frame": "b64:AACAPwAAAAAAAIC_AAAAAAAAgL8AAAAA",
+    "c": "a2"
+   },
+   "consumedSearch": [
+    "a",
+    "b",
+    "m",
+    "cb"
+   ],
+   "decoded": {
+    "man.frame": [
+     1.0,
+     0.0,
+     -1.0,
+     0.0,
+     -1.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "name": "gc + hash",
+   "grammars": [
+    "bare-name",
+    "gc-query"
+   ],
+   "loc": {
+    "hash": "#s1",
+    "search": "?cb=0",
+    "dims": [
+     "f115w",
+     "f200w",
+     "f356w",
+     "f444w"
+    ]
+   },
+   "hash": {
+    "id": "s1",
+    "c": "f115w"
+   },
+   "consumedSearch": [
+    "cb"
+   ],
+   "decoded": {}
+  },
+  {
+   "name": "gc unmapped index",
+   "grammars": [
+    "gc-query"
+   ],
+   "loc": {
+    "search": "?a=0&b=9&m=1",
+    "dims": [
+     "f115w",
+     "f200w",
+     "f356w",
+     "f444w"
+    ]
+   },
+   "hash": {},
+   "consumedSearch": [],
+   "decoded": {}
+  },
+  {
+   "name": "bare name keeps plus",
+   "grammars": [
+    "bare-name"
+   ],
+   "loc": {
+    "hash": "#IRAS_04381+2540_683"
+   },
+   "hash": {
+    "id": "IRAS_04381+2540_683"
+   },
+   "consumedSearch": [],
+   "decoded": {}
+  },
+  {
+   "name": "specviewer keeps plus",
+   "grammars": [
+    "specviewer"
+   ],
+   "loc": {
+    "hash": "#W51-JW-J192338.573+143122.70"
+   },
+   "hash": {
+    "id": "W51-JW-J192338.573+143122.70"
+   },
+   "consumedSearch": [],
+   "decoded": {}
+  },
+  {
+   "name": "bare name percent plus",
+   "grammars": [
+    "bare-name"
+   ],
+   "loc": {
+    "hash": "#2MASS_J18285266%2B0028242_13"
+   },
+   "hash": {
+    "id": "2MASS_J18285266+0028242_13"
+   },
+   "consumedSearch": [],
+   "decoded": {}
+  },
+  {
+   "name": "kv-view URLSearchParams plus",
+   "grammars": [
+    "kv-view"
+   ],
+   "loc": {
+    "hash": "#star=IRAS_04381%2B2540_683&c=a+b"
+   },
+   "hash": {
+    "c": "a b",
+    "id": "IRAS_04381+2540_683"
+   },
+   "consumedSearch": [],
+   "decoded": {}
+  },
+  {
+   "name": "kv-view manifold preset",
+   "grammars": [
+    "kv-view"
+   ],
+   "loc": {
+    "hash": "#view=pca&c=verdict&star=S1",
+    "page": {
+     "layout": {
+      "row": [
+       {
+        "pane": "manifold",
+        "id": "m",
+        "dataset": "src",
+        "options": {
+         "dims": [
+          "f115w",
+          "f200w",
+          "f356w",
+          "f444w"
+         ]
+        }
+       },
+       {
+        "pane": "spectrum",
+        "id": "sed"
+       }
+      ]
+     }
+    }
+   },
+   "hash": {
+    "c": "verdict",
+    "id": "S1",
+    "m.frame": "pca"
+   },
+   "consumedSearch": [],
+   "decoded": {}
+  },
+  {
+   "name": "kv-view pane popout with page",
+   "grammars": [
+    "kv-view"
+   ],
+   "loc": {
+    "hash": "#name=S2&view=sed",
+    "page": {
+     "layout": {
+      "row": [
+       {
+        "pane": "manifold",
+        "id": "m",
+        "dataset": "src",
+        "options": {
+         "dims": [
+          "f115w",
+          "f200w",
+          "f356w",
+          "f444w"
+         ]
+        }
+       },
+       {
+        "pane": "spectrum",
+        "id": "sed"
+       }
+      ]
+     }
+    }
+   },
+   "hash": {
+    "id": "S2",
+    "view": "sed:full"
+   },
+   "consumedSearch": [],
+   "decoded": {}
+  },
+  {
+   "name": "kv-view axes x/y",
+   "grammars": [
+    "kv-view"
+   ],
+   "loc": {
+    "hash": "#x=f200w&y=f444w&star=S1",
+    "page": {
+     "layout": {
+      "row": [
+       {
+        "pane": "manifold",
+        "id": "m",
+        "dataset": "src",
+        "options": {
+         "dims": [
+          "f115w",
+          "f200w",
+          "f356w",
+          "f444w"
+         ]
+        }
+       },
+       {
+        "pane": "spectrum",
+        "id": "sed"
+       }
+      ]
+     }
+    }
+   },
+   "hash": {
+    "id": "S1",
+    "m.frame": "b64:AAAAAAAAgD8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAgD8"
+   },
+   "consumedSearch": [],
+   "decoded": {
+    "m.frame": [
+     0.0,
+     1.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   }
+  },
+  {
+   "name": "kv-view axes unknown dims",
+   "grammars": [
+    "kv-view"
+   ],
+   "loc": {
+    "hash": "#x=f200w&y=f444w&star=S1",
+    "page": {
+     "layout": {
+      "row": [
+       {
+        "pane": "manifold",
+        "id": "m",
+        "dataset": "gc"
+       }
+      ]
+     }
+    }
+   },
+   "hash": {
+    "id": "S1"
+   },
+   "consumedSearch": [],
+   "decoded": {}
+  },
+  {
+   "name": "gc y no dims",
+   "grammars": [
+    "gc-query"
+   ],
+   "loc": {
+    "search": "?y=f480m&rv=1",
+    "page": {
+     "layout": {
+      "row": [
+       {
+        "pane": "manifold",
+        "id": "m",
+        "dataset": "gc"
+       }
+      ]
+     }
+    }
+   },
+   "hash": {},
+   "consumedSearch": [
+    "rv"
+   ],
+   "decoded": {}
+  },
+  {
+   "name": "gc group dims left in URL",
+   "grammars": [
+    "gc-query"
+   ],
+   "loc": {
+    "search": "?a=0&b=1&m=1&cb=0&cd=1&cl=2",
+    "page": {
+     "layout": {
+      "row": [
+       {
+        "pane": "manifold",
+        "id": "m",
+        "dataset": "gc",
+        "options": {
+         "dims": "group:mags"
+        }
+       }
+      ]
+     }
+    }
+   },
+   "hash": {},
+   "consumedSearch": [],
+   "decoded": {}
+  }
+ ]
+}
