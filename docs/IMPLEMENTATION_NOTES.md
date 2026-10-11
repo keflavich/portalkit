@@ -239,3 +239,37 @@ starting.
     WP12 measurement, 1M brush commit 1.35 s and 1M pan settle 0.48 s met budget; 50k (T1) pan settle 6.6 s and 1M
     first-paint bytes 2.95 MB (startup fetch of `ids` 5.0 MB and one full column) missed. `PK_PERF_SCALE` scales time
     budgets only.
+98. **Head chunk.** For a catalog with `n > LOD_MIN_N`, the manifest carries `chunk_starts`: the first row of each
+    chunk, `[0, LOD_BASE, LOD_BASE + CHUNK_ROWS, LOD_BASE + 2*CHUNK_ROWS, ...]` (strictly increasing, every value < n).
+    Every column then uses `chunk_files` and the ids use `ids.chunks`, with one file per entry of `chunk_starts`, so
+    chunk 0 holds exactly the LOD base sample (rows `[0, LOD_BASE)`). Without `chunk_starts`, chunks are
+    `ceil(n / chunk_rows)` slices of `chunk_rows` rows (unchanged). pos stays a single file. Readers (worker
+    `chunksFor`, prefix loads, `id(i)`, `record(i)`) derive chunk ranges from `chunk_starts` when present.
+99. **Startup reads.** No pane loads a whole column, the ids or pos before first paint. The list paints its first screen
+    from `client.rows(first, last)` (row chunks, or the head chunks when there are no row chunks) and loads full
+    columns on sort, filter or colour-by, or after first paint. Hover cards read one row with `client.record(i)`.
+    Sky markers load pos after first paint. Worker `record(i)` and `id(i)` load only the chunk that holds row i;
+    find/query/export/order load all ids.
+100. **First paint signal.** `app.afterFirstPaint()` returns a promise that resolves once, after the `ready` event, when
+    no visible pane is loading, at the next idle callback (timeout 1500 ms). Deferred loads wait on it.
+101. **Worker manifest prefetch.** `DataClient` starts the worker as `data.worker.js?m=<encodeURIComponent(manifest
+    url)>`; the worker fetches the manifest from top-level code and `open` reuses that in-flight promise.
+102. **Id resolution.** `DataClient.resolveIds(ids, {aliases})` returns an Int32Array of rows (-1 when missing) from one
+    worker pass; `app.resolveIds` and `app.importCsv` use it.
+103. **Canvas 2D density images.** Scratch canvases are created with `getContext('2d', {willReadFrequently: true})`
+    (CPU-backed; a GPU-backed `putImageData` stalls SwiftShader for seconds). The colourised image is cached per
+    `(grid.counts, cmap, lo, hi, log)` so redraws only call `drawImage`. Applies to canvas2d.js and spectrum2d.js.
+104. **default_off round trip.** `ui/legend.js toggleLevel` keeps `cats[key] = []` (explicit "all levels on") for
+    columns with `default_off`; `core/hash.js` keeps `cats` entries whose value is `[]`, so `f=` carries them.
+105. **Record channels** (replaces the wording of 73): `record(i, {channel})` is canonical (`record(ds, i, opts)` is
+    accepted); channels are per pane, named `<pane type>:<pane id>`.
+106. **Pane titles** (replaces 77): `options.title` seeds every pane title; `ctx.setTitle` is used by panes whose title
+    follows the focused record (detail). Other panes keep the seeded title.
+107. **Selection hash form** (refines 92): when a `bits:` form exists, the recipe form (`ids:` or `r:`) competes with it
+    only when the recipe is view-independent (ids, preset, or filter ops); the shorter URL wins and a tie goes to the
+    recipe. `ids:` is the compact spelling of a single replace-ids recipe. Brushes on catalogs up to 200k rows encode
+    as `bits:`.
+108. **Widget CSS.** Shared widget rules (`.pk-models`, `.pk-ctl-group`, `.pk-ctl-template`, `.pk-template-scale`,
+    `.pk-feat-chip`, `.pk-feat-toggles`) live only in `css/panes/ui.css`, which boot always loads.
+109. **Aladin prefetch.** A failed fire-and-forget prefetch does not poison later loads: the first sky pane that mounts
+    after a failed prefetch retries once (`loadAladin({retry:true})`).

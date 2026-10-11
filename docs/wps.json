@@ -771,5 +771,71 @@
    "tests/data/"
   ],
   "description": "Implement IMPLEMENTATION_NOTES 94 (browser fixtures move to tests/conftest_browser.py, registered as a plugin by tests/e2e/conftest.py and tests/perf/conftest.py so '-m \"e2e or perf\"' shares one Playwright; synthetic fixture reuse stamp hashes portalkit/**/*.py and web/** plus the generator). Fix: test_av_moves_template_and_isochrones must not use tpl=- and must use pane stats() not h.view(); chromium launched with --disable-accelerated-2d-canvas; screenshot comparisons hash canvas.toDataURL or use a longer timeout; the blocked-CDN fallback test ignores its expected console error. Add synthetic pages: a hist page and an uncollapsed scatter page. Replace the contract-issue xfails with real assertions for notes 81, 88, 89, 90, 91, 92, 93 (they will pass once WPI1-WPI5 land; the orchestrator runs them at gate G2)."
+ },
+ {
+  "id": "WPB1",
+  "title": "Perf: canvas2d density uploads, list/hover/sky startup reads",
+  "depends_on": [],
+  "files": [
+   "web/js/plot/canvas2d.js",
+   "web/js/panes/spectrum2d.js",
+   "web/js/ui/hover.js",
+   "web/js/panes/list.js",
+   "web/js/sky/markers.js",
+   "tests/js/listpanes.test.mjs",
+   "tests/js/canvas2d.test.mjs"
+  ],
+  "description": "Implement IMPLEMENTATION_NOTES 99 and 103 (consume 100 via app.afterFirstPaint()). canvas2d.js drawDensityGrid: CPU-backed scratch context (willReadFrequently) and a cache of the colourised canvas keyed by (grid.counts, cmap, lo, hi, log), so each redraw is one drawImage; same in spectrum2d.js. hover.js reads the hovered row with client.record(i), never values(). list.js paints its first screen from client.rows(first,last) and loads full columns (pickHoverColumns etc.) on sort/filter/colour or after app.afterFirstPaint(); id cells come from the rows payload, not client.id(i) per row. sky/markers.js defers its ra/dec values() load until app.afterFirstPaint(). Evidence for each cause is in the perf diagnosis (scratchpad/unify/perfdiag/, report quoted in the run's extra notes)."
+ },
+ {
+  "id": "WPB2",
+  "title": "Perf: worker chunked ids/record, chunk_starts, manifest prefetch, resolveIds, afterFirstPaint",
+  "depends_on": [],
+  "files": [
+   "web/js/data/",
+   "web/js/workers/",
+   "web/js/core/boot.js",
+   "tests/js/client.test.mjs",
+   "tests/js/order.test.mjs",
+   "tests/js/codec.test.mjs",
+   "tests/js/records.test.mjs",
+   "tests/js/chunks.test.mjs"
+  ],
+  "description": "Implement IMPLEMENTATION_NOTES 98 (reader side: chunk ranges from manifest chunk_starts in chunksFor, prefix loads, id(i), record(i); fall back to ceil(n/chunk_rows) without it), 99 (worker record(i) does not call ensureIds when the row chunk carries id; id(i)/record(i) load only the ids chunk holding row i; find/query/export/order load all), 100 (boot.js app.afterFirstPaint()), 101 (worker manifest prefetch via ?m= query, open reuses the in-flight promise), 102 (DataClient.resolveIds one-pass worker op; boot.js app.resolveIds/importCsv use it instead of exporting the whole id list). Unit tests with synthetic chunk_starts manifests (write fixtures with portalkit.bundle where possible, or hand-built gz files)."
+ },
+ {
+  "id": "WPB3",
+  "title": "Perf: bundle head chunk (chunk_starts), schema, first-paint ledger",
+  "depends_on": [
+   "WPI5"
+  ],
+  "files": [
+   "portalkit/bundle/",
+   "portalkit/schema.py",
+   "docs/bundle.md",
+   "tests/py/test_catalog_bundle.py",
+   "tests/py/test_schema.py",
+   "tests/golden/"
+  ],
+  "description": "Implement IMPLEMENTATION_NOTES 98 on the writer side: for n > LOD_MIN_N write chunk_starts and split every column and the ids at [0, LOD_BASE) + CHUNK_ROWS slices; schema.py validates chunk_starts (strictly increasing ints starting at 0, last < n, len == number of chunk files for every chunked column and ids.chunks) and keeps the old ceil(n/chunk_rows) rule when it is absent. Update the first-paint ledger to count what first paint now reads (manifest, density grid, rows/r0000 or the head chunks of the list's visible columns and ids). Update docs/bundle.md and any goldens; Python readers in portalkit (codec/decoders used by tests and tools) must handle chunk_starts."
+ },
+ {
+  "id": "WPB4",
+  "title": "Cleanup: default_off round trip, widget CSS, Aladin prefetch retry",
+  "depends_on": [],
+  "files": [
+   "web/js/ui/legend.js",
+   "web/js/core/hash.js",
+   "web/css/panes/ui.css",
+   "web/css/panes/sed.css",
+   "web/css/panes/spectrum.css",
+   "web/css/panes/controls.css",
+   "web/js/core/registry.js",
+   "web/js/sky/aladin.js",
+   "web/js/panes/sky.js",
+   "tests/js/hash.test.mjs",
+   "tests/js/plotpanes.test.mjs"
+  ],
+  "description": "Implement IMPLEMENTATION_NOTES 104 (legend toggleLevel keeps cats[key]=[] for default_off columns; hash.js keeps cats entries equal to []; round-trip tests through stateToHash/hashToState and hub default_off), 108 (move the shared widget rules into ui.css and remove the copies from sed.css, spectrum.css and controls.css; registry PANE_CSS stays consistent), 109 (a failed Aladin prefetch is retried once by the first sky pane that mounts)."
  }
 ]
