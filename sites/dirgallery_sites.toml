@@ -1,0 +1,345 @@
+# Directory galleries (WP23; ARCHITECTURE.md sections 9 and 14.8, wave 2).
+# One adapter (adapters/dirgallery_sites.py, registry GALLERIES) ports the legacy jQuery/autoindex
+# gallery*.html pages: each unified gallery page covers one directory family and every legacy page
+# of that family is a facet preset of it. The `preset` strings below are the `fac=<base64url JSON>`
+# hashes of those facet selections (tests/adapters/test_dirgallery_sites.py checks that they equal
+# the registry's).
+# replace: only the brick_2221 pages may be stubbed by --replace (adapters STUB_PORTALS; port table
+# "redirect stub only under --replace"). The critic's galleries and the robitaille pages stay
+# untouched (port table "legacy files untouched"), and a legacy path with a symlink component
+# under legacy_dir is never stubbed: those files carry replace = false and stay live.
+# Each portal declares its visibility and an explicit target_dir served under that visibility.
+#
+# Directories considered and their owner (ported here unless named otherwise):
+# /orange/adamginsburg/jwst/w51 (secure): gallery.html, jpgs/, plots/cmds/             portal w51
+# web/public/jwst/w51/pngs, pngs_140, pngs_480, pngs_2100 (symlinks into jwst/w51)     portal w51_public
+# web/public/t.yoo/alma_matched_seds, ccd_branches/ccds, protopop (-> /orange/.../w51)   portal w51_public
+# jwst/w51/sed_fitting/plots/lowers, uppers: legacy galleries match 0 files             not ported (empty)
+# /orange/adamginsburg/jwst/sgrb2: pngs, pngs_150, pngs_466, jpgs                      portal sgrb2
+# jwst/sgrb2/portal/*, NB/psfs/index.html                                              sgrb2 family / not a gallery
+# web/public/jwst/brick_2221/ccds_cmds (5 pages), nirspec_6927/gallery.html            portal brick_2221
+# web/public/jwst/brick_2221/cloudc -> /blue/.../jwst/cloudc/images                    portal brick_2221
+# web/public/jwst/brick_2221/sed_figures_f1500w_all, sed_figures_top100_f1500w         WP26 (sickle_brick)
+# /orange/adamginsburg/jwst/brick: figures (9 pages), ccds_cmds (2), sed_plots, images,
+#     catalog_comparison_diagnostics (+ nrca_rezoom, nrcb_rezoom), F200W/pipeline (6),
+#     paper_co/fig9s + paper_co/figures (2 + 2; PNGs only, fig9s PDFs are not images)  portal brick
+# jwst/brick/alma/.../*.admit/index.html                                               ADMIT product, not a gallery
+# /blue/adamginsburg/adamginsburg/jwst/cloudc/F405N/pipeline                            portal cloudc
+# /orange/adamginsburg/jwst/wd2: pngs, controlfield/pngs (+ empty controlfield page)   portal wd2
+# web/public/jwst/wd2/nirspec_2640: wd2_sedgallery.html / pngs gallery_2640*.html      WP24 / WP25
+# /orange/adamginsburg/westerlund/wd1/pngs (served as jwst/wd1)                        portal wd1
+# /orange/adamginsburg/jwst/jdat_notebooks/gallery.html: /.jpg$/ matches 0 files       not ported (empty)
+# /orange/adamginsburg/robitaille_models/modelgrids: imaging_run/png_b, ccds           portal robitaille_modelgrids
+# modelgrids/imaging_run/png (web/public/robitaille_models/imaging)                    WP21 (robitaille)
+# jwst/spectra/nirspec_6927/pngs/gallery_6927*.html                                    WP22 (nirspec6927)
+# jwst/spectra/mastDownload/JWST/gallery*.html (11 archive galleries)                  WP28 (jwst_archive)
+# gc-treasury/jw-jw-pms-2026/figures_v6 (different template, not in the critic list)  not ported
+
+family = "dirgallery_sites"
+adapter = "adapters.dirgallery_sites:ADAPTER"
+tier_default = "B"
+
+# ============================================================================================
+# Served as web/secure/jwst/w51 (web/secure/jwst -> /orange/adamginsburg/jwst).
+[[portal]]
+id = "w51"
+title = "W51 JWST galleries"
+visibility = "secure"
+legacy_dir = "/orange/adamginsburg/jwst/w51"
+target_dir = "/orange/adamginsburg/jwst/w51/unified/dirgallery_sites"
+url = "https://data.rc.ufl.edu/secure/adamginsburg/jwst/w51/unified/dirgallery_sites/"
+
+[[portal.page]]
+id = "index"
+
+[[portal.page]]
+id = "w51_images"
+legacy = [
+    { file = "gallery.html", replace = false },
+]
+
+[[portal.page]]
+id = "w51_jpgs"
+legacy = [
+    { file = "jpgs/gallery.html", replace = false },
+]
+
+[[portal.page]]
+id = "w51_cmds"
+legacy = [
+    { file = "plots/cmds/gallery.html", replace = false },
+]
+
+# ============================================================================================
+# Legacy pages reached through public symlinks: web/public/jwst/w51/pngs* -> web/secure/jwst/w51/pngs*
+# and web/public/t.yoo/{alma_matched_seds,ccd_branches,protopop} -> /orange/adamginsburg/w51/...;
+# deploy refuses to stub a legacy path with a symlink component; every file is replace = false.
+[[portal]]
+id = "w51_public"
+title = "W51 public galleries"
+visibility = "public"
+legacy_dir = "/orange/adamginsburg/web/public"
+target_dir = "/orange/adamginsburg/web/public/jwst/w51/unified/dirgallery_sites"
+url = "https://data.rc.ufl.edu/pub/adamginsburg/jwst/w51/unified/dirgallery_sites/"
+
+[[portal.page]]
+id = "index"
+
+[[portal.page]]
+id = "w51_rgb"
+legacy = [
+    { file = "jwst/w51/pngs/gallery.html", preset = "fac=eyJkaXIiOlsicG5ncyJdfQ", replace = false },
+    { file = "jwst/w51/pngs_140/gallery.html", preset = "fac=eyJkaXIiOlsicG5nc18xNDAiXX0", replace = false },
+    { file = "jwst/w51/pngs_480/gallery.html", preset = "fac=eyJkaXIiOlsicG5nc180ODAiXX0", replace = false },
+    { file = "jwst/w51/pngs_2100/gallery.html", preset = "fac=eyJkaXIiOlsicG5nc18yMTAwIl19", replace = false },
+    { file = "jwst/w51/pngs_2100/gallery_noalma.html", preset = "fac=eyJkaXIiOlsicG5nc18yMTAwIl0sImdfbm9hbG1hIjpbInllcyJdfQ", replace = false },
+]
+
+[[portal.page]]
+id = "w51_seds"
+legacy = [
+    { file = "t.yoo/alma_matched_seds/gallery.html", replace = false },
+]
+
+[[portal.page]]
+id = "w51_ccd_branches"
+legacy = [
+    { file = "t.yoo/ccd_branches/ccds/gallery.html", replace = false },
+]
+
+[[portal.page]]
+id = "w51_protopop"
+legacy = [
+    { file = "t.yoo/protopop/gallery.html", replace = false },
+]
+
+# ============================================================================================
+# Served publicly (web/public/jwst/sgrb2) and under web/secure/jwst (exposure "both");
+# the sgrb2 family (WP20) owns jwst/sgrb2/portal.
+[[portal]]
+id = "sgrb2"
+title = "Sgr B2 JWST galleries"
+visibility = "public"
+legacy_dir = "/orange/adamginsburg/jwst/sgrb2"
+target_dir = "/orange/adamginsburg/jwst/sgrb2/unified/dirgallery_sites"
+url = "https://data.rc.ufl.edu/pub/adamginsburg/jwst/sgrb2/unified/dirgallery_sites/"
+
+[[portal.page]]
+id = "index"
+
+[[portal.page]]
+id = "sgrb2_rgb"
+legacy = [
+    { file = "pngs/gallery.html", preset = "fac=eyJkaXIiOlsicG5ncyJdfQ", replace = false },
+    { file = "pngs_150/gallery.html", preset = "fac=eyJkaXIiOlsicG5nc18xNTAiXX0", replace = false },
+    { file = "pngs_466/gallery.html", preset = "fac=eyJkaXIiOlsicG5nc180NjYiXX0", replace = false },
+]
+
+[[portal.page]]
+id = "sgrb2_jpgs"
+legacy = [
+    { file = "jpgs/gallery.html", replace = false },
+]
+
+# ============================================================================================
+# Public page set: links the secure NIRSpec 6927 portal by URL only and holds no secure data.
+# The only portal whose legacy pages --replace may stub (ccds_cmds: "redirect stub only under
+# --replace"); cloudc -> /orange/adamginsburg/jwst/cloudc/images is a symlink: replace = false.
+# sed_figures_f1500w_all and sed_figures_top100_f1500w belong to WP26 (sickle_brick).
+[[portal]]
+id = "brick_2221"
+title = "Brick JWST public galleries"
+visibility = "public"
+legacy_dir = "/orange/adamginsburg/web/public/jwst/brick_2221"
+target_dir = "/orange/adamginsburg/web/public/jwst/brick_2221/unified/dirgallery_sites"
+url = "https://data.rc.ufl.edu/pub/adamginsburg/jwst/brick_2221/unified/dirgallery_sites/"
+
+[[portal.page]]
+id = "index"
+
+[[portal.page]]
+id = "ccds_cmds"
+legacy = [
+    { file = "ccds_cmds/gallery.html" },
+    { file = "ccds_cmds/gallery_cmd.html", preset = "fac=eyJnX2NtZCI6WyJ5ZXMiXX0" },
+    { file = "ccds_cmds/gallery_cmd_iso.html", preset = "fac=eyJnX2NtZF9pc28iOlsieWVzIl19" },
+    { file = "ccds_cmds/gallery_cmd_lowext.html", preset = "fac=eyJnX2NtZF9sb3dleHQiOlsieWVzIl19" },
+    { file = "ccds_cmds/gallery_blue405410.html", preset = "fac=eyJnX2JsdWU0MDU0MTAiOlsieWVzIl19" },
+]
+
+[[portal.page]]
+id = "nirspec6927_seds"
+legacy = [
+    { file = "nirspec_6927/gallery.html" },
+]
+
+[[portal.page]]
+id = "cloudc_images"
+legacy = [
+    { file = "cloudc/gallery.html", replace = false },
+]
+
+# ============================================================================================
+# Served as web/secure/jwst/brick. Not ported: alma/.../*.admit/index.html (ADMIT products).
+[[portal]]
+id = "brick"
+title = "Brick JWST working galleries"
+visibility = "secure"
+legacy_dir = "/orange/adamginsburg/jwst/brick"
+target_dir = "/orange/adamginsburg/jwst/brick/unified/dirgallery_sites"
+url = "https://data.rc.ufl.edu/secure/adamginsburg/jwst/brick/unified/dirgallery_sites/"
+
+[[portal.page]]
+id = "index"
+
+[[portal.page]]
+id = "brick_figures"
+legacy = [
+    { file = "figures/gallery.html", replace = false },
+    { file = "figures/gallery_CCD_with_ice.html", preset = "fac=eyJnX2NjZF93aXRoX2ljZSI6WyJ5ZXMiXX0", replace = false },
+    { file = "figures/gallery_CCD_with_ice_ch3.html", preset = "fac=eyJnX2NjZF93aXRoX2ljZV9jaDMiOlsieWVzIl19", replace = false },
+    { file = "figures/gallery_CCD_with_ice_withcloudc.html", preset = "fac=eyJnX2NjZF93aXRoX2ljZV93aXRoY2xvdWRjIjpbInllcyJdfQ", replace = false },
+    { file = "figures/gallery_CCD_without_ice.html", preset = "fac=eyJnX2NjZF93aXRob3V0X2ljZSI6WyJ5ZXMiXX0", replace = false },
+    { file = "figures/gallery_colorcolorcolor.html", preset = "fac=eyJnX2NvbG9yY29sb3Jjb2xvciI6WyJ5ZXMiXX0", replace = false },
+    { file = "figures/gallery_colorcolorcolor_withcloudc.html", preset = "fac=eyJnX2NvbG9yY29sb3Jjb2xvcl93aXRoY2xvdWRjIjpbInllcyJdfQ", replace = false },
+    { file = "figures/gallery_hist.html", preset = "fac=eyJnX2hpc3QiOlsieWVzIl19", replace = false },
+    { file = "figures/gallery_hist_av.html", preset = "fac=eyJnX2hpc3RfYXYiOlsieWVzIl19", replace = false },
+]
+
+[[portal.page]]
+id = "brick_ccds_cmds"
+legacy = [
+    { file = "ccds_cmds/gallery.html", replace = false },
+    { file = "ccds_cmds/gallery_blue405410.html", preset = "fac=eyJnX2JsdWU0MDU0MTAiOlsieWVzIl19", replace = false },
+]
+
+[[portal.page]]
+id = "brick_sed_plots"
+legacy = [
+    { file = "sed_plots/gallery.html", replace = false },
+]
+
+[[portal.page]]
+id = "brick_images"
+legacy = [
+    { file = "images/gallery.html", replace = false },
+]
+
+[[portal.page]]
+id = "brick_diagnostics"
+legacy = [
+    { file = "catalog_comparison_diagnostics/gallery.html", preset = "fac=eyJkaXIiOlsidG9wIl19", replace = false },
+    { file = "catalog_comparison_diagnostics/nrca_rezoom/gallery.html", preset = "fac=eyJkaXIiOlsibnJjYV9yZXpvb20iXX0", replace = false },
+    { file = "catalog_comparison_diagnostics/nrcb_rezoom/gallery.html", preset = "fac=eyJkaXIiOlsibnJjYl9yZXpvb20iXX0", replace = false },
+]
+
+[[portal.page]]
+id = "brick_f200w_pipeline"
+legacy = [
+    { file = "F200W/pipeline/gallery.html", replace = false },
+    { file = "F200W/pipeline/gallery_DarkZoneNRCA.html", preset = "fac=eyJnX2Rhcmt6b25lbnJjYSI6WyJ5ZXMiXX0", replace = false },
+    { file = "F200W/pipeline/gallery_DarkZoneNRCB.html", preset = "fac=eyJnX2Rhcmt6b25lbnJjYiI6WyJ5ZXMiXX0", replace = false },
+    { file = "F200W/pipeline/gallery_NRCA_rezoom.html", preset = "fac=eyJnX25yY2FfcmV6b29tIjpbInllcyJdfQ", replace = false },
+    { file = "F200W/pipeline/gallery_NRCB_rezoom.html", preset = "fac=eyJnX25yY2JfcmV6b29tIjpbInllcyJdfQ", replace = false },
+    { file = "F200W/pipeline/gallery_VeryBrightStar.html", preset = "fac=eyJnX3ZlcnlicmlnaHRzdGFyIjpbInllcyJdfQ", replace = false },
+]
+
+[[portal.page]]
+id = "brick_paper_co"
+legacy = [
+    { file = "paper_co/fig9s/gallery.html", preset = "fac=eyJkaXIiOlsiZmlnOXMiXX0", replace = false },
+    { file = "paper_co/fig9s/gallery_h2ococo2_1011.html", preset = "fac=eyJkaXIiOlsiZmlnOXMiXSwiZ19oMm9jb2NvMl8xMDExIjpbInllcyJdfQ", replace = false },
+    { file = "paper_co/figures/gallery.html", preset = "fac=eyJkaXIiOlsiZmlndXJlcyJdfQ", replace = false },
+    { file = "paper_co/figures/gallery_h2ococo2_1011.html", preset = "fac=eyJkaXIiOlsiZmlndXJlcyJdLCJnX2gyb2NvY28yXzEwMTEiOlsieWVzIl19", replace = false },
+]
+
+# ============================================================================================
+# Served as web/secure/jwst/cloudc (/orange/adamginsburg/jwst/cloudc -> /blue/.../jwst/cloudc);
+# legacy_dir is the physical directory so deploy sees no symlink component.
+[[portal]]
+id = "cloudc"
+title = "Cloud C JWST galleries"
+visibility = "secure"
+legacy_dir = "/blue/adamginsburg/adamginsburg/jwst/cloudc"
+target_dir = "/blue/adamginsburg/adamginsburg/jwst/cloudc/unified/dirgallery_sites"
+url = "https://data.rc.ufl.edu/secure/adamginsburg/jwst/cloudc/unified/dirgallery_sites/"
+
+[[portal.page]]
+id = "index"
+
+[[portal.page]]
+id = "cloudc_f405n_pipeline"
+legacy = [
+    { file = "F405N/pipeline/gallery.html", replace = false },
+]
+
+# ============================================================================================
+# The public wd2 portal (WP24) and the NIRSpec 2640 pages (WP25) live in web/public/jwst/wd2/nirspec_2640.
+[[portal]]
+id = "wd2"
+title = "Westerlund 2 JWST galleries"
+visibility = "secure"
+legacy_dir = "/orange/adamginsburg/jwst/wd2"
+target_dir = "/orange/adamginsburg/jwst/wd2/unified/dirgallery_sites"
+url = "https://data.rc.ufl.edu/secure/adamginsburg/jwst/wd2/unified/dirgallery_sites/"
+
+[[portal.page]]
+id = "index"
+
+[[portal.page]]
+id = "wd2_pngs"
+legacy = [
+    { file = "pngs/gallery.html", replace = false },
+]
+
+[[portal.page]]
+id = "wd2_controlfield"
+legacy = [
+    { file = "controlfield/pngs/gallery.html", replace = false },
+    { file = "controlfield/gallery.html", replace = false },
+]
+
+# ============================================================================================
+# Served as web/secure/jwst/wd1 (/orange/adamginsburg/jwst/wd1 -> /orange/adamginsburg/westerlund/wd1).
+[[portal]]
+id = "wd1"
+title = "Westerlund 1 JWST galleries"
+visibility = "secure"
+legacy_dir = "/orange/adamginsburg/westerlund/wd1"
+target_dir = "/orange/adamginsburg/westerlund/wd1/unified/dirgallery_sites"
+url = "https://data.rc.ufl.edu/secure/adamginsburg/jwst/wd1/unified/dirgallery_sites/"
+
+[[portal.page]]
+id = "index"
+
+[[portal.page]]
+id = "wd1_pngs"
+legacy = [
+    { file = "pngs/gallery.html", replace = false },
+]
+
+# ============================================================================================
+# png_b is reachable only through web/secure/robitaille_models: secure.
+# imaging_run/png (web/public/robitaille_models/imaging) is the robitaille family's (WP21).
+[[portal]]
+id = "robitaille_modelgrids"
+title = "YSO model-grid galleries"
+visibility = "secure"
+legacy_dir = "/orange/adamginsburg/robitaille_models/modelgrids"
+target_dir = "/orange/adamginsburg/robitaille_models/modelgrids/unified/dirgallery_sites"
+url = "https://data.rc.ufl.edu/secure/adamginsburg/robitaille_models/modelgrids/unified/dirgallery_sites/"
+
+[[portal.page]]
+id = "index"
+
+[[portal.page]]
+id = "png_b"
+legacy = [
+    { file = "imaging_run/png_b/index.html", replace = false },
+]
+
+[[portal.page]]
+id = "rob_ccds"
+legacy = [
+    { file = "ccds/gallery.html", replace = false },
+]
