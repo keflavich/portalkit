@@ -72,9 +72,50 @@ export function projectionKeys(page, store, ds) {
   return Array.from(keys);
 }
 
+/** True when a `filters:<ds>` value carries nothing (absent, null or an empty object). */
+export function isEmptyFilters(f) {
+  if (f === null || f === undefined) return true;
+  return typeof f === 'object' && !Array.isArray(f) && Object.keys(f).length === 0;
+}
+
+/**
+ * `cats` filter value for a manifest's category `default_off` levels ({key: [level...]}), or
+ * null when no column has any. Only levels present in the column's `levels` are kept.
+ */
+export function defaultOffCats(manifest) {
+  const cats = {};
+  for (const c of (manifest && manifest.cols) || []) {
+    if (!c || !Array.isArray(c.levels) || !Array.isArray(c.default_off) || !c.default_off.length) continue;
+    const lv = new Set(c.levels.map(String));
+    const off = [];
+    for (const v of c.default_off) {
+      const s = String(v);
+      if (lv.has(s) && !off.includes(s)) off.push(s);
+    }
+    if (off.length) cats[c.key] = off;
+  }
+  return Object.keys(cats).length ? cats : null;
+}
+
+/**
+ * `filters` with the manifest's category default_off levels filled in for every column whose
+ * `cats[key]` is undefined (an explicit array, including [], is kept). Returns `filters` itself
+ * when nothing changes.
+ */
+export function withDefaultOff(filters, manifest) {
+  const off = defaultOffCats(manifest);
+  if (!off) return filters;
+  const have = (filters && filters.cats) || {};
+  const add = {};
+  for (const [key, lv] of Object.entries(off)) if (have[key] === undefined) add[key] = lv;
+  if (!Object.keys(add).length) return filters;
+  return {...(filters || {}), cats: {...have, ...add}};
+}
+
 /**
  * createHub(page, store, opts?) -> Hub.
- * opts: {base (URL the page refs resolve against), worker (false = in-thread engines), fetch}.
+ * opts: {base (URL the page refs resolve against), worker (false = in-thread engines), fetch,
+ * defaultOff (false skips applying manifest category default_off at catalog open)}.
  */
 export function createHub(page, store, opts = {}) {
   const base = opts.base || defaultBase();
@@ -83,6 +124,7 @@ export function createHub(page, store, opts = {}) {
   const jsons = new Map();
   const clients = new Map(); // resolved DataClient by ds
   const unsubs = [];
+  const defaultOffDone = new Set();
 
   function ref(ds) {
     const r = page && page.datasets ? page.datasets[ds] : null;
@@ -109,6 +151,15 @@ export function createHub(page, store, opts = {}) {
 
   function installFilters(ds, client) {
     if (!store) return;
+    // Category default_off (note 70): the filter owner applies it once, when the catalog opens, to
+    // every default_off column whose `cats[key]` the page state (hash, carry, page) leaves
+    // undefined. An explicit array wins, so `cats: {key: []}` records "all levels on".
+    if (opts.defaultOff !== false && !defaultOffDone.has(ds)) {
+      defaultOffDone.add(ds);
+      const cur = store.get(`filters:${ds}`);
+      const next = withDefaultOff(cur, client.manifest);
+      if (next !== cur) store.set({[`filters:${ds}`]: next}, {source: 'hub'});
+    }
     let seq = 0;
     let version = (store.get(`vis:${ds}`) || {}).version || 0;
     const run = () => {
@@ -169,7 +220,8 @@ export function createHub(page, store, opts = {}) {
     const p = (async () => {
       const r = ref(ds);
       url = resolve(r.url);
-      return RecordStore.open(url.toString(), {fetch: opts.fetch});
+      // PNG-mode sidecars resolve against the page URL with {assets}/{res} substituted (note 81).
+      return RecordStore.open(url.toString(), {fetch: opts.fetch, base, page: {assets: page && page.assets, res: page && page.res}});
     })().catch((err) => {
       records.delete(ds);
       return fail(ds, url || ds, err);

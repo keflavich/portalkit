@@ -215,9 +215,29 @@ export class LRU {
 
 const DEFAULT_CHANNEL = 'focus';
 
+function documentBase() {
+  if (typeof document !== 'undefined' && document && document.baseURI) return document.baseURI;
+  return null;
+}
+
+/**
+ * URL of a pki1 PNG-mode sidecar (IMPLEMENTATION_NOTES 81): `{assets}` / `{res}` are substituted
+ * from `page`, then the URL resolves against the page URL `base` (section 4.3), not against the
+ * records index. Without a base it falls back to `fallback` (the index URL).
+ */
+export function resolvePageUrl(rel, {base = null, page = null, fallback = undefined} = {}) {
+  let s = String(rel);
+  if (page && page.assets) s = s.split('{assets}').join(page.assets);
+  if (page && page.res) s = s.split('{res}').join(page.res);
+  return new URL(s, base || fallback).toString();
+}
+
 export class RecordStore {
   /**
-   * Open a record set from its index.json URL. opts: {fetch, signal, shardBytes, recordLRU}.
+   * Open a record set from its index.json URL. opts: {fetch, signal, shardBytes, recordLRU,
+   * base, page}. `base` is the page URL that PNG-mode sidecar URLs resolve against (default
+   * document.baseURI, else the index URL); `page` supplies `assets` / `res` for `{assets}` /
+   * `{res}` substitution in them.
    */
   static async open(url, opts = {}) {
     const u = String(url);
@@ -238,6 +258,13 @@ export class RecordStore {
     this.grids = null; // resolved {name: Float64Array}
     this.gridsPromise = null;
     this.legacy = index.kind === 'json-legacy';
+    this.pageBase = opts.base ? String(opts.base) : documentBase();
+    this.page = opts.page || null;
+  }
+
+  /** Resolve a PNG sidecar URL against the page (with {assets}/{res} substituted). */
+  resolvePng(rel) {
+    return resolvePageUrl(rel, {base: this.pageBase, page: this.page, fallback: this.url});
   }
 
   /** Resolve a path relative to the index URL. */
@@ -330,7 +357,7 @@ export class RecordStore {
     const ent = this.entries[key];
     if (ent === undefined) return null;
     if (ent && typeof ent === 'object' && !Array.isArray(ent)) {
-      if (ent.png) return {id: key, kind: 'png', png: this.resolve(ent.png), extent: ent.extent || null};
+      if (ent.png) return {id: key, kind: 'png', png: this.resolvePng(ent.png), extent: ent.extent || null};
       throw new Error(`record ${key}: unsupported entry`);
     }
     const needsGrids = this.kind !== 'json' && this.index.grids && Object.keys(this.index.grids).length;

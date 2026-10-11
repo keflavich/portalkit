@@ -3,7 +3,8 @@
 // DataClient ops over workers/rpc.js:
 //   open, ensure, values, project, pick, brush, query, hist, bin2d, rows, find, crossmatch,
 //   skyWindow, exportCSV, gpuColumns, cancel
-// plus id, record, export (csv|json|ids|ds9), setSel, density and info.
+// plus id, record, export (csv|json|ids|ds9), setSel, density, info and order (argsort over all
+// rows, IMPLEMENTATION_NOTES 74).
 // createEngine() holds the state and is also used in-thread (createLocalRpc) when Workers are
 // unavailable, and by the node tests.
 
@@ -20,6 +21,7 @@ import {skyWindow, buildDecIndex, crossmatch} from './ops/sky.js';
 import {IdIndex, findRows} from './ops/find.js';
 import {project, ProjCache, normSpec} from './ops/project.js';
 import {formatValue, f32String, toCSV, toJSON, toIdList, toDS9, MIME} from './ops/export.js';
+import {argsortValues, argsortCodes, argsortCategory, argsortNatural, normDir} from './ops/order.js';
 
 const U32_MISSING = 0xffffffff;
 
@@ -42,6 +44,11 @@ const QCHUNK_CACHE = 64;
 // offsets such as MJD or wavelengths in Angstrom).
 const CODE_DEQUANT = new Set(['u16q', 'u8q', 'u16log', 'u8log', 'u32lin']);
 const EXPR_CACHE = 16;
+const ORDER_CACHE = 2;
+// Encodings whose codes order rows exactly like their values (code 0 / 0xffffffff = missing).
+const CODE_ORDER = new Set(['u16q', 'u8q', 'u16log', 'u8log', 'u32', 'u32lin']);
+/** Keys DataClient.order treats as "sort by catalog id". */
+export const ID_ORDER_KEYS = Object.freeze(['id', '__id']);
 
 function raceAbort(p, signal) {
   if (!signal) return p;
@@ -129,6 +136,7 @@ export function createEngine(opts = {}) {
     selVersion: -1,
     proj: new ProjCache(8),
     views: new Map(),
+    orders: new Map(), // `${key}\u0000${dir}` -> Int32Array (LRU of ORDER_CACHE)
   };
 
   const ds = () => (S.man && S.man.id) || '';
@@ -716,6 +724,79 @@ export function createEngine(opts = {}) {
     return withTransfer({n: m, raw, A, B, missing0: true, keys: keys.slice()}, raw);
   }
 
+  // ---------------------------------------------------------------- order
+
+  /** Sequential-friendly id getter over the IdIndex chunks (O(1) amortized for ascending i). */
+  function idGetter(ix) {
+    const chunks = ix.chunks;
+    let c = chunks[0] || null;
+    let ci = 0;
+    return (i) => {
+      if (!c || i < c.start || i >= c.start + c.str.n) {
+        c = null;
+        for (ci = 0; ci < chunks.length; ci++) {
+          const k = chunks[ci];
+          if (i >= k.start && i < k.start + k.str.n) {
+            c = k;
+            break;
+          }
+        }
+        if (!c) return null;
+      }
+      return c.str.get(i - c.start);
+    };
+  }
+
+  /**
+   * Argsort of all rows by `key` (stored column, 'ra'/'dec', expression, or 'id' / '__id' for
+   * catalog ids; a stored column called 'id' wins over the alias, '__id' is always the ids) in
+   * direction `dir`; missing values last in both directions, ties in row order.
+   */
+  async function order(key, dir, signal, progress) {
+    requireOpen();
+    const d = normDir(dir);
+    const k = String(key);
+    const ck = `${k}\u0000${d}`;
+    const hit = S.orders.get(ck);
+    if (hit) {
+      S.orders.delete(ck);
+      S.orders.set(ck, hit);
+      return hit;
+    }
+    let out;
+    if (ID_ORDER_KEYS.includes(k) && !(k === 'id' && S.metas.has('id'))) {
+      const ix = await ensureIds(signal);
+      // ASCII id tables are keyed straight from the UTF-8 bytes (no per-row decode)
+      const sources = ix.chunks.map((c) => ({start: c.start, n: c.str.n, offsets: c.str.offsets, blob: c.str.blob}));
+      out = argsortNatural(S.n, idGetter(ix), d, {sources});
+    } else {
+      await ensure([k], {signal, progress});
+      throwIfAborted(signal);
+      const meta = S.metas.get(k);
+      if (meta) {
+        const e = S.cols.get(k);
+        const enc = meta.enc;
+        if (enc === 'cat8' || enc === 'cat16') out = argsortCategory(e.codes, meta.levels || [], e.missing, d);
+        // section 5.3: the empty string is the missing marker of a `str` column (sorts last)
+        else if (enc === 'str') {
+          out = argsortNatural(S.n, (i) => {
+            const s = e.strings[i];
+            return s === '' ? null : s;
+          }, d);
+        }
+        else if (CODE_ORDER.has(enc) && e.codes) out = argsortCodes(e.codes, e.missing, d);
+        else out = argsortValues(e.values, d);
+      } else if (k === 'ra' || k === 'dec') {
+        out = argsortValues(S.pos[k], d);
+      } else {
+        out = argsortValues(valuesOf(k), d);
+      }
+    }
+    S.orders.set(ck, out);
+    while (S.orders.size > ORDER_CACHE) S.orders.delete(S.orders.keys().next().value);
+    return out;
+  }
+
   // ---------------------------------------------------------------- handlers
 
   const handlers = {
@@ -873,6 +954,12 @@ export function createEngine(opts = {}) {
       }
       const r = bin2d(x, y, nx, ny, {xr, yr, mask: m});
       return withTransfer(r, [r.counts]);
+    },
+
+    async order({key, dir = 1}, ctx) {
+      const o = await order(key, dir, ctx.signal, ctx.progress);
+      const copy = o.slice();
+      return withTransfer(copy, [copy]);
     },
 
     async rows({i0, i1}, ctx) {

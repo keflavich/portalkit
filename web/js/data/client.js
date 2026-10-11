@@ -7,6 +7,8 @@ import {Selection} from '../core/selection.js';
 import {baseKeys as exprBaseKeys, isValid, isKey} from './expr.js';
 import {createRpcClient, createLocalRpc} from '../workers/rpc.js';
 import {LRU} from './records.js';
+import {normDir} from '../workers/ops/order.js';
+import {abortError} from './fetch.js';
 
 const POS_META = {
   ra: {key: 'ra', label: 'RA', unit: 'deg', role: 'ra', enc: 'pos', group: 'position'},
@@ -100,6 +102,7 @@ export class DataClient {
     this._selPushed = -1;
     this._recLRU = new LRU(RECORD_LRU);
     this._recToken = 0;
+    this._recChannels = new Map(); // channel -> {ac: AbortController, superseded}
     this._applySeq = 0;
     this._idCache = new LRU(4096);
     this._setProgress = () => {};
@@ -237,10 +240,43 @@ export class DataClient {
   }
 
   /**
-   * One row (exact chunk or quantized fallback) with `_limits`. LRU of RECORD_LRU rows.
-   * With opts.token, a response superseded by a later tokened call resolves to null.
+   * Argsort of every row (IMPLEMENTATION_NOTES 74), computed in the worker: an Int32Array of the
+   * n stored row indices ordered by `key` (stored column, 'ra'/'dec', expression, or 'id' for the
+   * catalog ids in natural order). `dir` is 1 / 'asc' (default) or -1 / 'desc'. Missing values
+   * (NaN, missing codes) come last in both directions; ties keep ascending row order. Category
+   * columns sort by level label. opts: {signal}.
    */
-  async record(i, opts = {}) {
+  order(key, dir = 1, opts = {}) {
+    return this._call('order', {key: String(key), dir: normDir(dir)}, {signal: opts.signal});
+  }
+
+  /**
+   * One row (exact chunk or quantized fallback) with `_limits`. LRU of RECORD_LRU rows.
+   * Accepts record(i, opts) and record(ds, i, opts) (the ds is this client's dataset).
+   * opts: {signal, token, channel}.
+   * - With `channel` (a non-empty string), a new call aborts the previous unfinished call on the
+   *   same channel, which then resolves to null; calls on other channels are unaffected
+   *   (IMPLEMENTATION_NOTES 73).
+   * - Without a channel (the default channel), a tokened call (opts.token) whose response is
+   *   superseded by a later tokened default-channel call resolves to null; untokened calls always
+   *   resolve.
+   * An abort through opts.signal rejects with AbortError.
+   */
+  async record(a, b, c) {
+    let i, opts;
+    if (typeof a === 'string' && typeof b === 'number') {
+      i = b;
+      opts = c || {};
+    } else {
+      i = a;
+      opts = b || {};
+    }
+    const ch = opts.channel;
+    if (ch === undefined || ch === null || ch === '') return this._recordDefault(i, opts);
+    return this._recordChannel(i, String(ch), opts);
+  }
+
+  async _recordDefault(i, opts) {
     const tok = opts.token !== undefined ? ++this._recToken : null;
     let r = this._recLRU.get(i);
     if (r === undefined) {
@@ -249,6 +285,39 @@ export class DataClient {
     }
     if (tok !== null && tok !== this._recToken) return null;
     return r;
+  }
+
+  async _recordChannel(i, ch, opts) {
+    const prev = this._recChannels.get(ch);
+    if (prev) {
+      prev.superseded = true;
+      prev.ac.abort();
+    }
+    const own = opts.signal || null;
+    if (own && own.aborted) {
+      if (this._recChannels.get(ch) === prev) this._recChannels.delete(ch);
+      throw abortError();
+    }
+    const entry = {ac: new AbortController(), superseded: false};
+    this._recChannels.set(ch, entry);
+    const relay = () => entry.ac.abort();
+    if (own) own.addEventListener('abort', relay, {once: true});
+    try {
+      let r = this._recLRU.get(i);
+      if (r === undefined) {
+        r = await this._call('record', {i}, {signal: entry.ac.signal});
+        this._recLRU.set(i, r);
+      }
+      if (entry.superseded) return null;
+      if (own && own.aborted) throw abortError();
+      return r;
+    } catch (err) {
+      if (err && err.name === 'AbortError' && entry.superseded && !(own && own.aborted)) return null;
+      throw err;
+    } finally {
+      if (own) own.removeEventListener('abort', relay);
+      if (this._recChannels.get(ch) === entry) this._recChannels.delete(ch);
+    }
   }
 
   async id(i) {
