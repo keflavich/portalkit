@@ -1,0 +1,43 @@
+# Robitaille YSO model portal (WP21; ARCHITECTURE.md sections 4.1 and 14.6).
+# Legacy pages live in web/public/robitaille_models (manifold.html, index.html, seds/, and the
+# imaging -> modelgrids/imaging_run/png symlink); all of it is public. The legacy
+# imaging/gallery.html (a broken jQuery directory gallery titled "ACES mosaics") is merged
+# into the unified imaging page and dropped from the navigation; the legacy file stays put.
+# The imaging page maps no legacy files: imaging/ is a symlink into the data tree
+# (modelgrids/imaging_run/png), so `deploy --replace` would have to write through it
+# (section 11.3 refuses symlinks; check_components raises SymlinkRefusal) and
+# gallery.html must never be stubbed.
+# The adapter registers the model-grid geometry directories it reads as inputs itself.
+family = "robitaille"
+adapter = "adapters.robitaille:ADAPTER"
+tier_default = "B"
+legacy_paths = ["/orange/adamginsburg/robitaille_models/portal"]
+status = "active"
+
+[[portal]]
+id = "robitaille"
+title = "Robitaille YSO model portal"
+visibility = "public"
+legacy_dir = "/orange/adamginsburg/web/public/robitaille_models"
+url = "https://data.rc.ufl.edu/pub/adamginsburg/robitaille_models/unified/"
+inputs = [
+    "/orange/adamginsburg/web/public/robitaille_models/manifold.html",
+    "/orange/adamginsburg/web/public/robitaille_models/seds",
+    "/orange/adamginsburg/robitaille_models/portal/jwst_vega_zeropoints.ecsv",
+    "/orange/adamginsburg/robitaille_models/FRIED/FRIEDgrid",
+    "/orange/adamginsburg/robitaille_models/modelgrids/imaging_run/model_params.ecsv",
+    "/orange/adamginsburg/robitaille_models/modelgrids/imaging_run/png",
+]
+
+[[portal.page]]
+id = "index"
+legacy = ["index.html"]
+
+[[portal.page]]
+id = "manifold"
+legacy = ["manifold.html"]
+grammar = ["kv-view", "bare-name"]
+
+[[portal.page]]
+id = "imaging"
+legacy = []
