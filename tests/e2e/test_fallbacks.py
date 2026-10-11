@@ -8,6 +8,10 @@ get the stub (``tests/fixtures/aladin_stub.js``), everything else is aborted and
 * both aborted: the sky pane shows ``.pk-error-note``, ``app.notes`` explains it, and the
   other panes stay usable (selection, list, scatter);
 * no origin other than the CDN and the mirror is requested in any of these runs.
+
+Chromium logs ``Failed to load resource: net::ERR_FAILED`` for every request the harness
+aborts, with no source URL attached; the blocked-origin runs pass that message
+(``e2e.ABORTED_LOAD``) to ``PageRun.errors(allow=...)``. Every other error still fails them.
 """
 
 from __future__ import annotations
@@ -67,7 +71,8 @@ def test_mirror_used_when_cdn_blocked(e2e, request, portal, open_page, page, pan
     assert not any(u.startswith(e2e.CDN) for u in run.aladin_served)
     assert e2e.ext_origins(run.external) <= e2e.ALLOWED_EXTERNAL, run.external
     run.wait_panes_settled()
-    assert run.errors() == []
+    # the aborted CDN request is expected; it is the only console error allowed
+    assert run.errors(allow=(e2e.ABORTED_LOAD,)) == []
     assert run.ev("() => document.querySelectorAll('.pk-sky-error').length") == 0
 
 
@@ -89,7 +94,7 @@ def test_both_blocked_shows_note(e2e, request, portal, open_page, page, pane):
     run.wait_panes_settled()
     others = {k: v for k, v in run.pane_states().items() if k != pane}
     assert all(v in (None, "ready") for v in others.values()), others
-    errs = [e for e in run.errors() if "aladin" not in e.lower()]
+    errs = [e for e in run.errors(allow=(e2e.ABORTED_LOAD,)) if "aladin" not in e.lower()]
     assert errs == []
     if page == "explorer":
         ids = [ms.syn_id(i) for i in (1, 2, 3)]

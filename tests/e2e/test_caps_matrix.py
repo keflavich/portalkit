@@ -12,8 +12,16 @@ Pointer drags are first mapped to data space in Python (overlay canvas box, make
 pinned axis domains) and compared with the shape the pane commits.
 
 The worker-level brush tests (``client.brush`` + ``Selection.apply``), the persistence tests,
-CSV export and the live-SED twin run against the core runtime. Tests that drive panes are
-``xfail(strict=False)`` while the pane modules are absent.
+CSV export and the live-SED twin run against the core runtime. Pointer brushes run on the
+``cmd`` page (an uncollapsed scatter pane); the ``hist`` page carries two histogram panes.
+
+Rendering changes are detected with ``PageRun.canvas_hash`` (a hash of ``canvas.toDataURL()``
+for every canvas of a pane) in place of screenshots, which SwiftShader reads back slowly.
+
+The checks for IMPLEMENTATION_NOTES items 81 (page-relative PNG URLs; detail product links
+relative to the records index, on the ``cmd`` page), 88 (default overlays
+and manifold dims), 89 (caps that need a dataset) and 93 (``app.importCsv``) assert the noted
+behaviour directly.
 """
 
 from __future__ import annotations
@@ -175,7 +183,7 @@ def test_hook_brush_uses_pane_axes(e2e, request, p2k, open_page):
     e2e.xfail_unless_panes(request, ["scatter"])
     x, y = _xy(p2k)
     base, _ = shapes_for(x, y)
-    run = open_page(p2k.url_path("explorer"))
+    run = open_page(p2k.url_path(BRUSH_PAGE))
     run.ev("() => { window.__commits = []; window.__pk.store.onEvent('brush:commit', (p) => window.__commits.push(p)); }")
     run.ev("() => window.__pk.app.layout.reveal('scatter')")
     count = run.ev("async (s) => window.__pk.brush('scatter', s, 'replace')", base)
@@ -183,6 +191,51 @@ def test_hook_brush_uses_pane_axes(e2e, request, p2k, open_page):
     bad, want, got = compare(p2k, idx, [(base, "replace")], x, y)
     assert count == got and bad == 0
     assert run.ev("() => window.__commits.length") >= 1
+
+
+# ---------------------------------------------------------------------------
+# histogram range brushes (hist page)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("pane,expr,bins", ms.HIST_PANES, ids=[h[0] for h in ms.HIST_PANES])
+def test_hist_range_brush_matches_numpy(e2e, request, p2k, open_page, pane, expr, bins):
+    """A range brush on a histogram pane filters the catalog to the rows whose value lies in
+    the range (numpy count of finite values), the pane counts every finite value, and
+    clearing the range restores the full visible set."""
+    e2e.xfail_unless_panes(request, ["hist"])
+    run = open_page(p2k.url_path("hist"))
+    assert mount(run, pane) == "ready"
+    v = p2k.data.expr(expr)
+    fin = np.isfinite(v)
+    st = run.pane_stats(pane)
+    assert st["expr"] == expr, st
+    if bins:
+        assert st["bins"] == bins, st
+    run.page.wait_for_function(
+        "(p) => { const s = window.__pk.app.layout.pane(p).stats(); return s && s.total > 0; }", arg=pane, timeout=30000)
+    assert run.pane_stats(pane)["total"] == int(fin.sum())
+    # bounds half a storage step (0.001 mag) off the data grid, so no row sits on an edge
+    q = np.percentile(v[fin], [25, 70])
+    lo, hi = math.floor(q[0] * 1000) / 1000 + 5e-4, math.floor(q[1] * 1000) / 1000 + 5e-4
+    want = int((fin & (v >= lo) & (v <= hi)).sum())
+    assert 0 < want < fin.sum()
+    got = run.ev("async ([p, lo, hi]) => window.__pk.app.layout.pane(p).brush({lo, hi})", [pane, lo, hi])
+    assert got == want, (lo, hi, got, want)
+    rng = (run.store_get("filters:src") or {}).get("ranges", {}).get(expr)
+    assert rng == pytest.approx([lo, hi]), rng
+    run.page.wait_for_function(
+        "([p, n]) => { const s = window.__pk.app.layout.pane(p).stats(); return s && s.shown === n; }",
+        arg=[pane, want], timeout=30000)
+    run.ev("async (p) => window.__pk.app.layout.pane(p).brush(null)", pane)
+    # vis:src count null means "no filter: every row visible"
+    run.page.wait_for_function(
+        "(n) => { const c = (window.__pk.store.get('vis:src') || {}).count; return c === null || c === undefined || c === n; }",
+        arg=p2k.n, timeout=30000)
+    run.page.wait_for_function(
+        "([p, n]) => { const s = window.__pk.app.layout.pane(p).stats(); return s && s.shown === n; }",
+        arg=[pane, int(fin.sum())], timeout=30000)
+    assert run.pane_stats(pane)["range"] is None
+    assert run.errors() == []
 
 
 # ---------------------------------------------------------------------------
@@ -216,8 +269,26 @@ def _set_mode(run, pane, mode):
     assert found, f"no '{mode}' brush tool in the {pane} pane"
 
 
-#: plot margins of plot/axes.js makeView (DEFAULT_MARGIN), used by the scatter pane
+#: page whose scatter pane is uncollapsed at load (make_synthetic ``cmd``)
+BRUSH_PAGE = "cmd"
+#: plot margins of plot/axes.js makeView (DEFAULT_MARGIN), used by the scatter pane when its
+#: stats() carry no view geometry
 PLOT_MARGIN = {"l": 52, "r": 12, "t": 10, "b": 38}
+
+
+def plot_margin(stats):
+    """Plot margins (CSS px) from the scatter pane's stats() view geometry when it reports
+    them (``margin`` / ``margins`` as {l, r, t, b} or {left, right, top, bottom}, possibly
+    under ``view``), else :data:`PLOT_MARGIN`."""
+    st = stats or {}
+    for src in (st, st.get("view") if isinstance(st.get("view"), dict) else {}):
+        for key in ("margin", "margins"):
+            m = src.get(key) if isinstance(src, dict) else None
+            if isinstance(m, dict):
+                vals = {k: m.get(k, m.get(n)) for k, n in (("l", "left"), ("r", "right"), ("t", "top"), ("b", "bottom"))}
+                if all(isinstance(v, (int, float)) for v in vals.values()):
+                    return vals
+    return dict(PLOT_MARGIN)
 #: tolerance of the screen -> data check, in CSS px
 PX_TOL = 2.0
 
@@ -238,12 +309,13 @@ class ScreenMap:
     """Screen (page CSS px) -> data mapping of the scatter pane for pinned linear axes, rebuilt
     in Python from the overlay canvas box, the makeView margins and the axis domains."""
 
-    def __init__(self, box, xr, yr, xinv, yinv):
+    def __init__(self, box, xr, yr, xinv, yinv, margin=None):
         self.box = box
+        mg = margin or PLOT_MARGIN
         w, h = math.floor(box["width"]), math.floor(box["height"])
         self.kx, self.ky = w / box["width"], h / box["height"]   # brushui.eventToViewPx
-        left, right = PLOT_MARGIN["l"], w - PLOT_MARGIN["r"]
-        top, bottom = PLOT_MARGIN["t"], h - PLOT_MARGIN["b"]
+        left, right = mg["l"], w - mg["r"]
+        top, bottom = mg["t"], h - mg["b"]
         self.plot = (left, top, right, bottom)
         px0, px1 = (right, left) if xinv else (left, right)
         py0, py1 = (top, bottom) if yinv else (bottom, top)
@@ -340,7 +412,7 @@ def test_pointer_brush_matches_numpy(e2e, request, p2k, open_page, kind, op):
     data space independently (overlay canvas box + makeView margins + pinned axis domains),
     and the selection equals the numpy mask of those shapes."""
     e2e.xfail_unless_panes(request, ["scatter"])
-    run = open_page(p2k.url_path("explorer"))
+    run = open_page(p2k.url_path(BRUSH_PAGE))
     run.ev("() => { window.__commits = []; window.__pk.store.onEvent('brush:commit', (p) => window.__commits.push(JSON.parse(JSON.stringify(p)))); }")
     _scatter_box(run)
     x, y = _xy(p2k)
@@ -351,7 +423,7 @@ def test_pointer_brush_matches_numpy(e2e, request, p2k, open_page, kind, op):
     inv = run.ev(PIN_AXES_JS, [ms.CMD_X, ms.CMD_Y, xr, yr])
     run.page.wait_for_timeout(300)
     box = run.page.locator("section.pk-pane[data-pane-id='scatter'] .pk-plot-over").first.bounding_box()
-    smap = ScreenMap(box, xr, yr, inv["xinv"], inv["yinv"])
+    smap = ScreenMap(box, xr, yr, inv["xinv"], inv["yinv"], margin=plot_margin(run.pane_stats("scatter")))
     # first a plain rect (replace), then the shape under test with the modifier
     p_rect = _drag_plot(run, smap, "base", [])
     run.page.wait_for_function("() => window.__commits.length >= 1", timeout=20000)
@@ -452,28 +524,37 @@ def test_csv_export_of_selection(p2k, open_page):
 
 
 def test_csv_import_roundtrip(p2k, open_page):
-    """Export the selection as CSV, clear it, and import the text through ui/export.js
-    (parseImportText + resolveImport, the functions behind the import dialog)."""
+    """Export the selection as CSV, clear it, and import the text through ``app.importCsv``
+    (IMPLEMENTATION_NOTES item 93, the runtime entry behind the import dialog)."""
     run = open_page(p2k.url_path("explorer"))
     ids = [ms.syn_id(i) for i in (2, 3, 9)]
     run.ev("async (ids) => window.__pk.select('src', ids)", ids)
     out = run.ev("""async () => {
         const app = window.__pk.app;
+        if (typeof app.importCsv !== 'function') return {missingApi: true};
         const c = await app.catalog('src');
         const text = await (await c.exportCSV({mask: 'sel'})).text();
         const sel = await app.selectionFor('src');
         sel.clear();
-        const mod = await import(new URL(app.page.assets + 'js/ui/export.js', location.href).href);
-        const parsed = mod.parseImportText(text);
-        const entries = Array.isArray(parsed) ? parsed : parsed.entries;
-        const res = await mod.resolveImport(entries, {resolveIds: (x) => app.resolveIds('src', x), n: c.n});
-        sel.setIndices(Array.from(res.indices), 'replace', {op: 'replace', kind: 'ids', view: {ds: 'src'}});
+        const cleared = sel.count;
+        const res = await app.importCsv(text, {mode: 'replace'});
         const got = [];
         for (const i of sel.indices()) got.push(String(await app.idOf('src', i)));
-        return {count: sel.count, got, missing: res.missing.length, byId: res.byId};
+        return {cleared, count: sel.count, got, res: JSON.parse(JSON.stringify(res))};
     }""")
-    assert out["count"] == 3 and out["missing"] == 0 and out["byId"] == 3
+    assert not out.get("missingApi"), "app.importCsv is missing (IMPLEMENTATION_NOTES item 93)"
+    res = out["res"]
+    missing = res["missing"] if isinstance(res["missing"], int) else len(res["missing"])
+    assert out["cleared"] == 0
+    assert res["mode"] == "replace" and res["ds"] == "src"
+    assert res["count"] == 3 and out["count"] == 3, res
+    assert missing == 0 and res["byId"] == 3 and res["matched"] == 3, res
     assert sorted(out["got"]) == sorted(ids)
+    # an id-list import adds through the same entry
+    more = run.ev("async (t) => JSON.parse(JSON.stringify(await window.__pk.app.importCsv(t, {mode: 'add'})))",
+                  f"{ms.syn_id(20)}\n{ms.alias_of(21)}\n")
+    assert more["count"] == 5 and more["byId"] == 2, more
+    assert run.errors() == []
 
 
 def test_keyboard_nav_walks_filtered_list(e2e, request, p2k, open_page):
@@ -517,30 +598,42 @@ def test_lightbox_swipe_and_hash_clear(e2e, request, p2k, open_page):
     assert "lb=" not in run.ev("() => location.hash")
 
 
-def _pane_png(run, pane):
-    box = run.page.locator(f"section.pk-pane[data-pane-id='{pane}'] .pk-pane-body").first.bounding_box()
-    assert box and box["width"] > 0 and box["height"] > 0, f"pane {pane} has no box"
-    # SwiftShader readback on a 2-CPU host can take tens of seconds per shot
-    return run.page.screenshot(clip=box, animations="disabled", timeout=180000)
+TPL_STATS_JS = """() => { const h = window.__pk.app.layout.pane('spectrum1d');
+  const s = h && h.stats ? h.stats() : null; return s && s.template ? JSON.parse(JSON.stringify(s.template)) : null; }"""
 
 
 def test_av_moves_template_and_isochrones(e2e, request, p2k, open_page):
+    """A_V reddens the template overlaid on the focused spectrum (spectrum1d stats().template:
+    ``av`` follows the store and the fitted ``scale`` changes) and moves the isochrones /
+    reddening vector on the scatter pane (its canvases change).
+
+    Runs on the ``explorer`` page (resolver default layout), so the scatter overlays are the
+    ones ``caps.default_overlays`` adds (IMPLEMENTATION_NOTES item 88), not the explicit list
+    of the ``cmd`` page."""
     e2e.xfail_unless_panes(request, ["scatter", "spectrum1d"])
     # a template (G dwarf, medium grid) is overlaid on the focused spectrum
     run = open_page(p2k.url_path("explorer"), hash=f"id={ms.syn_id(1)}&tpl=gdwarf~medium")
     _scatter_box(run)
     _scatter_box(run, "spectrum1d")
-    s0, p0 = _pane_png(run, "scatter"), _pane_png(run, "spectrum1d")
+    run.page.wait_for_function(
+        """() => { const h = window.__pk.app.layout.pane('spectrum1d'); const s = h && h.stats ? h.stats() : null;
+                   return !!(s && s.template && s.template.key === 'gdwarf' && Number.isFinite(s.template.scale)); }""",
+        timeout=60000)
+    t0 = run.ev(TPL_STATS_JS)
+    assert t0["grid"] == "medium" and (t0["av"] or 0) == 0, t0
+    sc = run.pane_stats("scatter")
+    assert sc and sc.get("overlays", 0) > 0, f"scatter draws no overlays (IMPLEMENTATION_NOTES item 88): {sc}"
+    h0 = run.wait_canvas_stable("scatter")
     run.ev("() => window.__pk.store.set({av: 30}, {source: 'test'})")
-    run.page.wait_for_timeout(800)
-    s1, p1 = _pane_png(run, "scatter"), _pane_png(run, "spectrum1d")
-    assert p0 != p1, "spectrum template overlay did not change with A_V"
+    run.page.wait_for_function(
+        """() => { const h = window.__pk.app.layout.pane('spectrum1d'); const s = h && h.stats ? h.stats() : null;
+                   return !!(s && s.template && s.template.av === 30 && Number.isFinite(s.template.scale)); }""",
+        timeout=60000)
+    t1 = run.ev(TPL_STATS_JS)
+    assert not math.isclose(t1["scale"], t0["scale"], rel_tol=1e-3), (t0, t1)
+    h1 = run.wait_canvas_change("scatter", h0)
+    assert h1 != h0, "scatter (isochrones / reddening vector) did not change with A_V"
     assert run.errors() == []
-    scat = [p for p in p2k.pages["explorer"].panes if p["pane"] == "scatter"]
-    if not any(p["options"].get("overlays") for p in scat):
-        pytest.xfail("resolver default layout gives the scatter pane no `overlays` (isochrones / "
-                     "reddening vector), so A_V has nothing to move there (contract issue, caps.py)")
-    assert s0 != s1, "scatter (isochrones / reddening vector) did not change with A_V"
 
 
 def test_spectrum_zoom_autoscales_y_and_2d_xlink(e2e, request, p2k, open_page):
@@ -702,8 +795,13 @@ def test_narrative_beats_leave_no_stray_overlays(e2e, request, p2k, open_page):
         run.ev("(b) => window.__pk.store.set({beat: b}, {source: 'test'})", b["id"])
         run.page.wait_for_timeout(300)
     # after returning to beat 1: the layers it turns off are hidden on the sky pane
-    shown = run.ev("() => { const h = window.__pk.app.layout.pane('sky'); return h && typeof h.layers === 'function' ? h.layers() : null; }")
-    assert shown is not None, "sky pane handle has no layers() hook"
+    shown = run.ev("""() => { const h = window.__pk.app.layout.pane('sky');
+        if (!h) return null;
+        const out = new Set(typeof h.layers === 'function' ? h.layers() : []);
+        const ov = (h.stats ? h.stats() : {}).overlays || {};
+        for (const [id, o] of Object.entries(ov)) if (o && o.shown) out.add(id);
+        return Array.from(out); }""")
+    assert shown is not None, "no sky pane on the narrative page"
     on = set(beats[0]["view"]["layers_on"])
     off = set(beats[0]["view"]["layers_off"])
     assert on <= set(shown) and not (off & set(shown)), (shown, on, off)
@@ -731,7 +829,7 @@ def _collect_pairs() -> list[tuple[str, str]]:
     ds, _ = ms.datasets(N)
     out = []
     for spec in ms.page_specs():
-        for cap in capsmod.resolve(spec, ds, {}).enabled:
+        for cap in ms.resolve_page(spec, ds).enabled:
             out.append((spec.id, cap))
     return out
 
@@ -930,13 +1028,53 @@ def chk_detail(c):
     c.wait_stats("detail", f"s.id === {sid!r}")
 
 
+IMG_LOADED_JS = """(p) => { const s = document.querySelector(`section.pk-pane[data-pane-id='${p}']`);
+  const imgs = s ? Array.from(s.querySelectorAll('img')).filter((i) => i.getAttribute('src')) : [];
+  return imgs.length > 0 && imgs.some((i) => i.complete && i.naturalWidth > 0); }"""
+
+
 def chk_static_sed_png(c):
+    """The figure PNGs load (IMPLEMENTATION_NOTES item 81: image URLs resolve page-relative,
+    with no doubled path prefix): at least one <img> in the pane decodes."""
     if c.has("detail"):
         _focus(c, 1)
         c.wait_stats("detail", "s.figures >= 1")
+        pane = "detail"
     else:
-        st = c.stats(c.has("gallery")[0])
+        pane = c.has("gallery")[0]
+        st = c.stats(pane)
         assert st["items"] > 0
+    try:
+        c.wait(IMG_LOADED_JS, pane, timeout=30000)
+    except PWTimeout:
+        srcs = c.ev("(p) => Array.from(document.querySelectorAll(`section.pk-pane[data-pane-id='${p}'] img`)).map((i) => i.src)", pane)
+        pytest.fail(f"no figure image of pane {pane} loaded: {srcs[:5]}; http errors {c.run.http_errors[-5:]}")
+    bad = [e for e in c.run.http_errors if "/img/img/" in e]
+    assert not bad, bad
+
+
+def test_detail_product_links_resolve_against_records_index(e2e, request, p2k, open_page):
+    """IMPLEMENTATION_NOTES item 81: detail product links (``products/1`` records of the
+    ``prod`` dataset, wired to the ``cmd`` page's detail pane through ``options.products``)
+    resolve against the records index URL (``data/prod/index.json``), with no doubled path
+    prefix, and the linked files load."""
+    e2e.xfail_unless_panes(request, ["detail"])
+    sid = ms.syn_id(1)
+    run = open_page(p2k.url_path(BRUSH_PAGE), hash=f"id={sid}")
+    assert mount(run, "detail") == "ready"
+    sel = "section.pk-pane[data-pane-id='detail'] a.pk-product-link"
+    want = [f"{run.base}n{p2k.n}/{h}" for h in ms.product_hrefs(sid)]
+    try:
+        run.page.wait_for_function("([s, n]) => document.querySelectorAll(s).length >= n",
+                                   arg=[sel, len(want)], timeout=60000)
+    except PWTimeout:
+        pytest.fail(f"no product links in the detail pane: stats={run.pane_stats('detail')}")
+    hrefs = run.ev("(s) => Array.from(document.querySelectorAll(s)).map((a) => a.href)", sel)
+    assert hrefs == want, (hrefs, want)
+    assert not any("/data/prod/data/prod/" in h or f"/n{p2k.n}/n{p2k.n}/" in h for h in hrefs), hrefs
+    status = run.ev("async (hs) => Promise.all(hs.map(async (h) => (await fetch(h)).status))", hrefs)
+    assert status == [200] * len(want), dict(zip(hrefs, status))
+    assert run.errors() == []
 
 
 def chk_lightbox(c):
@@ -982,11 +1120,9 @@ def chk_markers(c):
 
 
 def chk_hips(c):
+    # IMPLEMENTATION_NOTES item 89: the cap is on only where a HiPS document is attached
+    assert _page_has_kind(c, "hips"), "hips_layer_stacking enabled on a page without a HiPS document"
     p = c.first("sky")
-    if p and not _page_has_kind(c, "hips"):
-        pytest.xfail("hips_layer_stacking is enabled by the `sky` flag (positions) although the page "
-                     "has no HiPS document, so the sky pane shows only Aladin's default survey "
-                     "(contract issue, caps.py RULES['sky'])")
     if p:
         c.wait_stats(p, "s.layers && s.layers.base")
     if c.has("wavelength"):
@@ -1040,13 +1176,30 @@ def chk_av(c):
 
 
 def chk_overlays(c):
+    """IMPLEMENTATION_NOTES item 88: the cap draws something. With an isochrones
+    (``isochrones_or_tracks``) or extinction (``extinction_vectors_on_ccd``) dataset on the
+    page, every scatter / manifold provider lists the matching overlay ids in
+    ``options.overlays``; without one, the page carries an overlays document and some provider
+    lists overlay ids. The scatter panes that list overlays draw them (``stats().overlays``)."""
+    kind, want = (("isochrones", lambda o: o in TRACK_SLUGS) if c.cap == "isochrones_or_tracks"
+                  else ("extinction", lambda o: o.endswith("_vector")))
     panes = [p for p in c.providers if c.types[p] in ("scatter", "manifold")]
-    with_ov = [p for p in panes for q in c.portal.pages[c.page].panes
-               if q["id"] == p and q["options"].get("overlays")]
-    if not with_ov:
-        pytest.xfail("resolver default layout gives the scatter / manifold panes no `overlays` "
-                     "(isochrones, reddening vectors); contract issue, caps.py")
-    assert any((c.stats(p) or {}).get("overlays", 0) > 0 for p in with_ov)
+    assert panes, f"{c.cap} on {c.page} without a scatter / manifold pane"
+    opts = {q["id"]: [o for o in (q["options"].get("overlays") or []) if isinstance(o, str)]
+            for q in c.portal.pages[c.page].panes}
+    if _page_has_kind(c, kind):
+        for p in panes:
+            assert any(want(o) for o in opts.get(p, [])), (p, opts.get(p))
+        listing = panes
+    else:
+        assert _page_has_kind(c, "overlays"), (
+            f"{c.cap} enabled on {c.page} without a {kind} dataset or an overlays document; "
+            f"provider overlays {[(p, opts.get(p)) for p in panes]}")
+        listing = [p for p in panes if opts.get(p)]
+        assert listing, f"{c.cap} on {c.page}: no provider lists an overlay id {[(p, opts.get(p)) for p in panes]}"
+    scat = [p for p in listing if c.types[p] == "scatter"]
+    for p in scat:
+        c.wait_stats(p, "s.overlays > 0")
 
 
 def chk_template(c):
@@ -1054,9 +1207,8 @@ def chk_template(c):
 
 
 def chk_features(c):
-    if not _page_has_kind(c, "features"):
-        pytest.xfail("labeled_features_overlay is enabled by `mags3f` although the page has no "
-                     "features dataset, so no feature chips exist (contract issue, caps.py / config.py)")
+    # IMPLEMENTATION_NOTES item 89: the cap is on only where a features dataset is attached
+    assert _page_has_kind(c, "features"), "labeled_features_overlay enabled on a page without a features dataset"
     _focus(c, 2)
     for p in c.providers:
         mount(c.run, p)
@@ -1077,13 +1229,15 @@ def chk_spec2d(c):
         c.wait("(id) => { const e = document.querySelector(\"section.pk-pane[data-pane-id='spectrum2d'] .pk-pane-status\");"
                " return !!e && (e.title.startsWith(id) || e.title.startsWith('Could not load')); }", sid)
         title = c.ev("() => document.querySelector(\"section.pk-pane[data-pane-id='spectrum2d'] .pk-pane-status\").title")
-        if title.startswith("Could not load"):
-            pytest.xfail("PNG-mode 2D spectrum 404s: records.js resolves an index entry's `png` URL "
-                         "against the dataset directory, while page-relative URLs are the section 4.3 "
-                         f"rule used for image items ({title}; contract issue, web/js/data/records.js)")
+        # IMPLEMENTATION_NOTES item 81: the png sidecar URL resolves against the page URL
+        assert not title.startswith("Could not load"), title
         assert re.search(r"\d+×\d+", title), title
     else:
         assert st["ny"] > 0, st
+
+
+#: overlay ids of the synthetic isochrone tracks (caps.overlay_slug of the labels)
+TRACK_SLUGS = frozenset(ms.cmd_overlay_ids()[:-1])
 
 
 def _page_has_kind(c, kind):
@@ -1091,10 +1245,8 @@ def _page_has_kind(c, kind):
 
 
 def chk_live_sed(c):
-    if not _page_has_kind(c, "filters"):
-        pytest.xfail("live_sed_viewer is enabled by `mags3f` (filter-tagged magnitudes) although the "
-                     "page has no filters dataset, so the SED pane has no points (contract issue, "
-                     "caps.py / config.py)")
+    # IMPLEMENTATION_NOTES item 89: the cap is on only where a filters dataset is attached
+    assert _page_has_kind(c, "filters"), "live_sed_viewer enabled on a page without a filters dataset"
     _focus(c, 3)
     c.wait_stats("sed", "Array.isArray(s.points) ? s.points.length > 0 : s.points > 0")
 
@@ -1147,8 +1299,16 @@ def chk_keys(c):
 
 
 def chk_nav(c):
-    n = c.ev("() => document.querySelectorAll('a.pk-nav-link:not(.pk-nav-ext)').length")
-    assert n == len(c.portal.pages), n
+    # ui/nav.js fills the nav from portal.json after ready (boot does not await it), so the
+    # first case on a freshly opened shared page can run before the links exist
+    js = "() => document.querySelectorAll('a.pk-nav-link:not(.pk-nav-ext)').length"
+    want = len(c.portal.pages)
+    try:
+        c.wait(f"() => ({js})() >= {want}", timeout=30000)
+    except PWTimeout:
+        pass   # the assertion below reports the count
+    n = c.ev(js)
+    assert n == want, n
 
 
 def chk_hash(c):
@@ -1228,9 +1388,11 @@ def test_capability(e2e, request, p2k, page_cache, page, cap):
     assert cap in run.caps_attr()
     if capsmod.PROVIDERS.get(cap):
         assert c.providers, f"{cap} enabled on {page} without a provider pane"
-    before = set(run.errors())
+    # the page is shared by the module: report what this case logs (error cursor), including
+    # repeats of messages an earlier case logged
+    mark = run.error_mark()
     for p in c.providers:
         assert mount(run, p) == "ready", f"provider pane {p} of {cap} did not reach 'ready'"
     CHECKS[cap](c)
-    new = [e for e in run.errors() if e not in before]
+    new = run.errors(since=mark)
     assert new == [], new

@@ -7,7 +7,8 @@ tests exercise the bundle formats and the runtime without depending on the adapt
 One portal per catalog size N (8, 2k, 50k, 1M; 5M only for slow tests) is written to
 ``<root>/n<N>/``:
 
-* ``src``      catalog: ids ``SYN-%07d`` (the first 50 rows carry ``W51-%06d`` aliases),
+* ``src``      catalog: ids ``SYN-%07d`` (the first 50 rows carry a ``W51-%06d`` alias and a
+  Galactic-style alias with a literal ``+``, ``G%03d.1+0.%03d``),
   clustered positions near the Galactic centre, 7 NIRCam magnitudes with errors (2 % NaN,
   rounded to 0.001 mag), a limit-code column, a category with a unicode level, a flag, a
   value and (small N) a text column; axes / selection / filter presets; virtual colours.
@@ -15,6 +16,8 @@ One portal per catalog size N (8, 2k, 50k, 1M; 5M only for slow tests) is writte
 * ``spec``     20 ``pks1`` spectra (two gratings, err channel, a variant, mask runs).
 * ``s2d``      20 ``pki1`` 2D spectra; ``s2dpng`` the same ids in PNG mode.
 * ``img``      20 image items with ``sed`` and ``cutout`` roles, joined to ``src``.
+* ``prod``     20 ``products/1`` json records (detail product links relative to the records
+  index, IMPLEMENTATION_NOTES item 81); the linked files exist under ``data/prod/products/``.
 * ``tpl``/``flt``/``ext``/``feat``  shared physics resources under ``<root>/res``
   (``<portal>/res`` is a symlink to it); ``iso`` 3 synthetic isochrone tracks.
 * ``hips``     relative HiPS stubs, rungs, bookmarks; ``ovl`` sky and dim overlays;
@@ -23,8 +26,13 @@ One portal per catalog size N (8, 2k, 50k, 1M; 5M only for slow tests) is writte
   forces the CPU projection path (folded support 40 > MAXD 28). N is capped at 50k.
 
 Pages: ``index`` (landing), ``explorer``, ``manifold``, ``gallery``, ``spectra``,
-``spectra_png``, ``wavelength``, ``narrative``, ``vcolor``. ``<portal>/_pk/v<pk>`` is a
-symlink to the repository ``web/`` tree, so pane modules that land later are served live.
+``spectra_png``, ``wavelength``, ``narrative``, ``vcolor``, ``hist`` (explicit layout: list,
+two histogram panes, detail) and ``cmd`` (explicit layout with an uncollapsed CMD scatter pane,
+list and detail, with isochrone and extinction overlays; its detail pane shows the ``prod``
+products). ``<portal>/_pk/v<pk>`` is a symlink
+to the repository ``web/`` tree, so the runtime is served live; the build stamp hashes
+``web/`` as well (IMPLEMENTATION_NOTES item 94), since the shell and the vendored asset list
+are derived from it.
 
 Usage::
 
@@ -112,7 +120,12 @@ PAGES: dict[str, tuple[str, tuple[str, ...]]] = {
     "wavelength": ("wavelength", ("wavelength",)),
     "narrative": ("narrative", ("beat",)),
     "vcolor": ("manifold", ()),
+    "hist": ("explorer", ()),
+    "cmd": ("explorer", ()),
 }
+
+#: ids of the two histogram panes on the ``hist`` page and their expressions
+HIST_PANES: tuple[tuple[str, str, int | None], ...] = (("hist", "f410m", None), ("hist_color", CMD_X, 40))
 
 
 def syn_id(i: int) -> str:
@@ -121,6 +134,11 @@ def syn_id(i: int) -> str:
 
 def alias_of(i: int) -> str:
     return f"W51-{i:06d}"
+
+
+def plus_alias_of(i: int) -> str:
+    """Second alias with a literal '+' (legacy bare-name / specviewer hashes keep it)."""
+    return f"G{i:03d}.1+0.{i:03d}"
 
 
 # ---------------------------------------------------------------------------
@@ -257,7 +275,7 @@ def source_catalog(d: SourceData, key: str = "src", *, presets: bool = True) -> 
         cols["note"] = np.array([f"note {i} ✓" for i in range(d.n)], dtype=str)
         specs.append(ColumnSpec(key="note", role="text", label="Note"))
     table = Table(cols)
-    aliases = {syn_id(i): [alias_of(i)] for i in range(min(N_ALIASES, d.n))}
+    aliases = {syn_id(i): [alias_of(i), plus_alias_of(i)] for i in range(min(N_ALIASES, d.n))}
     virtual = [VirtualDim(key=c, label=c.upper().replace("-", " − "), unit="mag", group="colors")
                for c in COLOURS]
     pre: list[Preset] = []
@@ -349,13 +367,33 @@ def image2d_for(i: int) -> Image2D:
     return Image2D(data=data, wave=wave, y=y, stretch="asinh")
 
 
+#: records-index-relative product files of each ``prod`` record: (label, file name pattern, kind)
+PRODUCT_FILES: tuple[tuple[str, str, str], ...] = (("x1d FITS", "products/{rid}_x1d.fits", "fits"),
+                                                    ("Quicklook", "products/ql/{rid}.png", "png"))
+#: records index of the ``prod`` dataset, relative to the portal root
+PRODUCTS_INDEX = "data/prod/index.json"
+
+
+def product_record(rid: str) -> dict:
+    """``products/1`` record of ``rid``: relative URLs resolve against the records index URL."""
+    return {"items": [{"label": label, "url": pat.format(rid=rid), "kind": kind, "size": 2880,
+                       "auth": "public"} for label, pat, kind in PRODUCT_FILES]}
+
+
+def product_hrefs(rid: str) -> list[str]:
+    """Portal-root-relative paths the detail product links of ``rid`` point to."""
+    base = PRODUCTS_INDEX.rsplit("/", 1)[0]
+    return [f"{base}/{pat.format(rid=rid)}" for _l, pat, _k in PRODUCT_FILES]
+
+
 def isochrone_spec() -> IsochroneSpec:
     tracks = []
     mass = np.logspace(-1, 1, 40)
+    # Track mags are absolute (pk-isochrones/1): the client adds 5*log10(dist_pc/10), so with
+    # dist_pc=8000 (mu = 14.5) f410m spans about 12.5-24.5 mag, on top of the synthetic catalogue.
     for label, age, shift in (("1 Myr", 1.0, 0.0), ("3 Myr", 3.0, 0.4), ("10 Myr", 10.0, 0.9)):
         absmag = 4.0 - 6.0 * np.log10(mass) + shift
-        dm = 5 * np.log10(8000.0) - 5
-        mags = {filt: np.round(absmag + dm + off, 4) for _k, filt, off, _a in MAGS}
+        mags = {filt: np.round(absmag + off, 4) for _k, filt, off, _a in MAGS}
         tracks.append(Track(label=label, age_myr=age, dist_pc=8000.0, feh=0.0, mass=mass, mags=mags))
     return IsochroneSpec(tracks=tracks)
 
@@ -442,6 +480,7 @@ def datasets(n: int, seed: int = SEED, *, data: SourceData | None = None) -> tup
         "s2dpng": RecordSetSpec(key="s2dpng", kind="pki1", catalog="src", ids=rec_ids,
                                 loader=lambda rid: None,
                                 png=lambda rid: (f"img/s2d/{rid}.png", {"w": [1.66, 3.07], "y": [-15.0, 15.0]})),
+        "prod": RecordSetSpec(key="prod", kind="json", catalog="src", ids=rec_ids, loader=product_record),
         "img": ImageSetSpec(
             key="img", catalog="src", roles=[("sed", "SED"), ("cutout", "Cutout")],
             facets=[("field", "Field"), ("kind", "Kind")],
@@ -465,6 +504,34 @@ def datasets(n: int, seed: int = SEED, *, data: SourceData | None = None) -> tup
 
 
 PHYS = ["tpl", "flt", "ext", "iso"]
+
+
+def cmd_overlay_ids() -> list[str]:
+    """Dim overlay ids the ``cmd`` page's scatter lists: the isochrone track slugs and the
+    extinction law vector (IMPLEMENTATION_NOTES items 22 and 88)."""
+    return [config.overlay_slug(t.label) for t in isochrone_spec().tracks] + \
+        [f"{config.overlay_slug(ExtinctionSpec().law)}_vector"]
+
+
+def hist_layout() -> dict:
+    hists = []
+    for pid, expr, bins in HIST_PANES:
+        leaf: dict[str, Any] = {"pane": "hist", "dataset": "src", "options": {"expr": expr}}
+        if pid != "hist":
+            leaf["id"] = pid
+        if bins:
+            leaf["options"]["bins"] = bins
+        hists.append(leaf)
+    return {"row": [{"pane": "list", "dataset": "src", "size": 250},
+                    {"col": hists},
+                    {"pane": "detail", "dataset": "src", "size": 380}]}
+
+
+def cmd_layout() -> dict:
+    return {"row": [{"pane": "list", "dataset": "src", "size": 250},
+                    {"pane": "scatter", "dataset": "src",
+                     "options": {"x": CMD_X, "y": CMD_Y, "overlays": cmd_overlay_ids()}},
+                    {"pane": "detail", "dataset": "src", "size": 380, "options": {"products": "prod"}}]}
 
 
 def page_specs() -> list[PageSpec]:
@@ -496,6 +563,10 @@ def page_specs() -> list[PageSpec]:
                  datasets=["nar", "hips", "ovl", "src"], legacy=legacy("narrative"), **common),
         PageSpec(id="vcolor", archetype="manifold", title="Virtual colours", datasets=["vc"],
                  manifold=True, **common),
+        PageSpec(id="hist", archetype="explorer", title="Histograms", datasets=["src"],
+                 layout=hist_layout(), **common),
+        PageSpec(id="cmd", archetype="explorer", title="CMD", datasets=["src", "ctx", "prod"] + PHYS,
+                 layout=cmd_layout(), links={k: v for k, v in links.items() if k != "explorer"}, **common),
     ]
 
 
@@ -532,19 +603,26 @@ class SyntheticPortal:
         return int(sid.split("-")[1])
 
 
-def _source_hash() -> str:
-    """Hash of everything a build depends on: this module and every file of the
-    ``portalkit`` package (resolver, config, render, bundle and physics writers, schema,
-    package data). The ``web/`` tree is symlinked into each portal, so it is served live and
-    needs no stamp."""
-    h = hashlib.sha256()
-    h.update(Path(__file__).read_bytes())
-    pkg = REPO / "portalkit"
-    for p in sorted(pkg.rglob("*")):
+def _hash_tree(h: Any, base: Path) -> None:
+    for p in sorted(base.rglob("*")):
         if not p.is_file() or "__pycache__" in p.parts or p.suffix in (".pyc", ".pyo"):
             continue
-        h.update(str(p.relative_to(pkg)).encode("utf-8") + b"\0")
+        h.update(f"{base.name}/{p.relative_to(base).as_posix()}".encode("utf-8") + b"\0")
         h.update(p.read_bytes())
+
+
+def _source_hash(*, web: bool = True) -> str:
+    """Hash of everything a build depends on (IMPLEMENTATION_NOTES item 94): this module,
+    every file of the ``portalkit`` package (resolver, config, render, bundle and physics
+    writers, schema, package data) and, with ``web``, every file of ``web/`` (the shell
+    embeds the boot module path and vendored asset list, and the runtime files are served
+    through the ``_pk`` symlink). The shared physics resources do not depend on ``web/`` and
+    use ``web=False``."""
+    h = hashlib.sha256()
+    h.update(Path(__file__).read_bytes())
+    _hash_tree(h, REPO / "portalkit")
+    if web:
+        _hash_tree(h, WEB)
     return h.hexdigest()[:16]
 
 
@@ -564,7 +642,7 @@ def write_shared_res(res_dir: Path) -> dict[str, str]:
     """Write templates / filters / extinction / features once into ``res_dir``."""
     from portalkit import physics
     stamp = res_dir / ".refs.json"
-    src = _source_hash()
+    src = _source_hash(web=False)
     if stamp.exists():
         st = json.loads(stamp.read_text())
         refs = st.get("refs") if isinstance(st.get("refs"), dict) else None
@@ -586,6 +664,21 @@ def _write_hips_stubs(proot: Path, hips: HipsSpec) -> None:
     f = proot / "fits" / "stub.fits"
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_bytes(b"SIMPLE  =                    T" + b" " * 50 + b"END" + b" " * 77 + b" " * (2880 - 160))
+
+
+#: shared resource kinds the fixture attaches by reference beyond a page's own dataset specs:
+#: only the features document (``feat``); templates, filters and extinction come from the
+#: page's ``tpl`` / ``flt`` / ``ext`` datasets
+ATTACHED_RESOURCES: tuple[str, ...] = ("features",)
+
+
+def resolve_page(page: PageSpec, ds: dict[str, Any], manifests: dict[str, Any] | None = None):
+    """``caps.resolve`` with the resources this fixture attaches (:data:`ATTACHED_RESOURCES`),
+    so the result equals the caps ``config.assemble`` keeps on the built page
+    (IMPLEMENTATION_NOTES item 89)."""
+    import inspect
+    kw = {"resources": ATTACHED_RESOURCES} if "resources" in inspect.signature(capsmod.resolve).parameters else {}
+    return capsmod.resolve(page, ds, manifests or {}, **kw)
 
 
 def pane_list(layout: dict) -> list[dict]:
@@ -611,8 +704,8 @@ def build_portal(root: str | Path, n: int, *, seed: int = SEED, force: bool = Fa
     """Build (or reuse) the synthetic portal for ``n`` rows under ``<root>/n<n>/``.
 
     Re-uses an existing build when its stamp matches ``n``, the seed and the source hash of
-    this module plus the whole ``portalkit`` package (:func:`_source_hash`), so a change to the
-    resolver, config, shell or writers rebuilds the fixture.
+    this module, the whole ``portalkit`` package and the ``web/`` tree (:func:`_source_hash`),
+    so a change to the resolver, config, shell, writers or runtime rebuilds the fixture.
     ``res_dir`` defaults to ``<root>/res`` (shared across sizes).
     """
     root = Path(root).resolve()
@@ -643,7 +736,7 @@ def build_portal(root: str | Path, n: int, *, seed: int = SEED, force: bool = Fa
         manifests[k] = r.manifest
         catres[k] = r
     src = catres["src"]
-    for k in ("spec", "s2d", "s2dpng"):
+    for k in ("spec", "s2d", "s2dpng", "prod"):
         r = records_writer.write(ds[k], BundleWriter(proot, f"data/{k}", ledger, k), order=src.row_of,
                                  ledger=ledger)
         manifests[k] = r.index
@@ -662,6 +755,13 @@ def build_portal(root: str | Path, n: int, *, seed: int = SEED, force: bool = Fa
         img = image2d_for(int(rid[4:])).data
         a = np.clip(255 * (img - img.min()) / max(np.ptp(img), 1e-9), 0, 255).astype(np.uint8)
         p.write_bytes(png_bytes(a))
+    # product files the prod records link to (relative to data/prod/index.json)
+    for rid in ds["prod"].ids:
+        for rel in product_hrefs(rid):
+            p = proot / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(_plot_png(seed + 2000 + int(rid[4:])) if rel.endswith(".png") else
+                          b"SIMPLE  =                    T" + b" " * 50 + b"END" + b" " * 77 + b" " * (2880 - 160))
     # isochrones, hips, overlays, narrative
     iso_name, iso_bytes = config.isochrones_file(ds["iso"])
     atomic_write(proot / "data" / iso_name, iso_bytes)
@@ -673,14 +773,15 @@ def build_portal(root: str | Path, n: int, *, seed: int = SEED, force: bool = Fa
     _write_hips_stubs(proot, ds["hips"])
 
     res_refs = {k: "{res}" + v for k, v in res_refs_raw.items() if k != "features"}
-    refs = {"feat": {"kind": "features", "url": "{res}" + res_refs_raw["features"]}}
+    feat_ref = {"feat": {"kind": "features", "url": "{res}" + res_refs_raw["features"]}}
     pages: dict[str, PageInfo] = {}
     portal_pages = []
     budget = {"first_paint_bytes": int(ledger.first_paint())}
     for page in page_specs():
-        result = capsmod.resolve(page, ds, manifests)
-        page_refs = refs if page.archetype in ("explorer", "manifold", "spectra", "gallery") and \
-            any(k in page.datasets for k in ("tpl", "spec")) else {}
+        result = resolve_page(page, ds, manifests)
+        # the features document is attached by reference where labeled_features_overlay is
+        # on (build.py _page_refs does the same; IMPLEMENTATION_NOTES item 89)
+        page_refs = feat_ref if "labeled_features_overlay" in result.enabled else {}
         doc = config.assemble(page, ds, manifests, result, portal=PORTAL, refs=page_refs,
                               res_refs=res_refs, vendor_assets=True, budget=budget)
         fname = f"{page.id}.html"
@@ -748,7 +849,10 @@ def specs_for_flags(flags: list[str] | set[str], archetype: str, *, n: int = 8
                                 ra="ra" if pos else None, dec="dec" if pos else None)
         if archetype != "landing":
             page_ds.insert(0, "src")
-    if "sky" in flags and "skycat" not in flags or archetype == "wavelength" or "fits" in flags:
+    # a HiPS document wherever the legacy page drew a sky map: hips_layer_stacking needs one
+    # (IMPLEMENTATION_NOTES item 89). Filters, templates, extinction and features are shared
+    # resources that caps.resolve counts as attached by default.
+    if "sky" in flags or archetype == "wavelength" or "fits" in flags:
         h = hips_spec()
         if "fits" not in flags:
             h.fits = []

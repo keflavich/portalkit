@@ -4,8 +4,11 @@ Canonical keys: ``id=`` focus survives a reload, ``sel`` round-trips through
 ``app.hashLink()``, and ``av``/``rv``/``sky``/``view`` reach the store. Legacy grammars: one
 test per grammar the synthetic pages declare, each opened with a legacy-style URL and checked
 through the store (focus, rung, beat, lightbox) and the canonical hash the page writes back,
-then reloaded: the canonical hash must restore the same state (section 13, Level 2).
-Legacy tests are ``xfail(strict=False)`` while ``web/js/core/legacyhash.js`` is absent.
+then reloaded: the canonical hash must restore the same state and be written back
+unchanged (section 13, Level 2; IMPLEMENTATION_NOTES item 92 makes the ``sel=`` form a
+function of the selection alone). IMPLEMENTATION_NOTES items 90 (gc-query toggles consumed,
+unmappable parameters kept, literal ``+`` in bare-name / specviewer hashes) and 91 (axes
+presets as manifold frames) are asserted directly.
 """
 
 from __future__ import annotations
@@ -51,7 +54,7 @@ def canon(run) -> dict:
     return parse_hash(run.ev(HASHLINK_JS))
 
 
-def resolved_focus(run, timeout_ms: int = 30000) -> dict:
+def resolved_focus(run, timeout_ms: int = 60000) -> dict:
     run.page.wait_for_function(
         "() => { const f = window.__pk.store.get('focus'); return !!f && f.i !== null && f.i !== undefined; }",
         timeout=timeout_ms)
@@ -140,28 +143,18 @@ def _legacy(e2e, request, portal, page, grammar):
     e2e.xfail_unless_legacyhash(request)
 
 
-# hash keys whose encoding may legitimately change across a reload while the state is the
-# same: a selection written as a recipe (``sel=r:...``) is re-encoded as ``sel=bits:...``
-# once the restored recipe has been evaluated.  ``check`` verifies the state itself.
-REENCODED_KEYS = ("sel",)
-
-
 def reload_keeps(run, rewritten_js: str, check, timeout_ms: int = 15000) -> str:
-    """Wait for the canonical rewrite (``rewritten_js`` true), reload, and run ``check(run)``
-    again: the canonical form the page wrote back must restore the same state, and every hash
-    key survives the reload (keys in ``REENCODED_KEYS`` must be present; their encoding may
-    differ). Returns the canonical hash."""
+    """Wait for the canonical rewrite (``rewritten_js`` true) and for the hash to settle,
+    reload, and run ``check(run)`` again: the canonical form the page wrote back must restore
+    the same state and the page must write the same hash after the reload. Returns the
+    canonical hash."""
     run.page.wait_for_function(rewritten_js, timeout=timeout_ms)
-    before = run.ev("() => location.hash")
+    before = run.stable_hash()
     run.page.reload()
     assert run.wait_ready() == "ok"
     check(run)
-    after = run.ev("() => location.hash")
-    kb, ka = parse_hash(before), parse_hash(after)
-    assert set(kb) == set(ka), (before, after)
-    for k in kb:
-        if k not in REENCODED_KEYS:
-            assert ka[k] == kb[k], (k, before, after)
+    after = run.stable_hash()
+    assert parse_hash(after) == parse_hash(before), (before, after)
     return before
 
 
@@ -173,6 +166,22 @@ def test_legacy_bare_name(e2e, request, portal, open_page):
         assert resolved_focus(r)["sid"] == ms.syn_id(3)
     check(run)
     reload_keeps(run, "() => location.hash.startsWith('#id=')", check)
+
+
+@pytest.mark.parametrize("page,grammar", [("explorer", "bare-name"), ("spectra", "specviewer")])
+def test_legacy_plus_stays_literal(e2e, request, portal, open_page, page, grammar):
+    """IMPLEMENTATION_NOTES item 90: a source name with '+' set raw as the hash (legacy
+    ``location.hash = name``) keeps the '+', so it resolves through the alias."""
+    _legacy(e2e, request, portal, page, grammar)
+    name = ms.plus_alias_of(4)
+    assert "+" in name
+    run = open_page(portal.url_path(page), hash=name)
+
+    def check(r):
+        assert resolved_focus(r)["sid"] == ms.syn_id(4)
+    check(run)
+    h = parse_hash(reload_keeps(run, "() => location.hash.startsWith('#id=')", check))
+    assert h["id"] in (name, ms.syn_id(4)), h
 
 
 def test_legacy_kv_view(e2e, request, portal, open_page):
@@ -198,27 +207,64 @@ def test_legacy_w51_rowid(e2e, request, portal, open_page):
     reload_keeps(run, "() => /(^#|&)id=/.test(location.hash)", check)
 
 
-def test_legacy_gc_query_rv_colour(e2e, request, portal, open_page):
+def test_legacy_gc_query_numeric_rv(e2e, request, portal, open_page):
+    """A numeric gc-query ``rv`` (> 1.5) maps to the canonical R_V; ``g`` is consumed."""
     _legacy(e2e, request, portal, "manifold", "gc-query")
-    run = open_page(portal.url_path("manifold"), query="rv=5.5&cb=0&g=2")
+    run = open_page(portal.url_path("manifold"), query="rv=5.5&g=2")
     assert run.store_get("rv") == pytest.approx(5.5)
     h = canon(run)
     assert float(h["rv"]) == pytest.approx(5.5)
     search = run.ev("() => location.search")
-    assert "rv=" not in search and "pktest=1" in search
+    assert "rv=" not in search and "g=" not in search and "pktest=1" in search
 
     def check(r):
         assert r.store_get("rv") == pytest.approx(5.5)
         assert "rv=" not in r.ev("() => location.search")
     reload_keeps(run, "() => /(^#|&)rv=/.test(location.hash)", check)
-    # cb=<dim index> needs the dim list; legacyhash.js reads it from the manifold pane's
-    # options.dims, which the resolver leaves unset when the manifest carries the manifold dims
+
+
+def test_legacy_gc_query_toggles_dropped(e2e, request, portal, open_page):
+    """IMPLEMENTATION_NOTES item 90: the display toggles ``rv=1``, ``g`` and ``fa`` have no
+    canonical key; they are consumed (gone from the query) and leave R_V unchanged."""
+    _legacy(e2e, request, portal, "manifold", "gc-query")
+    ref = open_page(portal.url_path("manifold"))
+    rv0 = ref.store_get("rv")
+    run = open_page(portal.url_path("manifold"), query="rv=1&g=2&fa=1")
+    run.page.wait_for_function("() => !/[?&](rv|g|fa)=/.test(location.search)", timeout=15000)
+    assert "pktest=1" in run.ev("() => location.search")
+    assert run.store_get("rv") == rv0
+    assert "rv" not in canon(run)
+    assert not {"g", "fa"} & set(parse_hash(run.ev("() => location.hash")))
+    assert run.errors() == []
+
+
+def test_legacy_gc_query_colour_by(e2e, request, portal, open_page):
+    """``cb=<dim index>`` maps to ``c=<dim key>`` through the manifold pane's ``options.dims``
+    (IMPLEMENTATION_NOTES item 88 gives every manifold pane its dims)."""
+    _legacy(e2e, request, portal, "manifold", "gc-query")
     mani = [p for p in portal.pages["manifold"].panes if p["pane"] == "manifold"]
-    if not any(isinstance(p["options"].get("dims"), list) for p in mani):
-        pytest.xfail("manifold pane has no options.dims list, so gc-query cb= cannot be mapped "
-                     "(contract issue between caps.py default layout and legacyhash.js)")
-    assert "c" in h and h["c"].split("~")[0] in ms.MAG_KEYS
-    assert "cb=" not in search
+    assert mani and all(isinstance(p["options"].get("dims"), list) for p in mani), mani
+    dims = mani[0]["options"]["dims"]
+    run = open_page(portal.url_path("manifold"), query="cb=1")
+    run.page.wait_for_function("() => /(^#|&)c=/.test(location.hash)", timeout=15000)
+    h = canon(run)
+    assert h["c"].split("~")[0] == dims[1], (h, dims)
+    assert "cb=" not in run.ev("() => location.search")
+
+    def check(r):
+        assert canon(r)["c"].split("~")[0] == dims[1]
+    reload_keeps(run, "() => /(^#|&)c=/.test(location.hash)", check)
+
+
+def test_legacy_gc_query_unmappable_stays(e2e, request, portal, open_page):
+    """IMPLEMENTATION_NOTES item 90: an index parameter that maps to nothing (``cb`` past the
+    dim list) stays in the URL, while the mappable ``g`` next to it is consumed."""
+    _legacy(e2e, request, portal, "manifold", "gc-query")
+    run = open_page(portal.url_path("manifold"), query="cb=99&g=2")
+    run.page.wait_for_function("() => !/[?&]g=/.test(location.search)", timeout=15000)
+    search = run.ev("() => location.search")
+    assert "cb=99" in search, search
+    assert "c" not in canon(run)
 
 
 def test_legacy_gc_query_sel_position(e2e, request, portal, open_page):
@@ -317,3 +363,25 @@ def test_canonical_hash_bypasses_legacy(e2e, request, portal, open_page):
     run = open_page(portal.url_path("explorer"), hash=f"id={ms.syn_id(8)}&av=3")
     assert resolved_focus(run)["sid"] == ms.syn_id(8)
     assert run.store_get("av") == pytest.approx(3)
+
+
+def test_manifold_axes_preset_frame(portal, open_page):
+    """IMPLEMENTATION_NOTES item 91: ``<manifold>.frame=<axes preset>`` gives the two-dim
+    frame with unit weight on the preset's x dim (row 0) and y dim (row 1)."""
+    run = open_page(portal.url_path("manifold"), hash="manifold.frame=cmd")
+    run.ev("(p) => window.__pk.app.layout.reveal(p)", "manifold")
+    run.ev("async (p) => { await window.__pk.app.layout.whenMounted(p); }", "manifold")
+    run.page.wait_for_function(
+        """() => { const h = window.__pk.app.layout.pane('manifold'); const s = h && h.stats ? h.stats() : null;
+                   return !!(s && s.frame && s.dims && s.frame.length === 2 * s.dims.length); }""", timeout=60000)
+    st = run.pane_stats("manifold")
+    dims, F = st["dims"], st["frame"]
+    D = len(dims)
+    ix, iy = dims.index(ms.CMD_X), dims.index(ms.CMD_Y)
+    want = [0.0] * (2 * D)
+    want[ix] = 1.0
+    want[D + iy] = 1.0
+    assert [abs(v) for v in F] == pytest.approx(want, abs=1e-6), (dims, F)
+    assert run.store_get("frame:manifold") is None or \
+        (run.store_get("frame:manifold") or {}).get("preset") in (None, "cmd")
+    assert run.errors() == []

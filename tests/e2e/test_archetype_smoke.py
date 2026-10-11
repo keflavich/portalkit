@@ -27,7 +27,7 @@ SMALL = (8, 2000)
 BIG = (50000, 1000000)
 HUGE = ms.SLOW_SIZES          # 5M: -m slow only
 ALL_PAGES = tuple(ms.PAGES)
-BIG_PAGES = ("explorer", "manifold", "vcolor")
+BIG_PAGES = ("explorer", "manifold", "vcolor", "hist", "cmd")
 HUGE_PAGES = ("explorer",)
 TIERED = ("scatter", "manifold", "hist", "sky", "list", "table")
 
@@ -60,12 +60,11 @@ def test_html_size_and_caps_attr(synth, n, page):
     caps = htmlmod.unescape(m.group(1)[1:-1]).split()
     assert caps == sorted(caps)
     # the static attribute carries the resolver output for this page
-    from portalkit import caps as capsmod
     spec = next(ps for ps in ms.page_specs() if ps.id == page)
     ds, _ = ms.datasets(min(n, 2000))
     assert caps == sorted(info.caps)
     if n <= 2000:
-        assert caps == sorted(capsmod.resolve(spec, ds, {}).enabled)
+        assert caps == sorted(ms.resolve_page(spec, ds).enabled)
 
 
 @pytest.mark.parametrize("n,page", CASES)

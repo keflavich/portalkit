@@ -18,15 +18,16 @@ SwiftShader against the DevServer:
 
 Every measurement is written to ``$PK_PERF_REPORT`` (default ``<synth root>/perf_report.json``)
 before the budgets are asserted, so a failing run still leaves its numbers behind.
+
+The browser fixtures come from ``tests/conftest_browser.py``, registered as a plugin by
+``tests/perf/conftest.py`` (IMPLEMENTATION_NOTES item 94).
 """
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
 import platform
-import sys
 import time
 from pathlib import Path
 
@@ -35,35 +36,6 @@ import pytest
 
 pytestmark = pytest.mark.perf
 
-
-def _load_harness():
-    """The browser/devserver fixtures live in tests/e2e/conftest.py; tests/perf has no
-    conftest of its own (tests/conftest.py belongs to WP00), so the module is loaded under a
-    private name and its fixtures are re-exported here.
-
-    The session resources behind those fixtures (sync Playwright, Chromium, DevServer, fixture
-    root) sit in the harness's process-wide registry, so when e2e and perf tests run in one
-    pytest session both copies of the fixtures share one Playwright instance (a second
-    ``sync_playwright().start()`` in the same process fails)."""
-    name = "_pk_e2e_harness"
-    if name in sys.modules:
-        return sys.modules[name]
-    path = Path(__file__).resolve().parents[1] / "e2e" / "conftest.py"
-    spec = importlib.util.spec_from_file_location(name, path)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-_h = _load_harness()
-synth_root = _h.synth_root
-synth = _h.synth
-server = _h.server
-_playwright = _h._playwright
-browser = _h.browser
-open_page = _h.open_page
-e2e = _h.e2e
 
 QUIET_MS = 200
 #: multiplier on the time budgets (not the byte budgets) for hosts slower than the reference

@@ -50,7 +50,9 @@ LIVE_ROOTS = (
     Path("/orange/adamginsburg/jwst/brick/analysis"),    # a symlink into the brick repo checkout
     Path("/orange/adamginsburg/jwst/spectra/mastDownload"),
 )
-CHROMIUM_ARGS = ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"]
+#: SwiftShader WebGL; the 2D canvas also runs in software so screenshot readback does not wait
+#: on GPU-process canvas copies (same flags as tests/conftest_browser.py)
+CHROMIUM_ARGS = ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--disable-accelerated-2d-canvas"]
 
 
 @dataclass
@@ -303,7 +305,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--title", default="Legacy vs unified contact sheet")
     ap.add_argument("--viewport", default="1400x900", help="WIDTHxHEIGHT")
     ap.add_argument("--wait-ms", type=int, default=1500, help="extra settle time before each shot")
-    ap.add_argument("--timeout-ms", type=int, default=60000)
+    ap.add_argument("--timeout-ms", type=int, default=180000)
     ap.add_argument("--full-page", action="store_true")
     ap.add_argument("--no-shots", action="store_true", help="write the HTML only (no browser)")
     ap.add_argument("--serve-root", type=Path, default=None,
