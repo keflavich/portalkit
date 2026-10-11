@@ -857,5 +857,21 @@
    "tests/js/listpanes.test.mjs"
   ],
   "description": "(1) data.worker.js record(i) on catalogs with row chunks merges quantized cell values (cellSource) for stored columns the row chunk omits (exact:false) and lists them in `_qkeys` (hover.js already reads `_qkeys`). (2) sky.js and wavelength.js do not await markers.refresh({force:true}) inside setup: call it without awaiting (then drawRings) and register positionChanged/zoomChanged/resizeChanged listeners and the narrative:sync emit right away; wavelength.js mounts through retryAladinOnce(app.page) like sky.js (note 109). (3) table.js: blocks read before first paint on a quantized catalog with positions are re-read after app.afterFirstPaint() (or read with {pos:true} after it). (4) sky.js highlight and detail.js focus reads pass {pos:true} so a highlight/focus set from the URL before first paint still gets coordinates. (5) chips.js calls legend.toggleLevel with {defaultOff: hasDefaultOff(meta)} (note 104). (6) boot.js loads css/panes/ui.css before mountLayout. (7) docs/js.md documents app.afterFirstPaint, DataClient.resolveIds and the worker resolveIds op, workerUrl(manifestUrl), rows/record opts.pos, allowPositions(), _posDeferred, `_qkeys`, the app-level hover record channel 'hover:card', and the current app.resolveIds path; ARCHITECTURE.md section 6.3 sel= rules match note 107, and the hover-card text (about line 673, 'never fetch row chunks') matches note 99."
+ },
+ {
+  "id": "WPC2",
+  "title": "Wave C: extinction-vector need, shared resource helper for fixtures",
+  "depends_on": [],
+  "files": [
+   "portalkit/caps.py",
+   "portalkit/config.py",
+   "portalkit/build.py",
+   "tests/py/test_caps.py",
+   "tests/py/test_config.py",
+   "tests/py/test_cli_build.py",
+   "tests/fixtures/make_synthetic.py",
+   "tests/e2e/test_caps_matrix.py"
+  ],
+  "description": "Implement IMPLEMENTATION_NOTES 110. Add extinction_vectors_on_ccd -> 'extinction' to caps.NEEDS. Factor the resource-attachment rule of build._page_refs into one public helper (e.g. caps.attachable_resources(page, caps) or build.page_resources) that make_synthetic.resolve_page and test_caps_matrix._collect_pairs call instead of a hand-picked resources tuple. Wavelength/narrative overlay documents with a 'reddening' dim are listed in their pane's default overlays when the cap is on. The 3 failing caps-matrix cases test_capability[hist|wavelength|narrative-extinction_vectors_on_ccd] must pass (each either draws a vector or the cap is disabled with a reason), and test_parity_inventory must stay green."
  }
 ]

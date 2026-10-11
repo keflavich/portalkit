@@ -275,3 +275,10 @@ starting.
     `.pk-feat-chip`, `.pk-feat-toggles`) live only in `css/panes/ui.css`, which boot always loads.
 109. **Aladin prefetch.** A failed fire-and-forget prefetch does not poison later loads: the first sky pane that mounts
     after a failed prefetch retries once (`loadAladin({retry:true})`).
+110. **Extinction vector need.** `extinction_vectors_on_ccd` needs an extinction dataset (`caps.NEEDS`), like note 89; the
+    shared `{res}` extinction document satisfies it when it is attachable. A page where the cap stays on always draws
+    a vector by default: resolver-built scatter/manifold leaves list `<law>_vector` (note 88), and wavelength/narrative
+    overlay documents with a `reddening` dim are listed in their pane's default overlays. Fixtures and tests resolve
+    pages with the same resources `build._page_refs` attaches (one shared helper, not a hand-picked tuple).
+111. **HiPS attachment.** Pages with sky, skycat, fits or wavelength panes whose legacy caps include
+    `hips_layer_stacking` carry a HiPS document; adapters attach one (the synthetic fixture does so by flag).
