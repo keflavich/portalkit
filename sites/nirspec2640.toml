@@ -1,0 +1,98 @@
+# JWST NIRSpec program 2640 (Westerlund 2 MSA spectra) portal (WP25; ARCHITECTURE.md sections
+# 4.1 and 14.4, wave 3). Public data: the unified portal is public, figures are served from the
+# public tree and the FITS products link to the secure archive copy (login badge).
+#
+# Sources of truth: NIRSpec_2640_*.py write the originals to /orange/adamginsburg/jwst/spectra/
+# nirspec_2640 (read by the adapter); the public tree web/public/jwst/wd2/nirspec_2640 holds
+# hand-copied pages. The two have drifted (checked 2026-10-11):
+#   * nirspec_2640_colorcolor.html: the public copy (2026-09-30) predates the secure one
+#     (2026-10-02, adds the HST columns); the unified colour-colour page supersedes both.
+#   * nirspec_2640_manifold.html exists only in the public tree (no secure original); Tier A
+#     reads it from there, Tier B rebuilds it with NIRSpec_2640_Manifold.build.
+#   * every other page, table, json and figure directory is identical in both trees.
+# index.html in the public tree is the NIRSpec 2640 landing page (NIRSpec_2640_Index.py); the
+# wd2 family (WP24) shares this legacy_dir and declares no legacy landing, so the nirspec2640
+# landing supersedes index.html. The legacy index linked nirspec_2640_icecolumns.html, which
+# was never generated; the unified portal adds that page.
+# Legacy deep links: the per-source pages read `#<source name>` (bare-name); the specviewer
+# writes it on load (specviewer); the manifold wrote `#view=..&x=..&y=..&star=..` (kv-view).
+# Tier A deviation (section 9.2): no legacy payload holds the 2D spectra, the Wd2 catalogue,
+# the isochrones or the ice columns, so every tier reads those (see adapters/nirspec2640.py).
+family = "nirspec2640"
+adapter = "adapters.nirspec2640:ADAPTER"
+tier_default = "B"
+legacy_paths = ["/orange/adamginsburg/jwst/brick/analysis"]
+
+[[portal]]
+id = "nirspec2640"
+title = "JWST NIRSpec 2640 (Westerlund 2) portal"
+visibility = "public"
+legacy_dir = "/orange/adamginsburg/web/public/jwst/wd2/nirspec_2640"
+target_dir = "/orange/adamginsburg/web/public/jwst/wd2/nirspec_2640/unified/nirspec2640"
+url = "https://data.rc.ufl.edu/pub/adamginsburg/jwst/wd2/nirspec_2640/unified/nirspec2640/"
+inputs = [
+    "/orange/adamginsburg/jwst/spectra/nirspec_2640/nirspec_2640_sources.json",
+    "/orange/adamginsburg/jwst/spectra/nirspec_2640/nirspec_2640_sources.ecsv",
+    "/orange/adamginsburg/jwst/spectra/nirspec_2640/nirspec_2640_slits.ecsv",
+    "/orange/adamginsburg/jwst/spectra/nirspec_2640/nirspec_2640_synthphot.ecsv",
+    "/orange/adamginsburg/jwst/spectra/nirspec_2640/nirspec_2640_ice_lines.ecsv",
+    "/orange/adamginsburg/jwst/spectra/nirspec_2640/nirspec_2640_line_detections.ecsv",
+    "/orange/adamginsburg/jwst/spectra/nirspec_2640/specdata/*.json",
+    "/orange/adamginsburg/web/public/jwst/wd2/nirspec_2640/nirspec_2640_manifold.html",
+    "/orange/adamginsburg/jwst/spectra/mastDownload/JWST/jw02640-*/*_x1d.fits",
+    "/orange/adamginsburg/jwst/wd2/catalogs/basic_merged_indivexp_photometry_tables_merged_resbgsub_m8_dedup.fits",
+]
+
+[[portal.page]]
+id = "index"
+legacy = ["index.html"]
+
+[[portal.page]]
+id = "nirspec_2640_map"
+legacy = ["nirspec_2640_map.html"]
+grammar = ["bare-name"]
+
+[[portal.page]]
+id = "nirspec_2640_colorcolor"
+legacy = ["nirspec_2640_colorcolor.html"]
+grammar = ["bare-name"]
+
+[[portal.page]]
+id = "nirspec_2640_specviewer"
+legacy = ["nirspec_2640_specviewer.html"]
+grammar = ["specviewer"]
+
+[[portal.page]]
+id = "nirspec_2640_red_excess"
+legacy = ["nirspec_2640_red_excess.html"]
+grammar = ["bare-name"]
+
+[[portal.page]]
+id = "nirspec_2640_manifold"
+legacy = ["nirspec_2640_manifold.html"]
+grammar = ["kv-view", "bare-name"]
+
+# New page: the legacy index linked nirspec_2640_icecolumns.html, which no script wrote.
+[[portal.page]]
+id = "nirspec_2640_icecolumns"
+legacy = []
+
+[[portal.page]]
+id = "nirspec_2640_pvgallery"
+legacy = ["nirspec_2640_pvgallery.html"]
+grammar = ["bare-name"]
+
+[[portal.page]]
+id = "nirspec_2640_sedgallery"
+legacy = ["nirspec_2640_sedgallery.html"]
+grammar = ["bare-name"]
+
+# One page serves the three legacy spectrum-PNG galleries (all filters, narrow-band overlay,
+# broad-band overlay); each stub opens on its image role (gallery store key `role`).
+[[portal.page]]
+id = "gallery_2640"
+legacy = [
+    "pngs/gallery_2640.html",
+    {file = "pngs/gallery_2640_nb.html", preset = "role=nb"},
+    {file = "pngs/gallery_2640_bb.html", preset = "role=bb"},
+]
