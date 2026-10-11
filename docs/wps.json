@@ -489,9 +489,11 @@
    "adapters/nirspec2640.py",
    "sites/nirspec2640.toml",
    "tests/adapters/test_nirspec2640.py",
-   "tests/e2e/test_port_nirspec2640.py"
+   "tests/e2e/test_port_nirspec2640.py",
+   "portalkit/legacy/nirspec.py",
+   "tests/py/test_legacy_nirspec.py"
   ],
-  "description": "Pages: landing, map, colorcolor (pairs connectors, BD hist split), specviewer, pvgallery, sedgallery, red_excess (binned-stat background), manifold, one pngs gallery with 3 role presets. Product links are rewritten to the secure archive URL with a login-required badge. Target is web/public/jwst/wd2/nirspec_2640/unified/nirspec2640/; this resolves the public-copy drift."
+  "description": "Pages: landing, map, colorcolor (pairs connectors, BD hist split), specviewer, pvgallery, sedgallery, red_excess (binned-stat background), manifold, one pngs gallery with 3 role presets. Product links are rewritten to the secure archive URL with a login-required badge. Target is web/public/jwst/wd2/nirspec_2640/unified/nirspec2640/; this resolves the public-copy drift.\n\nIntegrator additions: (a) Put the generic NIRSpec helpers in a shared module portalkit/legacy/nirspec.py (with tests in tests/py/test_legacy_nirspec.py): stitch per-grating s2d FITS into one pki1 2D image (per-grating trim, pad, concatenate in wavelength order) and split a merged x1d at grating-overlap midpoints into segments. adapters/nirspec6927.py has working versions of both (read them; do not edit that adapter, the integrator will switch it over). (b) Legacy bugs to fix through the port: the public copies under /orange/adamginsburg/web/public/jwst/wd2/nirspec_2640/ have drifted from the secure originals (the unified pages replace them; record which legacy public files the unified target supersedes), and the 2640 icecolumns page is missing (the 6927 family has one: provide the equivalent page for 2640 if the ice-column fits exist, else record it as a gap with the missing inputs). Fix copy-pasted page titles."
  },
  {
   "id": "WP26",
