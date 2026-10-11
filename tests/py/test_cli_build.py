@@ -787,3 +787,15 @@ def test_multi_portal_scoping_and_manifold_dims(tmp_path):
     leaf = next(p for p in panes(mani["layout"]) if p.get("pane") == "manifold")
     dims = leaf["options"]["dims"]
     assert isinstance(dims, list) and set(dims) >= {"f115w", "f200w", "f356w", "f444w"}
+
+
+def test_doc_file_refs_include_ids_chunks():
+    """Chunked ids (note 98) and the alias file are verified like column chunks."""
+    doc = {"cols": [{"key": "m", "chunk_files": ["cols/m.c000.aaaaaaaa.bin", "cols/m.c001.bbbbbbbb.bin"]}],
+           "ids": {"enc": "str", "chunks": ["ids.c000.cccccccc.bin", "ids.c001.dddddddd.bin"],
+                   "alias_file": "aliases.eeeeeeee.json"},
+           "levels": {"chunks": ["not-a-file-ref"]}}
+    refs = buildmod._doc_file_refs(doc)
+    assert {"ids.c000.cccccccc.bin", "ids.c001.dddddddd.bin", "aliases.eeeeeeee.json"} <= set(refs)
+    assert "cols/m.c001.bbbbbbbb.bin" in refs
+    assert "not-a-file-ref" not in refs

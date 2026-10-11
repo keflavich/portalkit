@@ -155,12 +155,15 @@ def test_lod_prefix_column_distributions_ks(tmp_path):
     man = res.manifest
     assert man["order"]["kind"] == "lod"
     cols = {c["key"]: c for c in man["cols"]}
-    src = codec.decode_file(cols[order.SRC_INDEX_KEY],
-                            (tmp_path / cols[order.SRC_INDEX_KEY]["file"]).read_bytes(), n)
+    def read(rel):
+        return (tmp_path / rel).read_bytes()
+
+    # n > LOD_MIN_N: columns are split at chunk_starts (note 98), so read through the codec helper
+    src = codec.read_column(man, cols[order.SRC_INDEX_KEY], read)
     np.testing.assert_array_equal(np.sort(src.astype(np.int64)), np.arange(n))
     for key in ("m", "f", "v"):
         meta = cols[key]
-        vals = codec.dequant(meta, codec.decode_file(meta, (tmp_path / meta["file"]).read_bytes(), n))
+        vals = codec.dequant(meta, codec.read_column(man, meta, read))
         # decoded values in stored order are the input values reordered by _src_index
         np.testing.assert_allclose(vals, np.asarray(t[key])[src.astype(np.int64)],
                                    rtol=1e-3, atol=1e-3)

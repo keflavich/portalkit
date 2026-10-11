@@ -660,7 +660,7 @@ Limit kinds from legacy manifold `k` codes (`u`, `l`) are written to the sparse 
 - If N > 131072, `order.kind = "lod"`. The builder takes a seeded permutation (numpy `default_rng(seed)`) and cuts it into levels with cumulative prefix sizes `32768·2^k` (`LOD_BASE`), ending at N. Every prefix is a uniform random subsample.
   - Inside each level, rows are sorted by `(tile, morton16(ra, dec))`, where tile is the `i16off` tile. This gives sky locality for `skyWindow` and better gzip.
   - The manifest lists the cumulative `levels`.
-- Columns are split into chunk files of `chunk_rows = 1048576` rows when N > 1048576. The first chunk file therefore holds the LOD prefix used for first paint and motion.
+- When N > 131072 (`LOD_MIN_N`), every column and the ids are split at `chunk_starts = [0, LOD_BASE, LOD_BASE+CHUNK_ROWS, LOD_BASE+2·CHUNK_ROWS, ...]` (`CHUNK_ROWS = 1048576`), recorded in the manifest, one file per entry (`chunk_files`, `ids.chunks`). Chunk 0 (the head chunk) is the LOD base sample of 32768 rows used for first paint and motion. pos stays a single file. Catalogs with N ≤ 131072 keep single files (IMPLEMENTATION_NOTES 98; docs/bundle.md).
 - `ids` and row chunks follow stored order. `aliases.json` and the id search map to stored row indices. The original input index is stored as column `_src_index` (`u32`) whenever the order is not `input`.
 
 ### 5.5 Exact rows
@@ -770,7 +770,7 @@ Shared resources (`templates`, `filters`, `extinction`, `features`) are publishe
 | page HTML | ≤ 200,000 B (target ≤ 80 kB) |
 | embedded page.json | ≤ 65,536 B |
 | manifest.json | ≤ 262,144 B |
-| first-paint bytes (manifest + density grid or LOD-prefix of 2 axis columns + ids not included) | ≤ 2 MB for N ≤ 1M; ≤ 6 MB for N ≤ 5M |
+| first-paint bytes (manifest + first count density grid, or both axis columns in full without a grid, + the list's first screen: `rows/r0000`, or the head chunk of every stored column plus the head ids chunk; positions excluded; rule in docs/bundle.md section 8) | ≤ 2 MB for N ≤ 1M; ≤ 6 MB for N ≤ 5M |
 | single column/chunk file | ≤ 16 MiB |
 | shard | ≤ 524,288 B (single oversized record → layout file, soft warning above 2 MiB) |
 | row chunk | ≤ 524,288 B (soft) |

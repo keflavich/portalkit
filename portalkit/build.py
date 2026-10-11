@@ -1051,6 +1051,8 @@ def _doc_file_refs(doc: Any) -> list[str]:
                     add(x)
                 elif k == "url" and parent in ("roles",):
                     add(x)
+                elif k in ("chunks", "alias_file") and parent == "ids":
+                    add(x)
                 elif k in ("links", "provenance", "caveats"):
                     continue
                 else:
