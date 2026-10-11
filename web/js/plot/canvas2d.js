@@ -5,7 +5,10 @@
 //   drawPoints(ctx, view, pts, opts?)       per-point shape / hollow / size / limit arrows /
 //                                           error bars / labels
 //   drawFocusRing(ctx, view, x, y, opts?)   focus / hover ring
-//   drawDensityGrid(ctx, view, grid, opts?) tier F / pre-binned density (putImageData path)
+//   drawDensityGrid(ctx, view, grid, opts?) tier F / pre-binned density: densityImage(grid,
+//                                           opts) colourises once per (counts, cmap, lo, hi,
+//                                           log) into a CPU-backed scratch canvas, then each
+//                                           redraw is one drawImage (IMPLEMENTATION_NOTES 103)
 //   toSVG(view, layers) -> string           SVG export; replays the same drawing code into an
 //                                           SVG-emitting context, so export == screen
 //   colormaps: sampleCmap(name, t), cmapTable(name), cmapLUT(names), CMAP_NAMES, cmapCSS()
@@ -503,9 +506,17 @@ export function drawAxes(ctx, view, opts = {}) {
 
 // ------------------------------------------------------------------ density grid (tier F)
 
-function makeScratchCanvas(w, h) {
+/**
+ * Options of every 2D context this module and the raster panes create for pixel uploads
+ * (IMPLEMENTATION_NOTES 103): a CPU-backed canvas, so putImageData never becomes a GPU
+ * readback/finish (seconds on SwiftShader).
+ */
+export const SCRATCH_CTX_OPTS = Object.freeze({willReadFrequently: true});
+
+/** Off-screen canvas of w × h (OffscreenCanvas, else a detached <canvas>), or null. */
+export function makeScratchCanvas(w, h) {
   if (typeof OffscreenCanvas === 'function') return new OffscreenCanvas(w, h);
-  if (typeof document !== 'undefined') {
+  if (typeof document !== 'undefined' && document && typeof document.createElement === 'function') {
     const c = document.createElement('canvas');
     c.width = w; c.height = h;
     return c;
@@ -513,45 +524,142 @@ function makeScratchCanvas(w, h) {
   return null;
 }
 
+/** CPU-backed 2D context of a scratch canvas (SCRATCH_CTX_OPTS), or null. */
+export function scratchContext(canvas) {
+  if (!canvas || typeof canvas.getContext !== 'function') return null;
+  return canvas.getContext('2d', SCRATCH_CTX_OPTS);
+}
+
+// Colourised density images: counts array -> Map(key -> {canvas, fp}). Weakly keyed, so an
+// image lives as long as its grid. A few (cmap, lo, hi, log) variants are kept per grid.
+const densityCache = new WeakMap();
+const DENSITY_VARIANTS = 4;
+const densityStats = {builds: 0, hits: 0};
+
+/** Counters of the density image cache ({builds, hits}); for tests and pane stats. */
+export function densityCacheStats() {
+  return {...densityStats};
+}
+
+// Bit views of one float64, for hashing count values of any numeric array type.
+const fpF64 = new Float64Array(1);
+const fpU32 = new Uint32Array(fpF64.buffer);
+
 /**
- * Draw a binned count grid. grid: {counts, nx, ny, xr: [x0, x1], yr: [y0, y1]} with
- * counts[iy·nx + ix], iy = 0 at yr[0]; bins are uniform in the view's transformed space.
- * opts: {cmap = tokens.densityCmap | 'magma', log = true, alpha = 1, tokens, lo, hi}.
- * Returns false when nothing can be drawn (no canvas, empty grid).
+ * Max of the finite counts and a fingerprint of the array contents: two independent 32-bit
+ * hashes (FNV-1a and a multiply-xorshift mix) over the bits of every value in order, so
+ * a grid whose counts array is refilled in place gets a new image. Any change of value or
+ * position changes the hashes except for a 2^-64-scale chance collision.
  */
-export function drawDensityGrid(ctx, view, grid, opts = {}) {
-  if (!grid || !grid.counts || !(grid.nx > 0) || !(grid.ny > 0)) return false;
-  const {counts, nx, ny} = grid;
+function scanCounts(counts, len) {
   let mx = 0;
-  for (let i = 0; i < nx * ny; i++) if (counts[i] > mx && Number.isFinite(counts[i])) mx = counts[i];
-  if (!(mx > 0)) return false;
-  const lo = opts.lo ?? 0, hi = opts.hi ?? mx;
+  let h1 = 0x811c9dc5 | 0, h2 = 0x9e3779b9 | 0;
+  const w32 = counts instanceof Float32Array || counts instanceof Int32Array || counts instanceof Uint32Array;
+  if (w32) {
+    // 32-bit elements: hash their bits through a Uint32Array view (one load per value)
+    const bits = new Uint32Array(counts.buffer, counts.byteOffset, len);
+    for (let i = 0; i < len; i++) {
+      const c = counts[i];
+      if (c > mx && Number.isFinite(c)) mx = c;
+      const b = bits[i];
+      h1 = Math.imul(h1 ^ b, 0x01000193);
+      h2 = Math.imul(h2 ^ b ^ (h2 >>> 15), 0x85ebca6b);
+    }
+  } else {
+    for (let i = 0; i < len; i++) {
+      const c = counts[i];
+      if (c > mx && Number.isFinite(c)) mx = c;
+      fpF64[0] = c;
+      const lo = fpU32[0], hi = fpU32[1];
+      h1 = Math.imul(h1 ^ lo, 0x01000193);
+      h1 = Math.imul(h1 ^ hi, 0x01000193);
+      h2 = Math.imul(h2 ^ lo ^ (h2 >>> 15), 0x85ebca6b);
+      h2 = Math.imul(h2 ^ hi ^ (h2 >>> 13), 0xc2b2ae35);
+    }
+  }
+  return {mx, fp: `${len}|${h1 >>> 0}|${h2 >>> 0}`};
+}
+
+/**
+ * Colourised image (a scratch canvas, nx × ny, row 0 at the top) of a count grid for the
+ * given cmap / lo / hi / log. The image is cached per (grid.counts, cmap, lo, hi, log), so
+ * a redraw of an unchanged grid costs one drawImage and no pixel upload
+ * (IMPLEMENTATION_NOTES 103). Returns null when the grid is empty or no canvas exists.
+ * opts: {cmap = tokens.densityCmap | 'magma', log = true, tokens, lo = 0, hi = max count}.
+ */
+export function densityImage(grid, opts = {}) {
+  if (!grid || !grid.counts || !(grid.nx > 0) || !(grid.ny > 0)) return null;
+  const {counts} = grid;
+  const nx = grid.nx | 0, ny = grid.ny | 0;
+  const len = Math.min(nx * ny, counts.length >>> 0);
+  const {mx, fp} = scanCounts(counts, len);
+  if (!(mx > 0)) return null;
+  const lo = Number.isFinite(opts.lo) ? opts.lo : 0;
+  const hi = Number.isFinite(opts.hi) ? opts.hi : mx;
   const log = opts.log !== false;
-  const cname = opts.cmap || (opts.tokens && opts.tokens.densityCmap) || 'magma';
+  const cname = String(opts.cmap || (opts.tokens && opts.tokens.densityCmap) || 'magma').toLowerCase();
+  const key = `${cname}\u0000${lo}\u0000${hi}\u0000${log ? 1 : 0}\u0000${nx}x${ny}`;
+  const cacheable = typeof counts === 'object' && counts !== null;
+  let byKey = cacheable ? densityCache.get(counts) : null;
+  const hit = byKey ? byKey.get(key) : null;
+  if (hit && hit.fp === fp) {
+    densityStats.hits++;
+    byKey.delete(key);       // keep LRU order
+    byKey.set(key, hit);
+    return hit.canvas;
+  }
+  const sc = hit && hit.canvas.width === nx && hit.canvas.height === ny ? hit.canvas : makeScratchCanvas(nx, ny);
+  const sctx = scratchContext(sc);
+  if (!sctx) return null;
   const tab = cmapTable(cname);
-  const sc = makeScratchCanvas(nx, ny);
-  if (!sc) return false;
-  const sctx = sc.getContext('2d');
   const img = sctx.createImageData(nx, ny);
   const d = img.data;
   const den = log ? Math.log1p(Math.max(0, hi - lo)) : Math.max(1e-30, hi - lo);
   for (let iy = 0; iy < ny; iy++) {
     const row = ny - 1 - iy;     // image rows run top-down
     for (let ix = 0; ix < nx; ix++) {
-      const c = counts[iy * nx + ix];
+      const k0 = iy * nx + ix;
+      const c = k0 < len ? counts[k0] : NaN;
       const o = (row * nx + ix) * 4;
-      if (!(c > lo)) { d[o + 3] = 0; continue; }
+      if (!(c > lo) || !Number.isFinite(c)) { d[o + 3] = 0; continue; }
       let t = log ? Math.log1p(c - lo) / den : (c - lo) / den;
-      t = Math.max(0, Math.min(1, t));
+      t = Number.isFinite(t) ? Math.max(0, Math.min(1, t)) : 1;
       const k = Math.round(t * 255);
       d[o] = tab[3 * k]; d[o + 1] = tab[3 * k + 1]; d[o + 2] = tab[3 * k + 2];
       d[o + 3] = Math.round(255 * Math.min(1, 0.35 + 0.65 * t));
     }
   }
   sctx.putImageData(img, 0, 0);
+  densityStats.builds++;
+  if (cacheable) {
+    if (!byKey) {
+      byKey = new Map();
+      densityCache.set(counts, byKey);
+    }
+    byKey.delete(key);
+    byKey.set(key, {canvas: sc, fp});
+    while (byKey.size > DENSITY_VARIANTS) byKey.delete(byKey.keys().next().value);
+  }
+  return sc;
+}
+
+/**
+ * Draw a binned count grid. grid: {counts, nx, ny, xr: [x0, x1], yr: [y0, y1]} with
+ * counts[iy·nx + ix], iy = 0 at yr[0]; bins are uniform in the view's transformed space.
+ * opts: {cmap = tokens.densityCmap | 'magma', log = true, alpha = 1, tokens, lo, hi}.
+ * The colourised image comes from densityImage (cached per counts / cmap / lo / hi / log).
+ * Returns false when nothing can be drawn (no canvas, empty grid).
+ */
+export function drawDensityGrid(ctx, view, grid, opts = {}) {
+  if (!grid || !grid.counts || !(grid.nx > 0) || !(grid.ny > 0)) return false;
+  if (!Array.isArray(grid.xr) || !Array.isArray(grid.yr)) return false;
+  const nx = grid.nx | 0, ny = grid.ny | 0;
   const [x0, x1] = grid.xr, [y0, y1] = grid.yr;
-  const pxA = view.sx.f(x0), pxB = view.sx.f(x1), pyA = view.sy.f(y1), pyB = view.sy.f(y0);
-  if (![pxA, pxB, pyA, pyB].every(Number.isFinite)) return false;
+  const pxA0 = view.sx.f(x0), pxB0 = view.sx.f(x1), pyA0 = view.sy.f(y1), pyB0 = view.sy.f(y0);
+  if (![pxA0, pxB0, pyA0, pyB0].every(Number.isFinite)) return false;
+  const sc = densityImage(grid, opts);
+  if (!sc) return false;
+  const pxA = pxA0, pxB = pxB0, pyA = pyA0, pyB = pyB0;
   ctx.save();
   clipPlot(ctx, view);
   ctx.globalAlpha = opts.alpha ?? 1;

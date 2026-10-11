@@ -7,7 +7,7 @@
 // 1D pane's full extent (linkedFullExtent), so both panes start on the same wavelengths.
 
 import {makeView, zoomDomain, panDomain} from '../plot/axes.js';
-import {prepareCanvas, tokensOf, drawAxes, cmapTable, CMAP_NAMES} from '../plot/canvas2d.js';
+import {prepareCanvas, tokensOf, drawAxes, cmapTable, CMAP_NAMES, makeScratchCanvas, scratchContext} from '../plot/canvas2d.js';
 import {eventToViewPx} from '../plot/brushui.js';
 import {pki1Values} from '../data/records.js';
 import {pageDatasets, raf} from './sed.js';
@@ -133,6 +133,118 @@ export function resample(img, codes, lut, view, out, r = 1) {
   return hit;
 }
 
+/** Largest pki1 image (per side, and in pixels) drawn through the native-image path. */
+export const NATIVE_MAX_SIDE = 16384;
+export const NATIVE_MAX_PIXELS = 1 << 24;
+
+/**
+ * Uniform grid of a monotonic sample array: {v0, step} when every sample lies within `tol`
+ * steps of v0 + k·step, else null (also for fewer than 2 samples, non-finite samples or a
+ * zero step).
+ */
+export function uniformGrid(arr, tol = 0.1) {
+  const n = arr ? arr.length : 0;
+  if (n < 2) return null;
+  const v0 = +arr[0];
+  const step = (arr[n - 1] - v0) / (n - 1);
+  if (!Number.isFinite(v0) || !Number.isFinite(step) || step === 0) return null;
+  const t = Math.abs(step) * tol;
+  for (let k = 0; k < n; k++) {
+    if (!(Math.abs(arr[k] - (v0 + k * step)) <= t)) return null;
+  }
+  return {v0, step};
+}
+
+/**
+ * Pixel grids of a pki1 image for the native-image path: {gx, gy} (uniformGrid of the
+ * wavelengths; rows on y[0] + k·(y[1] - y[0]), as resample reads them), or null when the
+ * wavelengths are not uniform (stitched segments with gaps) or the image is too large for one
+ * canvas. Such images keep the per-view resample.
+ */
+export function nativeGrid(img) {
+  if (!img || !(img.nx > 0) || !(img.ny > 0) || !img.wave || img.wave.length !== img.nx) return null;
+  if (img.nx > NATIVE_MAX_SIDE || img.ny > NATIVE_MAX_SIDE || img.nx * img.ny > NATIVE_MAX_PIXELS) return null;
+  const gx = uniformGrid(img.wave);
+  if (!gx) return null;
+  const y0 = img.y && img.y.length ? +img.y[0] : 0;
+  const dy = img.y && img.y.length > 1 ? img.y[1] - img.y[0] : 1;
+  if (!Number.isFinite(y0) || !Number.isFinite(dy) || dy === 0) return null;
+  return {gx, gy: {v0: y0, step: dy}};
+}
+
+/**
+ * Fill an RGBA buffer of nx × ny (`out`) with the colourised image at its native resolution:
+ * canvas column 0 is the shortest wavelength and canvas row 0 the largest y, so the image is
+ * drawn upright with a plain scale. Missing codes are transparent.
+ */
+export function nativeImage(img, codes, lut, grid, out) {
+  const nx = img.nx, ny = img.ny, D = out.data;
+  const flipX = grid.gx.step < 0, flipY = grid.gy.step > 0;
+  for (let row = 0; row < ny; row++) {
+    const cy = flipY ? ny - 1 - row : row;
+    const rb = row * nx;
+    for (let ix = 0; ix < nx; ix++) {
+      const o = (cy * nx + (flipX ? nx - 1 - ix : ix)) * 4;
+      const k = codes[rb + ix];
+      if (k === MISSING || k === undefined) { D[o + 3] = 0; continue; }
+      D[o] = lut[3 * k];
+      D[o + 1] = lut[3 * k + 1];
+      D[o + 2] = lut[3 * k + 2];
+      D[o + 3] = 255;
+    }
+  }
+}
+
+/**
+ * Source and destination rectangles for drawing the native image (nativeImage layout) through
+ * a linear view: {sx, sy, sw, sh} in image pixels and {dx, dy, dw, dh} in CSS pixels, covering
+ * the visible part of the image only. {empty: true} when the image is outside the view; null
+ * when the view is not linear or runs right-to-left / bottom-to-top (the caller resamples).
+ */
+export function nativeRects(grid, nx, ny, view) {
+  if ((view.sx.kind || 'lin') !== 'lin' || (view.sy.kind || 'lin') !== 'lin') return null;
+  const ax = Math.abs(grid.gx.step), ay = Math.abs(grid.gy.step);
+  const xa = grid.gx.v0, xb = grid.gx.v0 + (nx - 1) * grid.gx.step;
+  const ya = grid.gy.v0, yb = grid.gy.v0 + (ny - 1) * grid.gy.step;
+  const wMin = Math.min(xa, xb) - ax / 2, wMax = Math.max(xa, xb) + ax / 2;
+  const yMin = Math.min(ya, yb) - ay / 2, yMax = Math.max(ya, yb) + ay / 2;
+  const d0 = Math.min(view.sx.d0, view.sx.d1), d1 = Math.max(view.sx.d0, view.sx.d1);
+  const e0 = Math.min(view.sy.d0, view.sy.d1), e1 = Math.max(view.sy.d0, view.sy.d1);
+  if (view.sx.f(d1) < view.sx.f(d0) || view.sy.f(e1) > view.sy.f(e0)) return null;
+  const lo = Math.max(d0, wMin), hi = Math.min(d1, wMax);
+  const ylo = Math.max(e0, yMin), yhi = Math.min(e1, yMax);
+  if (!(hi > lo) || !(yhi > ylo)) return {empty: true};
+  const sx = (lo - wMin) / ax, sw = (hi - lo) / ax;
+  const sy = (yMax - yhi) / ay, sh = (yhi - ylo) / ay;
+  const dx = view.sx.f(lo), dw = view.sx.f(hi) - dx;
+  const dy = view.sy.f(yhi), dh = view.sy.f(ylo) - dy;
+  if (![sx, sw, sy, sh, dx, dw, dy, dh].every(Number.isFinite) || !(dw > 0) || !(dh > 0)) return {empty: true};
+  return {sx, sy, sw, sh, dx, dy, dw, dh};
+}
+
+/**
+ * Identity of one resampled image (IMPLEMENTATION_NOTES 103): the LUT codes array (a new array
+ * per record and stretch), the colormap, the output size and scale, and the view mapping
+ * (scale kinds, domains, pixel ranges and plot rectangle). Two equal keys produce identical pixels.
+ */
+export function resampleKey(codes, cmap, view, W, H, r = 1) {
+  const P = view.plot;
+  return {
+    codes, cmap: String(cmap), W, H, r,
+    s: `${view.sx.kind || 'lin'}|${view.sy.kind || 'lin'}`,
+    m: [view.sx.d0, view.sx.d1, view.sx.r0, view.sx.r1, view.sy.d0, view.sy.d1, view.sy.r0, view.sy.r1,
+      P.left, P.top, P.width, P.height].map(Number),
+  };
+}
+
+/** True when two resampleKey results describe the same image. */
+export function sameResampleKey(a, b) {
+  if (!a || !b) return false;
+  if (a.codes !== b.codes || a.cmap !== b.cmap || a.s !== b.s || a.W !== b.W || a.H !== b.H || a.r !== b.r) return false;
+  for (let k = 0; k < a.m.length; k++) if (!Object.is(a.m[k], b.m[k])) return false;
+  return a.m.length === b.m.length;
+}
+
 /** Full extents {w: [w0, w1], y: [y0, y1]} of a pki1 image (half-pixel padded) or PNG entry. */
 export function imageExtent(rec, natural = null) {
   if (!rec) return null;
@@ -210,6 +322,9 @@ export function mount(host, ctx) {
   let gesture = null;
   let hover = null;
   let scratch = null, imgBuf = null;
+  let imgKey = null, imgHit = 0, uploads = 0;
+  let native = null, nativeKey = {codes: null, cmap: null};   // native-resolution image
+  let geomRec = null, geom = null, imgMode = null;
 
   const root = el('div', 'pk-spec2d');
   const bar = el('div', 'pk-spec-bar');
@@ -410,19 +525,64 @@ export function mount(host, ctx) {
     if (rec && rec.kind !== 'png' && codes) {
       const r = Math.max(1, Math.min(3, dpr));
       const W = Math.max(1, Math.round(P.width * r)), H = Math.max(1, Math.round(P.height * r));
-      if (!scratch) scratch = document.createElement('canvas');
-      if (scratch.width !== W) scratch.width = W;
-      if (scratch.height !== H) scratch.height = H;
-      const sctx = scratch.getContext('2d');
-      // resample writes every pixel (alpha 0 outside the image), so the buffer is reused
-      if (!imgBuf || imgBuf.width !== W || imgBuf.height !== H) imgBuf = sctx.createImageData(W, H);
-      const imgData = imgBuf;
-      hit = resample(rec, codes, cmapTable(cmap), v, imgData, r);
-      sctx.putImageData(imgData, 0, 0);
-      c.save();
-      c.imageSmoothingEnabled = false;
-      c.drawImage(scratch, 0, 0, W, H, P.left, P.top, P.width, P.height);
-      c.restore();
+      if (geomRec !== rec) {
+        geomRec = rec;
+        geom = nativeGrid(rec);
+      }
+      const rects = geom ? nativeRects(geom, rec.nx, rec.ny, v) : null;
+      if (rects) {
+        // Native-image path (IMPLEMENTATION_NOTES 103): the image is colourised once per
+        // (codes, cmap) at nx × ny and every redraw, pans and zooms included, is one drawImage
+        // of its visible part. Nearest-neighbour scaling matches resample().
+        if (!native || nativeKey.codes !== codes || nativeKey.cmap !== cmap
+            || native.width !== rec.nx || native.height !== rec.ny) {
+          if (!native) native = makeScratchCanvas(rec.nx, rec.ny);
+          if (!native) throw new Error('2D spectrum: no canvas available for the image');
+          if (native.width !== rec.nx) native.width = rec.nx;
+          if (native.height !== rec.ny) native.height = rec.ny;
+          const nctx = scratchContext(native);
+          const buf = nctx.createImageData(rec.nx, rec.ny);
+          nativeImage(rec, codes, cmapTable(cmap), geom, buf);
+          nctx.putImageData(buf, 0, 0);
+          nativeKey = {codes, cmap};
+          uploads++;
+        }
+        if (!rects.empty) {
+          c.save();
+          c.beginPath();
+          c.rect(P.left, P.top, P.width, P.height);
+          c.clip();
+          c.imageSmoothingEnabled = false;
+          c.drawImage(native, rects.sx, rects.sy, rects.sw, rects.sh, rects.dx, rects.dy, rects.dw, rects.dh);
+          c.restore();
+          hit = Math.round(rects.dw * r);
+        }
+        imgMode = 'native';
+      } else {
+        const key = resampleKey(codes, cmap, v, W, H, r);
+        if (!scratch || !sameResampleKey(imgKey, key)) {
+          // CPU-backed scratch context (IMPLEMENTATION_NOTES 103): putImageData on a GPU-backed
+          // canvas stalls SwiftShader for seconds. Images on a non-uniform wavelength grid are
+          // resampled per view; other redraws (hover band, theme) reuse the canvas.
+          if (!scratch) scratch = makeScratchCanvas(W, H);
+          if (!scratch) throw new Error('2D spectrum: no canvas available for the image');
+          if (scratch.width !== W) scratch.width = W;
+          if (scratch.height !== H) scratch.height = H;
+          const sctx = scratchContext(scratch);
+          // resample writes every pixel (alpha 0 outside the image), so the buffer is reused
+          if (!imgBuf || imgBuf.width !== W || imgBuf.height !== H) imgBuf = sctx.createImageData(W, H);
+          imgHit = resample(rec, codes, cmapTable(cmap), v, imgBuf, r);
+          sctx.putImageData(imgBuf, 0, 0);
+          imgKey = key;
+          uploads++;
+        }
+        hit = imgHit;
+        c.save();
+        c.imageSmoothingEnabled = false;
+        c.drawImage(scratch, 0, 0, W, H, P.left, P.top, P.width, P.height);
+        c.restore();
+        imgMode = 'resample';
+      }
       // segment boundaries
       if (Array.isArray(rec.segments) && rec.segments.length > 1) {
         c.save();
@@ -617,7 +777,7 @@ export function mount(host, ctx) {
       });
     },
     stats() {
-      return {renderMs, ds: recDs, id: focusId, cmap, stretch, linked, ...lastStats};
+      return {renderMs, ds: recDs, id: focusId, cmap, stretch, linked, uploads, imgMode, ...lastStats};
     },
   };
 }

@@ -2,12 +2,17 @@
 //
 // Follows store `hover` = {ds, i}. The card sits next to the pointer and flips to the other
 // side of the pointer at the viewport edges. Its content is rebuilt only when the hovered
-// index changes; pointer moves only reposition it. Values come from cached column values
-// (quantized, shown with step-aware precision) and never from row chunks. One small figure is
-// added when available: the item's thumbnail PNG, else a mini spectrum (pks1 records of the
-// same catalog), else a mini SED (filters dataset, catalogs up to T1_MAX rows).
+// index changes; pointer moves only reposition it. Values come from one row read with
+// client.record(i) (IMPLEMENTATION_NOTES 99): the exact row chunk when the catalog has row
+// chunks, else the quantized chunk that holds row i (step-aware precision). The card never
+// loads whole columns. It shows the stored columns the record carries; a row chunk omits
+// columns declared `exact: false` unless the worker merges their quantized values in (listed in
+// the record's `_qkeys`, shown with step-aware precision). One small figure is added when
+// available: the item's thumbnail PNG, else a mini spectrum (pks1 records of the same
+// catalog), else a mini SED from the same row (filters dataset, catalogs up to T1_MAX rows).
 //
-// placeCard() and pickHoverColumns() are pure and covered by tests/js/export.test.mjs.
+// placeCard() and pickHoverColumns() are pure and covered by tests/js/export.test.mjs;
+// recordId / recordColumns / recordValueText and the install() reads by listpanes.test.mjs.
 
 import {T1_MAX} from '../core/constants.js';
 import {fmtQuant, fmtNum, fmtValue, MISSING} from '../core/fmt.js';
@@ -17,7 +22,6 @@ import {itemUrl} from './lightbox.js';
 const SKIP_ROLES = new Set(['id', 'ra', 'dec', 'text', 'url', 'image', 'limit', 'error']);
 const ROLE_RANK = {category: 0, flag: 1, mag: 2, color: 3, flux: 4, value: 5};
 const MAX_VALUE_COLS = 4;
-const VALUE_CACHE_COLS = 24;
 const BIG_N = 2000000;
 
 /**
@@ -105,6 +109,60 @@ export function hoverValueText(v, meta) {
   return fmtValue(v, meta, {exact: false});
 }
 
+/** Record channel of the hover card (DataClient.record; a newer hover supersedes the read). */
+export const HOVER_CHANNEL = 'hover:card';
+
+/**
+ * Catalog id of a DataClient.record row as a string, or null: `_id` (set by worker record()),
+ * else `id` on a quantized-fallback row, else the row chunk's id key `idKey`
+ * (manifest.rows.cols[0]). A row-chunk row never reads a bare `id` unless that is the id key.
+ */
+export function recordId(row, idKey = null) {
+  if (!row || typeof row !== 'object') return null;
+  let v = row._id;
+  if (v === undefined || v === null) {
+    const k = row._quantized ? 'id' : idKey;
+    v = k && Object.prototype.hasOwnProperty.call(row, k) ? row[k] : null;
+  }
+  return v === undefined || v === null ? null : String(v);
+}
+
+/** Column metas whose key the record carries (row chunks may hold a subset of the columns). */
+export function recordColumns(cols, row) {
+  if (!Array.isArray(cols) || !row || typeof row !== 'object') return [];
+  return cols.filter((c) => c && c.key && Object.prototype.hasOwnProperty.call(row, c.key));
+}
+
+/**
+ * True when the record's value of `key` is exact: a row-chunk row (`_quantized` unset) whose
+ * key is not listed in `_qkeys` (stored columns a worker merged in from the quantized chunk).
+ */
+export function recordExact(row, key) {
+  if (!row || row._quantized) return false;
+  const q = row._qkeys;
+  if (Array.isArray(q)) return !q.includes(key);
+  if (q && typeof q === 'object') return !q[key];
+  return true;
+}
+
+/**
+ * Text of one record value for the card. Records carry category labels (strings, or numbers
+ * for integer-labelled categories such as class codes, never level indices), flags (booleans
+ * or 0/1), null for missing, and numbers: exact ones (row chunks, `exact` true) at full
+ * precision, quantized ones with step-aware precision (hoverValueText).
+ */
+export function recordValueText(v, meta, exact = false) {
+  const m = meta || {};
+  if (v === null || v === undefined || (typeof v === 'number' && Number.isNaN(v))) return {text: MISSING, title: 'missing'};
+  if (typeof v === 'string') return {text: v, title: ''};
+  if (typeof v === 'boolean') return {text: v ? 'yes' : 'no', title: ''};
+  if (typeof v !== 'number') return {text: String(v), title: ''};
+  if (m.role === 'category' || m.levels) return {text: String(v), title: ''};
+  if (m.role === 'flag') return hoverValueText(v, m);
+  if (exact) return fmtValue(v, m, {exact: true});
+  return hoverValueText(v, m);
+}
+
 // ---------------------------------------------------------------------------- figures
 
 /** Polyline sparkline of y(x) into a canvas (finite points only). */
@@ -178,6 +236,12 @@ function drawLine(canvas, xs, ys, t, opts = {}) {
 
 // ---------------------------------------------------------------------------- install
 
+function rowsIdKey(manifest) {
+  const r = manifest && manifest.rows;
+  const k = r && Array.isArray(r.cols) && r.cols.length ? r.cols[0] : null;
+  return typeof k === 'string' && k ? k : null;
+}
+
 function el(tag, cls, text) {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
@@ -201,24 +265,8 @@ export function install(app) {
   let redraw = null;        // figure redraw on theme change
   let raf = 0;
 
-  const valueCache = new Map();   // `${ds}\0${key}` -> Promise<Float32Array>
   const imageIndex = new Map();   // imgDs -> Promise<{byRow, byId, base}>
   const filtersDoc = new Map();
-
-  function values(ds, client, key) {
-    const k = `${ds}\u0000${key}`;
-    if (valueCache.has(k)) {
-      const p = valueCache.get(k);
-      valueCache.delete(k);
-      valueCache.set(k, p);
-      return p;
-    }
-    const p = client.values(key);
-    p.catch(() => valueCache.delete(k));
-    valueCache.set(k, p);
-    while (valueCache.size > VALUE_CACHE_COLS) valueCache.delete(valueCache.keys().next().value);
-    return p;
-  }
 
   function position() {
     if (card.hidden) return;
@@ -329,7 +377,13 @@ export function install(app) {
   async function buildCatalogRow(ds, i, my) {
     const client = await app.catalog(ds);
     if (my !== token) return;
-    const id = await app.idOf(ds, i);
+    // One row from the worker (row chunk, or the quantized chunk holding row i): the card never
+    // loads whole columns (IMPLEMENTATION_NOTES 99). A superseded read resolves to null.
+    const row = await client.record(i, {channel: HOVER_CHANNEL});
+    if (my !== token) return;
+    if (!row) { hide(); return; }
+    let id = recordId(row, rowsIdKey(client.manifest));
+    if (id === null) id = await app.idOf(ds, i);
     if (my !== token) return;
     card.textContent = '';
     card.append(el('div', 'pk-hover-id', String(id)));
@@ -337,14 +391,14 @@ export function install(app) {
     const color = store.get('color');
     const prefer = color && color.by && client.col(color.by) ? [color.by] : [];
     const ncols = client.n > BIG_N ? 2 : MAX_VALUE_COLS;
-    const cols = pickHoverColumns(client.manifest.cols, ncols, prefer);
+    const cols = pickHoverColumns(recordColumns(client.manifest.cols, row), ncols, prefer);
     if (cols.length) {
-      const arrs = await Promise.all(cols.map((c) => values(ds, client, c.key)));
-      if (my !== token) return;
       const dl = el('dl', 'pk-hover-vals');
-      cols.forEach((c, k) => {
-        const v = arrs[k] ? arrs[k][i] : NaN;
-        const {text, title} = hoverValueText(v, c);
+      cols.forEach((c) => {
+        let {text, title} = recordValueText(row[c.key], c, recordExact(row, c.key));
+        const lk = row._limits && text !== MISSING ? row._limits[c.key] : 0;
+        if (lk === 1) { text = `< ${text}`; title = title || 'upper limit'; }
+        if (lk === 2) { text = `> ${text}`; title = title || 'lower limit'; }
         const dt = el('dt', null, c.label || c.key);
         const dd = el('dd', 'pk-num', text);
         if (title) dd.title = title;
@@ -354,10 +408,10 @@ export function install(app) {
       card.append(dl);
       position();
     }
-    await addFigure(ds, client, i, id, my);
+    await addFigure(ds, client, i, id, my, row);
   }
 
-  async function addFigure(ds, client, i, id, my) {
+  async function addFigure(ds, client, i, id, my, row) {
     // 1. thumbnail from an images set joined to this catalog
     for (const imgDs of datasetsOf('images', (r) => r.catalog === ds)) {
       const idx = await imagesIndexFor(imgDs);
@@ -400,15 +454,7 @@ export function install(app) {
     if (my !== token) return;
     const sedCols = (client.manifest.cols || []).filter((c) => (c.role === 'mag' || c.role === 'flux') && c.filter);
     if (sedCols.length < 2) return;
-    const need = [];
-    for (const c of sedCols) {
-      need.push(c.key);
-      if (c.err && client.col(c.err)) need.push(c.err);
-    }
-    const arrs = await Promise.all(need.map((k) => values(ds, client, k)));
-    if (my !== token) return;
-    const row = {};
-    need.forEach((k, j) => { row[k] = arrs[j][i]; });
+    // The SED reads the same record (values, errors and _limits), never whole columns.
     const pts = sedPoints(row, fdoc, sedCols);
     if (pts.length < 2) return;
     const cv = el('canvas', 'pk-hover-fig');

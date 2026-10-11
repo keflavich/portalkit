@@ -13,6 +13,8 @@
 //            image of the visible rows (worker bin2d) drawn on the pane's canvas, with the
 //            selected rows still drawn as markers.
 //   Viewport windows are re-queried SETTLE_MS after the view stops moving.
+// - Positions (whole ra/dec columns) and colour values load only after app.afterFirstPaint()
+//   (IMPLEMENTATION_NOTES 99): the first refresh waits for it.
 // - objectClicked sets `focus`, objectHovered / objectHoveredStop set `hover`.
 
 import {SKY_MARKER_CAP, SETTLE_MS} from '../core/constants.js';
@@ -24,6 +26,15 @@ const NBINS = 8;
 const DENSITY_BINS = 256;
 const MARGIN = 1.15;            // query window = view × MARGIN, so small pans need no re-query
 const CAT_MAX_LEVELS = 64;
+
+/**
+ * Promise of the page's first paint (app.afterFirstPaint(), IMPLEMENTATION_NOTES 100). Apps
+ * without the signal (unit tests, embedders) resolve at once, which is the pre-note-99 order.
+ */
+export function afterFirstPaint(app) {
+  if (app && typeof app.afterFirstPaint === 'function') return Promise.resolve(app.afterFirstPaint());
+  return Promise.resolve();
+}
 
 /** Colour scheme for markers: {kind:'cat'|'cont'|'none', key, ...}. Pure. */
 export function colorScheme(client, color) {
@@ -178,11 +189,26 @@ export class SkyMarkers {
     this.store.set({hover: next}, {source: this.pane});
   }
 
+  /**
+   * Load ra/dec once. The whole-column read waits for app.afterFirstPaint()
+   * (IMPLEMENTATION_NOTES 99, 100), so the sky pane never competes with the first paint of the
+   * other panes; until then the viewer shows the survey without markers.
+   */
   async _positions() {
     if (this.ra) return;
-    const [ra, dec] = await Promise.all([this.client.values('ra'), this.client.values('dec')]);
-    this.ra = ra;
-    this.dec = dec;
+    if (!this._posP) {
+      const p = (async () => {
+        await afterFirstPaint(this.app);
+        if (this.destroyed) return;
+        const [ra, dec] = await Promise.all([this.client.values('ra'), this.client.values('dec')]);
+        this.ra = ra;
+        this.dec = dec;
+      })();
+      this._posP = p;
+      // a failed load is retried by the next refresh
+      p.catch(() => { if (this._posP === p) this._posP = null; });
+    }
+    await this._posP;
   }
 
   async _values(key) {
@@ -241,7 +267,7 @@ export class SkyMarkers {
     const whole = tier === 'T0';
     if (!opts.force && !whole && !this.density && covers(this.lastWin, v) && !this.sampled) return;
     await this._positions();
-    if (seq !== this.seq || this.destroyed) return;
+    if (seq !== this.seq || this.destroyed || !this.ra) return;
     const win = whole ? {ra: 0, dec: 0, fov: 360, fovy: 180, cap: this.client.n, mask: 'vis'}
       : Object.assign(queryWindow(v), {cap: SKY_MARKER_CAP, mask: 'vis'});
     const r = await this.client.skyWindow(win);
@@ -322,6 +348,7 @@ export class SkyMarkers {
   async refreshSelected() {
     if (this.h.state !== 'ready' || this.mode === 'off') return;
     await this._positions();
+    if (this.destroyed || !this.ra) return;
     await this._refreshSelected(this.seq);
     this.lastStats.selected = this.selIdx.length;
   }

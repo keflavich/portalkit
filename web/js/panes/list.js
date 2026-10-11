@@ -12,6 +12,15 @@
 // never sorts. Category colours come from ui/legend.js plotLevelColors (note 76), so rows match
 // the plotted points for every level.
 //
+// Startup reads (IMPLEMENTATION_NOTES 99): the first screen paints from client.rows(first,
+// last) (row chunks, or the head chunks without them); id cells always come from a rows
+// payload (the row-chunk id key manifest.rows.cols[0], or `id` on quantized rows), never from
+// client.id(i) per row, while the list is in stored order. Payload category values are labels
+// (possibly numbers); column values are level indices. The shown
+// columns (and the colour-by column) load whole only on sort, filter or colour-by, or after
+// app.afterFirstPaint(). Once loaded, cells read the column values; rows read earlier keep
+// their payload values.
+//
 // Store: writes focus {ds, i, id} and hover {ds, i}; reads sel:<ds>, vis:<ds>, filters:<ds>
 // and focus. Handles the `nav:step` offer, so arrow keys walk the filtered, sorted order.
 // Click focuses; Shift-click adds to the selection, Alt-click removes, Ctrl/Cmd-click toggles.
@@ -31,6 +40,10 @@ const MAX_SCROLL_PX = 4000000;   // below every browser's element height limit
 const SEARCH_LIMIT = 5000;
 const DEFAULT_ROW_H = 24;
 const ORDER_CACHE = 2;           // worker argsorts kept on the main thread (key + dir)
+/** Rows payloads (client.rows objects) kept on the main thread. */
+export const ROW_CACHE_ROWS = 4096;
+/** rows() reads are whole blocks of this many rows, so scrolling repeats the same requests. */
+export const ROW_BLOCK = 128;
 /** Header key of the id column (a catalog column may itself be called "id"). */
 export const ID_SORT = '__id';
 
@@ -117,6 +130,123 @@ export function keepMask(n, {found = null, vis = null, selMask = null} = {}) {
   return keep;
 }
 
+/**
+ * Promise of the page's first paint (app.afterFirstPaint(), IMPLEMENTATION_NOTES 100). Apps
+ * without the signal resolve at once.
+ */
+export function afterFirstPaint(app) {
+  if (app && typeof app.afterFirstPaint === 'function') return Promise.resolve(app.afterFirstPaint());
+  return Promise.resolve();
+}
+
+/**
+ * Id key of a catalog's row chunks: the first entry of manifest.rows.cols (the catalog id key,
+ * ARCHITECTURE.md section 5.2), or null when the catalog has no row chunks.
+ */
+export function rowsIdKey(manifest) {
+  const r = manifest && manifest.rows;
+  const k = r && Array.isArray(r.cols) && r.cols.length ? r.cols[0] : null;
+  return typeof k === 'string' && k ? k : null;
+}
+
+/**
+ * Catalog id of a client.rows / client.record row as a string, or null. Read in this order:
+ * `_id` (worker-supplied), then `id` for a quantized-fallback row (`_quantized`), then the row
+ * chunk's id key `idKey` (rowsIdKey of the manifest). A row-chunk row never reads a bare `id`
+ * property unless the id key is `id`, so a stored column called `id` is never taken for the id.
+ */
+export function rowId(row, idKey = null) {
+  if (!row || typeof row !== 'object') return null;
+  let v = row._id;
+  if (v === undefined || v === null) {
+    const k = row._quantized ? 'id' : idKey;
+    v = k && Object.prototype.hasOwnProperty.call(row, k) ? row[k] : null;
+  }
+  return v === undefined || v === null ? null : String(v);
+}
+
+/**
+ * Text of one list cell. `v` is a column value (Float32Array entry: level index for
+ * categories, 0/1 flags, dequantized numbers) or, with `opts.payload`, a rows-payload value
+ * (category label, which may be a number such as a class code; boolean or 0/1 flag; null for
+ * missing; exact number). Numbers keep the column's step-aware precision either way, so a cell
+ * reads the same from both sources.
+ */
+export function cellText(meta, v, opts = {}) {
+  const m = meta || {};
+  if (v === null || v === undefined) return {text: MISSING, title: 'missing'};
+  if (typeof v === 'string') return {text: v, title: ''};
+  if (typeof v === 'boolean') return {text: v ? 'yes' : 'no', title: ''};
+  if (m.role === 'category' || Array.isArray(m.levels)) {
+    if (!Number.isFinite(v)) return {text: MISSING, title: 'missing'};
+    // a payload carries the label itself; a column value is a level index
+    if (opts.payload) return {text: String(v), title: ''};
+    const lv = m.levels ? m.levels[v | 0] : undefined;
+    return {text: lv !== undefined ? String(lv) : String(v), title: ''};
+  }
+  if (m.role === 'flag') return {text: Number.isFinite(v) ? (v ? 'yes' : 'no') : MISSING, title: ''};
+  if (m.step > 0 && /^u(8|16)q$/.test(m.enc || '')) return fmtQuant(v, m.step);
+  return fmtValue(v, m, {exact: false});
+}
+
+/**
+ * Small LRU of rows payloads keyed by stored row index. put(rows) stores client.rows output
+ * (each row carries `_i`; rows without one are numbered from `i0`).
+ */
+export class RowCache {
+  constructor(cap = ROW_CACHE_ROWS) {
+    this.cap = Math.max(1, cap | 0);
+    this.map = new Map();
+  }
+
+  get size() { return this.map.size; }
+
+  /** Raise the cap to at least k rows (a rendered window must fit, or it refetches forever). */
+  reserve(k) {
+    if (Number.isFinite(k) && k > this.cap) this.cap = Math.ceil(k);
+  }
+
+  has(i) { return this.map.has(i); }
+
+  get(i) { return this.map.get(i); }
+
+  put(rows, i0 = 0) {
+    if (!rows || typeof rows.length !== 'number') return 0;
+    let k = 0;
+    for (const r of rows) {
+      const i = r && Number.isInteger(r._i) ? r._i : i0 + k;
+      k++;
+      if (!r || typeof r !== 'object') continue;
+      this.map.delete(i);
+      this.map.set(i, r);
+    }
+    while (this.map.size > this.cap) this.map.delete(this.map.keys().next().value);
+    return k;
+  }
+
+  /** First [a, b) sub-range of [i0, i1) whose rows are not cached, or null. */
+  missing(i0, i1) {
+    let a = -1, b = -1;
+    for (let i = i0; i < i1; i++) {
+      if (this.map.has(i)) continue;
+      if (a < 0) a = i;
+      b = i + 1;
+    }
+    return a < 0 ? null : [a, b];
+  }
+
+  clear() { this.map.clear(); }
+}
+
+/** Block-aligned [a, b) ranges of ROW_BLOCK rows covering [i0, i1), clipped to [0, n). */
+export function rowBlocks(i0, i1, n, block = ROW_BLOCK) {
+  const out = [];
+  const lo = Math.max(0, Math.floor(i0)), hi = Math.min(n, Math.ceil(i1));
+  if (!(hi > lo) || !(block > 0)) return out;
+  for (let a = Math.floor(lo / block) * block; a < hi; a += block) out.push([a, Math.min(n, a + block)]);
+  return out;
+}
+
 function el(tag, cls, text) {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
@@ -195,6 +325,15 @@ export function mount(root, ctx) {
   let offTools = null;
   let colorVals = null;          // Float32Array of level indices for color.by (category)
   let colorPal = null;           // CSS colour per level
+  const rowCache = new RowCache();
+  const rowsInflight = new Map(); // `${a}:${b}` -> Promise
+  let rowsFailed = false;        // rows() failed: ids fall back to client.id(i)
+  let idKey = null;              // id key of the row chunks (manifest.rows.cols[0])
+  let dataVer = 0;               // bumps when cached rows or column values change
+  let colsP = null;              // Promise of the full column load (loadColumns)
+  let colsLoaded = false;
+  let startupDone = false;       // first screen requested; later colour changes load at once
+  const reads = {rows: 0, rowsRows: 0, values: 0, ids: 0};
 
   selOnlyBtn.setAttribute('aria-pressed', String(selOnly));
 
@@ -233,15 +372,80 @@ export function mount(root, ctx) {
     paint();
   }
 
-  function cellText(meta, v) {
-    if (meta.role === 'category' || Array.isArray(meta.levels)) {
-      if (!Number.isFinite(v)) return {text: MISSING, title: 'missing'};
-      const lv = meta.levels ? meta.levels[v | 0] : undefined;
-      return {text: lv !== undefined ? String(lv) : String(v), title: ''};
+  // ------------------------------------------------------------------ reads
+
+  /** Whole shown columns (sort, filter, colour-by, or after first paint). Idempotent. */
+  function loadColumns() {
+    if (colsP) return colsP;
+    if (!client) return Promise.resolve();
+    const p = Promise.all(cols.map(async (c) => {
+      if (colVals.has(c.key)) return;
+      reads.values++;
+      const v = await client.values(c.key);
+      if (!destroyed) colVals.set(c.key, v);
+    })).then(() => {
+      if (destroyed) return;
+      colsLoaded = true;
+      dataVer++;
+      paint(true);
+    });
+    // A failed load is reported here (the list keeps its rows-payload cells) and retried on
+    // the next sort, filter or colour-by.
+    const done = p.then(null, (err) => {
+      if (colsP === done) colsP = null;
+      report(err);
+    });
+    colsP = done;
+    return done;
+  }
+
+  /** Fetch rows [a, b) once (client.rows) into the row cache, then repaint. */
+  function requestRows(a, b) {
+    const key = `${a}:${b}`;
+    if (rowsInflight.has(key) || b <= a) return;
+    reads.rows++;
+    reads.rowsRows += b - a;
+    const p = Promise.resolve(client.rows(a, b)).then((rows) => {
+      if (destroyed) return;
+      rowCache.put(rows, a);
+      dataVer++;
+      paint(true);
+    }, (err) => {
+      if (!(err instanceof Error)) throw err;
+      if (err.name === 'AbortError') return;
+      console.warn(`list ${ctx.id}: rows ${a}-${b}`, err);
+      rowsFailed = true;
+      dataVer++;
+      paint(true);
+    }).finally(() => rowsInflight.delete(key));
+    rowsInflight.set(key, p);
+  }
+
+  /** Id of row i for a cell: the rows payload, or (sorted / filtered order) client.id(i). */
+  function fillId(idc, r, i) {
+    const row = rowCache.get(i);
+    const id = rowId(row, idKey);
+    if (id !== null) {
+      idc.textContent = id;
+      idc.title = id;
+      return;
     }
-    if (meta.role === 'flag') return {text: Number.isFinite(v) ? (v ? 'yes' : 'no') : MISSING, title: ''};
-    if (meta.step > 0 && /^u(8|16)q$/.test(meta.enc || '')) return fmtQuant(v, meta.step);
-    return fmtValue(v, meta, {exact: false});
+    // In stored order the visible window comes from rows(): wait for its payload. Other orders
+    // (whose sort, filter or search made the worker load the ids), payloads without an id and
+    // failed rows() reads use id(i).
+    if (!row && !order && !rowsFailed) return;
+    if (r._idReq === i) return;
+    r._idReq = i;
+    reads.ids++;
+    client.id(i).then((v) => {
+      if (r._i === i) {
+        idc.textContent = String(v);
+        idc.title = String(v);
+      }
+    }, (err) => {
+      if (!(err instanceof Error)) throw err;
+      if (r._i === i) idc.title = `id unavailable: ${err.message}`;
+    });
   }
 
   // ------------------------------------------------------------------ header
@@ -336,6 +540,8 @@ export function mount(root, ctx) {
     if (my !== orderToken || destroyed) return;
     order = idx;
     posOf = null;
+    // sorted / filtered / searched orders scatter the shown rows: read whole columns
+    if (order) loadColumns();
     total = order ? order.length : n;
     updateCount(note);
     layoutSpacer();
@@ -415,7 +621,15 @@ export function mount(root, ctx) {
       rowsEl.style.transform = `translateY(${Math.round(view.scrollTop - frac)}px)`;
     }
     const nRows = Math.max(0, k);
+    // Every row of the window must fit in the cache at once (virtual:false shows up to 5000).
+    rowCache.reserve(nRows + 2 * ROW_BLOCK);
     ensurePool(nRows);
+    // In stored order the window [first, first + nRows) is one rows() read (row chunks or the
+    // head chunks); its payload gives the ids and, until the columns load, the cells.
+    if (!order && nRows > 0 && !rowsFailed) {
+      const miss = rowCache.missing(first, first + nRows);
+      if (miss) for (const [a, b] of rowBlocks(miss[0], miss[1], client.n)) if (rowCache.missing(a, b)) requestRows(a, b);
+    }
     const f = store.get('focus');
     const fi = f && f.ds === ds && Number.isInteger(f.i) ? f.i : -1;
     const selMask = sel ? sel.mask : null;
@@ -434,30 +648,30 @@ export function mount(root, ctx) {
       r.classList.toggle('pk-odd', p % 2 === 1);
       const cv = colorVals ? colorVals[i] : NaN;
       r.style.setProperty('--pk-swatch', cv === cv && colorPal && colorPal[cv | 0] ? colorPal[cv | 0] : 'transparent');
-      if (r._i !== i || r._cols !== cols) {
+      if (r._i !== i || r._cols !== cols || r._ver !== dataVer) {
+        const fresh = r._i !== i;
         r._i = i;
         r._cols = cols;
+        r._ver = dataVer;
         const idc = r.firstChild;
-        idc.textContent = '';
-        idc.title = '';
-        client.id(i).then((id) => {
-          if (r._i === i) {
-            idc.textContent = String(id);
-            idc.title = String(id);
-          }
-        }, (err) => {
-          if (!(err instanceof Error)) throw err;
-          if (r._i === i) idc.title = `id unavailable: ${err.message}`;
-        });
+        if (fresh) {
+          idc.textContent = '';
+          idc.title = '';
+          r._idReq = -1;
+        }
+        fillId(idc, r, i);
+        const row = rowCache.get(i);
         cols.forEach((c, j) => {
           const vals = colVals.get(c.key);
           const cell = r._cells[j];
-          if (!vals) {
+          const fromRow = row && Object.prototype.hasOwnProperty.call(row, c.key);
+          if (!fromRow && !vals) {
             cell.textContent = '';
             cell.title = '';
+            cell.classList.toggle('pk-missing', false);
             return;
           }
-          const {text, title} = cellText(c, vals[i]);
+          const {text, title} = fromRow ? cellText(c, row[c.key], {payload: true}) : cellText(c, vals[i]);
           cell.textContent = text;
           cell.title = title;
           cell.classList.toggle('pk-missing', text === MISSING);
@@ -480,6 +694,12 @@ export function mount(root, ctx) {
 
   function setFocus(i, scroll = true) {
     if (i < 0) return;
+    const known = rowId(rowCache.get(i), idKey);
+    if (known !== null) {
+      store.set({focus: {ds, i, id: known}}, {source: ctx.id, history: true});
+      if (scroll) scrollToPos(positionOf(i));
+      return;
+    }
     const cached = client.id(i);
     // Write focus once with both halves when the id is at hand (LRU hit), else with i only;
     // boot fills in the id.
@@ -664,8 +884,8 @@ export function mount(root, ctx) {
     else paint();
   }));
   offs.push(store.on([`filters:${ds}`], () => syncFilterBtn()));
-  offs.push(store.on(['color'], () => { refreshColor().catch(report); }));
-  offs.push(store.onEvent('theme:change', () => { refreshColor().catch(report); }));
+  offs.push(store.on(['color'], () => { if (startupDone) refreshColor().catch(report); }));
+  offs.push(store.onEvent('theme:change', () => { if (startupDone) refreshColor().catch(report); }));
 
   async function refreshColor() {
     if (!client) return;
@@ -675,7 +895,14 @@ export function mount(root, ctx) {
       colorVals = null;
       colorPal = null;
     } else {
-      colorVals = await client.values(c.by);
+      // colour-by reads whole columns (the colour column and the shown ones)
+      loadColumns();
+      reads.values++;
+      const vals = await client.values(c.by);
+      if (destroyed) return;
+      const now = store.get('color');
+      if (!now || now.by !== c.by) return;     // a newer colour change owns the swatches
+      colorVals = vals;
       colorPal = plotLevelColors(m, ctx.theme ? ctx.theme() : null);
     }
     root.classList.toggle('pk-list-colored', !!colorVals);
@@ -716,6 +943,7 @@ export function mount(root, ctx) {
       sel = await app.selectionFor(ds);
       if (destroyed) return;
       sortSpec = normalizeSortSpec(sortSpec, (k) => !!client.col(k));
+      idKey = rowsIdKey(client.manifest);
       const metaCols = client.manifest.cols || [];
       if (Array.isArray(cfg.columns) && cfg.columns.length) {
         const missingKeys = [];
@@ -736,19 +964,23 @@ export function mount(root, ctx) {
       cols = cols.filter((c) => c.enc !== 'str');
       skel.remove();
       renderHead();
-      await Promise.all(cols.map(async (c) => {
-        colVals.set(c.key, await client.values(c.key));
-      }));
       if (destroyed) return;
       ctx.setStatus('');
       offTools = ctx.tools ? mountSelectionTools(app, ds, ctx.tools, {cols: () => cols.map((c) => c.key)}) : null;
       syncFilterBtn();
       total = client.n;
+      // First screen: rows(first, last) through paint (no whole column, no ids).
       await refreshVis();
-      await refreshColor();
+      if (destroyed) return;
       if (query) runSearch();
       const f = store.get('focus');
       if (f && f.ds === ds && Number.isInteger(f.i)) scrollToPos(positionOf(f.i), 'center');
+      paint(true);
+      startupDone = true;
+      // Whole columns and the colour-by swatches wait for the page's first paint.
+      await afterFirstPaint(app);
+      if (destroyed) return;
+      await Promise.all([loadColumns(), refreshColor().catch(report)]);
     })().catch((err) => {
       skel.remove();
       report(err);
@@ -779,7 +1011,8 @@ export function mount(root, ctx) {
       if (hv && hv.ds === ds && hoverI >= 0) store.set({hover: null}, {source: ctx.id});
     },
     stats() {
-      return {rows: total, rendered: pool.filter((r) => !r.hidden).length};
+      return {rows: total, rendered: pool.filter((r) => !r.hidden).length, colsLoaded,
+        cachedRows: rowCache.size, reads: {...reads}};
     },
     order() {
       return order ? Array.from(order) : null;
