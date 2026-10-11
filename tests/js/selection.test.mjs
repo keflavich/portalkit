@@ -5,6 +5,7 @@ import {inflateRawSync, deflateRawSync, constants as zc} from 'node:zlib';
 import {
   Selection, OPS, opFromEvent, undoDepth, packBits, unpackBits,
   deflateRaw, inflateRaw, b64urlEncode, b64urlDecode, utf8Encode, utf8Decode,
+  encodeHashValue, hashLength,
 } from '../../web/js/core/selection.js';
 import {UNDO_MAX, UNDO_BYTES, IDS_IN_HASH_MAX, BITS_IN_HASH_MAX_N} from '../../web/js/core/constants.js';
 
@@ -122,8 +123,10 @@ test('N = 0 and N = 1', () => {
   const one = new Selection(1);
   one.setIndices([0], 'replace');
   assert.equal(one.count, 1);
-  assert.equal(one.serialize((i) => `src-${i}`), 'ids:src-0');
-  assert.match(one.serialize(), /^bits:/);
+  assert.equal(one.recipeForm((i) => `src-${i}`), 'ids:src-0');
+  const withIds = one.serialize((i) => `src-${i}`);
+  assert.equal(withIds, [one.recipeForm((i) => `src-${i}`), one.bitsForm()].sort((a, b) => a.length - b.length)[0]);
+  assert.match(one.serialize(), /^bits:/, 'index-only recipe without idOf: mask form');
   const p = Selection.parse(one.serialize());
   assert.deepEqual(Array.from(unpackBits(p.bytes, 1)), [1]);
   one.invert();
@@ -254,9 +257,10 @@ test('setIndices without recipeOp records an ids op with hidden indices', () => 
 
 // ---------------------------------------------------------------- serialization
 
-test('serialize: ids when count <= 300 and idOf given (unicode, commas, percent)', () => {
+test('serialize: ids form for a single replace-ids recipe (unicode, commas, percent)', () => {
   const ids = ['α Cen', 'a,b', '100%', 'x:y', 'G0.1+0.2', '日本', '😀'];
-  const s = new Selection(ids.length + 2);
+  // above BITS_IN_HASH_MAX_N there is no mask form, so the recipe form is used
+  const s = new Selection(BITS_IN_HASH_MAX_N + 1);
   s.setIndices([0, 1, 2, 3, 4, 5, 6], 'replace');
   const out = s.serialize((i) => ids[i]);
   assert.match(out, /^ids:/);
@@ -266,19 +270,182 @@ test('serialize: ids when count <= 300 and idOf given (unicode, commas, percent)
   assert.deepEqual(p.ids, ids);
 });
 
-test('serialize: exactly IDS_IN_HASH_MAX ids, then bits above it', () => {
-  const n = 1000;
+test('recipeForm: ids up to IDS_IN_HASH_MAX in one replace op, r: otherwise', () => {
+  const n = BITS_IN_HASH_MAX_N + 1000;
   const s = new Selection(n);
   const idx = Array.from({length: IDS_IN_HASH_MAX}, (_, k) => k * 3);
   s.setIndices(idx, 'replace');
   const out = s.serialize((i) => `s${i}`);
   assert.match(out, /^ids:/);
   assert.equal(Selection.parse(out).ids.length, IDS_IN_HASH_MAX);
-  s.setIndices([999], 'add');
-  const b = s.serialize((i) => `s${i}`);
-  assert.match(b, /^bits:/);
-  const back = unpackBits(Selection.parse(b).bytes, n);
-  assert.deepEqual(back, s.mask);
+  s.setIndices([n - 1], 'add');
+  const r = s.serialize((i) => `s${i}`);
+  assert.match(r, /^r:/, 'two ops: recipe JSON');
+  assert.deepEqual(Selection.parse(r).ops.map((o) => [o.op, o.ids.length]), [['replace', IDS_IN_HASH_MAX], ['add', 1]]);
+  s.setIndices(Array.from({length: IDS_IN_HASH_MAX + 1}, (_, k) => k), 'replace');
+  assert.match(s.serialize((i) => `s${i}`), /^r:/, 'more than IDS_IN_HASH_MAX ids: r:');
+  // at n <= BITS_IN_HASH_MAX_N the shorter of the two forms wins
+  const m = new Selection(1000);
+  m.setIndices(idx, 'replace');
+  const rec = m.recipeForm((i) => `s${i}`);
+  const bf = m.bitsForm();
+  assert.match(rec, /^ids:/);
+  assert.match(bf, /^bits:/);
+  assert.equal(m.serialize((i) => `s${i}`), rec.length <= bf.length ? rec : bf);
+  assert.deepEqual(unpackBits(Selection.parse(bf).bytes, 1000), m.mask);
+});
+
+test('serialize picks the shorter of the recipe and mask forms; a tie goes to the recipe', () => {
+  const r = rng(5);
+  let sawBits = 0;
+  let sawRec = 0;
+  for (const n of [8, 64, 1000, 20_000]) {
+    for (const k of [1, 3, 40]) {
+      const s = new Selection(n);
+      const idx = Array.from({length: Math.min(k, n)}, () => Math.floor(r() * n));
+      s.setIndices(idx, 'replace', {op: 'replace', kind: 'ids', view: {ds: 'src'}, ids: idx.map((i) => `source-${i}`)});
+      const rec = s.recipeForm();
+      const bf = s.bitsForm();
+      const out = s.serialize();
+      assert.equal(out, rec.length <= bf.length ? rec : bf, `n=${n} k=${k}`);
+      if (out === bf) sawBits++; else sawRec++;
+    }
+  }
+  assert.ok(sawBits > 0 && sawRec > 0, 'both forms occur');
+  // a forced tie
+  const t = new Selection(16);
+  t.apply(bits('1000000000000000'), 'replace', undefined, {op: 'replace', kind: 'ids', ids: ['x']});
+  const len = t.bitsForm().length;
+  t.apply(bits('1000000000000000'), 'replace', undefined, {op: 'replace', kind: 'ids', ids: ['x'.repeat(len - 4)]});
+  assert.equal(t.recipeForm().length, len);
+  assert.match(t.serialize(), /^ids:/);
+});
+
+test('recipeIndices lists the rows index-only ops need, including subtracted ones', () => {
+  const s = new Selection(10);
+  assert.deepEqual(Array.from(s.recipeIndices()), []);
+  s.setIndices([4, 2, 4], 'replace');
+  s.setIndices([2, 7], 'subtract');
+  s.apply(bits('0000000001'), 'add', undefined, {op: 'add', kind: 'ids', ids: ['S9']});
+  assert.deepEqual(Array.from(s.recipeIndices()), [4, 2, 7]);
+  assert.deepEqual(Array.from(s.indices()), [4, 9]);
+  // idOf that knows only the selected rows cannot spell the subtract op
+  const partial = (i) => (s.mask[i] ? `S${i}` : undefined);
+  assert.equal(s.recipeForm(partial), '');
+  // ... so the ids of the selected rows (the equivalent replace-ids recipe) compete with bits:
+  const sp = s.serialize(partial);
+  assert.equal(sp, [`ids:S4,S9`, s.bitsForm()].sort((a, b) => a.length - b.length)[0]);
+  assert.match(s.serialize(), /^bits:/, 'no idOf: mask form');
+  const full = Selection.parse(s.recipeForm((i) => `S${i}`));
+  assert.deepEqual(full.ops.map((o) => [o.op, o.ids]), [['replace', ['S4', 'S2']], ['subtract', ['S2', 'S7']], ['add', ['S9']]]);
+  s.invert();
+  assert.deepEqual(Array.from(s.recipeIndices()), [], 'incomplete recipe: nothing to look up');
+});
+
+test('restored selections write the same form again (reload stability)', () => {
+  const idOf = (i) => `S${i}`;
+  const rowOf = (id) => Number(id.slice(1));
+  const restore = (n, str) => {
+    const sel = new Selection(n);
+    const p = Selection.parse(str);
+    if (p.kind === 'ids') sel.setIndices(p.ids.map(rowOf), 'replace', {op: 'replace', kind: 'ids', view: {ds: 'src'}, ids: p.ids});
+    else if (p.kind === 'bits') sel.apply(unpackBits(p.bytes, n), 'replace');
+    else {
+      const tmp = new Selection(n);
+      for (const op of p.ops) {
+        const hit = new Uint8Array(n);
+        if (op.kind === 'rect') hit.fill(1, op.shape.x0, op.shape.x1);
+        else for (const id of op.ids) hit[rowOf(id)] = 1;
+        tmp.apply(hit, op.op, undefined, op);
+      }
+      sel.replaceWith(tmp.mask, tmp.recipe(), tmp.recipeComplete);
+    }
+    return sel;
+  };
+  const rect = (x0, x1) => ({op: 'replace', kind: 'rect', view: {ds: 'src', x: 'a', y: 'b'}, shape: {x0, x1}});
+  for (const n of [50, 5000, BITS_IN_HASH_MAX_N + 7]) {
+    const cases = [
+      (s) => s.setIndices([0, n - 1], 'replace'),
+      (s) => s.setIndices([1, 2], 'replace', {op: 'replace', kind: 'ids', view: {ds: 'src'}, ids: ['S1', 'S2']}),
+      (s) => { const h = new Uint8Array(n); h.fill(1, 3, Math.min(n, 40)); s.apply(h, 'replace', undefined, rect(3, Math.min(n, 40))); },
+      (s) => { s.setIndices([5, 6, 7], 'replace'); s.setIndices([6], 'subtract'); },
+    ];
+    for (const make of cases) {
+      const s = new Selection(n);
+      make(s);
+      const a = s.serialize(idOf);
+      assert.ok(a, `n=${n}`);
+      const b = restore(n, a).serialize(idOf);
+      assert.equal(b, a, `n=${n}: ${a.slice(0, 16)}`);
+      assert.equal(restore(n, b).serialize(), b, 'no idOf needed once restored');
+    }
+  }
+});
+
+test('brush recipes compete with bits: only when there is no mask form (replay depends on filters)', () => {
+  const rect = (op, x0, x1) => ({op, kind: 'rect', view: {ds: 'src', x: 'a', y: 'b'}, shape: {x0, y0: 0, x1, y1: 1}});
+  const r = rng(11);
+  for (const n of [5000, 50_000, BITS_IN_HASH_MAX_N]) {
+    const s = new Selection(n);
+    const h = new Uint8Array(n);
+    for (let i = 0; i < n; i++) if (r() < 0.1) h[i] = 1;   // scattered hits: bits: is long
+    s.apply(h, 'replace', undefined, rect('replace', 0, 1));
+    assert.ok(s.recipeForm().length < s.bitsForm().length, 'the r: form would be shorter');
+    assert.equal(s.recipeExact, false);
+    assert.match(s.serialize(), /^bits:/, `n=${n}: brush selection keeps the exact mask form`);
+    // an ids op after the brush does not make the recipe view-independent
+    s.setIndices([0], 'add', {op: 'add', kind: 'ids', view: {ds: 'src'}, ids: ['S0']});
+    assert.match(s.serialize(), /^bits:/);
+  }
+  const big = new Selection(BITS_IN_HASH_MAX_N + 1);
+  big.apply(bits('0111'), 'replace', undefined, rect('replace', 1, 4));
+  assert.match(big.serialize(), /^r:/, 'n > BITS_IN_HASH_MAX_N: the recipe is the only form');
+  // filter ops that carry their filters and preset ops are exact
+  const f = new Selection(100);
+  f.apply(bits('1'.repeat(50)), 'replace', undefined, {op: 'replace', kind: 'filter', view: {ds: 'src'}, filters: [{key: 'a', min: 0}]});
+  assert.equal(f.recipeExact, true);
+  f.apply(bits('1'), 'add', undefined, {op: 'add', kind: 'preset', view: {ds: 'src'}, key: 'p'});
+  assert.equal(f.recipeExact, true);
+  f.apply(bits('1'), 'add', undefined, {op: 'add', kind: 'filter', view: {ds: 'src'}});
+  assert.equal(f.recipeExact, false, 'filter op without its filters');
+});
+
+test('serialize: idOf over the selected rows only still writes ids: above BITS_IN_HASH_MAX_N (chips)', () => {
+  const s = new Selection(BITS_IN_HASH_MAX_N + 1);
+  s.setIndices([1, 2, 3], 'replace');
+  s.setIndices([2], 'subtract');
+  const sel = Array.from(s.indices());
+  const map = new Map(sel.map((i) => [i, `S${i}`]));
+  assert.equal(s.recipeForm((i) => map.get(i)), '', 'the subtract op names an unselected row');
+  assert.equal(s.serialize((i) => map.get(i)), 'ids:S1,S3');
+  assert.equal(s.serialize(), '', 'no idOf and no mask form: not serializable');
+  // with every recipe row known, the recipe form is used
+  assert.match(s.serialize((i) => `S${i}`), /^r:/);
+  // incomplete recipe (invert) above the bits limit: selected-row ids when few enough
+  const t = new Selection(BITS_IN_HASH_MAX_N + 1);
+  t.setIndices([5], 'replace');
+  t.invert(bits('0000011'));
+  assert.equal(t.recipeComplete, false);
+  assert.equal(t.serialize((i) => `S${i}`), 'ids:S6');
+});
+
+test('serialize compares the forms by their length in the URL (hashLength)', () => {
+  assert.equal(hashLength('ids:a%20b,c'), encodeHashValue('ids:a%20b,c').length);
+  assert.equal(hashLength('ids:a%20b'), 'ids:a%2520b'.length);
+  assert.equal(hashLength('bits:AB-_'), 9);
+  const idOf = (i) => `J ${i} \u00dc`;
+  let sawRawWin = 0;
+  for (const [n, k] of [[20_000, 2], [100_000, 6]]) {
+    const s = new Selection(n);
+    const idx = Array.from({length: k}, (_, j) => Math.floor((j + 0.5) * n / k));
+    s.setIndices(idx, 'replace', {op: 'replace', kind: 'ids', view: {ds: 'src'}, ids: idx.map(idOf)});
+    const rec = s.recipeForm();
+    const bf = s.bitsForm();
+    if (rec.length <= bf.length && hashLength(rec) > hashLength(bf)) sawRawWin++;
+    const out = s.serialize();
+    assert.equal(out, hashLength(rec) <= hashLength(bf) ? rec : bf, `n=${n} k=${k}`);
+  }
+  assert.ok(sawRawWin > 0, 'a case where the raw lengths would pick the longer URL');
 });
 
 test('serialize: bits round-trip at n = BITS_IN_HASH_MAX_N and is compact for clustered masks', () => {

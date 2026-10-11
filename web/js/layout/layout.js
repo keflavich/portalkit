@@ -3,6 +3,10 @@
 // mountLayout(root, tree, {app, registry}) -> Layout
 //   Layout = {pane(id), popout(id, mode), collapse(id, on), reveal(id), destroy(),
 //             panes(), info(id), whenMounted(id), isTabMode(), el}
+//   Pane ctx = {id, config, dataset, app, store, hub, layout, theme, gpuBudget, tools,
+//               setStatus(text, title), setTitle(text), title}
+//   Titles: options.title seeds the header and tab text; ctx.setTitle replaces both ('' or
+//   null restores the default).
 //
 // Features
 // - Splitters (resizable_panels): pointer capture; at pointerdown every child of the split is
@@ -92,7 +96,7 @@ export function normalizeTree(tree) {
     }
     const leaf = {
       kind: 'pane', id, type: node.pane, dataset: node.dataset ?? null, options: node.options || {},
-      size: node.size, collapsed: !!node.collapsed, title: (node.options && node.options.title) || null, depth,
+      size: node.size, collapsed: !!node.collapsed, title: seedTitle(node.options), depth,
     };
     panes.set(id, leaf);
     order.push(id);
@@ -102,6 +106,17 @@ export function normalizeTree(tree) {
   const rootPath = tree && Array.isArray(tree.col) ? 'c0' : 'r0';
   const root = walk(tree, rootPath, 0);
   return {root, panes, splits, order, signature: fnv1a(sig.join('|'))};
+}
+
+/**
+ * Initial pane title from `options.title` (IMPLEMENTATION_NOTES 77): a non-empty string, or a
+ * finite number as text; anything else gives null (the type's default title is used).
+ */
+export function seedTitle(options) {
+  const t = options && options.title;
+  if (typeof t === 'string') return t.trim() ? t : null;
+  if (typeof t === 'number' && Number.isFinite(t)) return String(t);
+  return null;
 }
 
 /** Initial flex spec for children from their `size`: px (> 1), fraction (0..1], or unspecified. */
@@ -194,13 +209,32 @@ export function mountLayout(root, tree, ctx) {
     if (Object.prototype.hasOwnProperty.call(saved.collapsed, leaf.id)) leaf.collapsed = !!saved.collapsed[leaf.id];
   }
 
+  /** Default title of a pane: options.title, else the registry title of its type. */
+  function defaultTitle(leaf) {
+    return seedTitle(leaf.options) || titles[leaf.type] || leaf.type;
+  }
+
+  function paneTitle(leaf) {
+    return leaf.title || titles[leaf.type] || leaf.type;
+  }
+
+  /** ctx.setTitle: '', null or undefined restore the default title. */
+  function setPaneTitle(leaf, text) {
+    const t = text === null || text === undefined || String(text).trim() === '' ? defaultTitle(leaf) : String(text);
+    leaf.title = t;
+    if (leaf.titleEl) leaf.titleEl.textContent = t;
+    if (leaf.paneEl) leaf.paneEl.setAttribute('aria-label', t);
+    if (leaf.tabEl) leaf.tabEl.textContent = t;
+  }
+
   function buildLeaf(leaf) {
     const pane = h('section', 'pk-pane', {'data-pane-id': leaf.id, 'data-pane-type': leaf.type});
     const head = h('header', 'pk-pane-head');
     const fold = h('button', 'pk-fold', {type: 'button', 'aria-expanded': String(!leaf.collapsed), 'aria-controls': `pk-body-${leaf.id}`});
     const chev = h('span', 'pk-chev', {'aria-hidden': 'true'});
     const title = h('span', 'pk-pane-title');
-    title.textContent = leaf.title || titles[leaf.type] || leaf.type;
+    title.textContent = paneTitle(leaf);
+    pane.setAttribute('aria-label', title.textContent);
     fold.append(chev, title);
     fold.title = 'Collapse / expand';
     const status = h('span', 'pk-pane-status');
@@ -218,7 +252,7 @@ export function mountLayout(root, tree, ctx) {
       const cur = popped && popped.id === leaf.id ? popped.mode : null;
       api.popout(leaf.id, cur === null ? 'half' : cur === 'half' ? 'full' : null);
     });
-    Object.assign(leaf, {paneEl: pane, headEl: head, bodyEl: body, foldEl: fold, toolsEl: tools, statusEl: status, popEl: pop,
+    Object.assign(leaf, {paneEl: pane, headEl: head, bodyEl: body, foldEl: fold, titleEl: title, toolsEl: tools, statusEl: status, popEl: pop,
       handle: null, mounting: null, mounted: false, visible: null, lastW: 0, lastH: 0});
     updatePopButton(leaf);
     return pane;
@@ -278,7 +312,7 @@ export function mountLayout(root, tree, ctx) {
   for (const id of order) {
     const leaf = panes.get(id);
     const b = h('button', 'pk-tab', {type: 'button', role: 'tab', 'aria-selected': 'false', 'data-pane-id': id});
-    b.textContent = leaf.title || titles[leaf.type] || leaf.type;
+    b.textContent = paneTitle(leaf);
     b.addEventListener('click', () => setActiveTab(id));
     leaf.tabEl = b;
     tabs.append(b);
@@ -526,15 +560,17 @@ export function mountLayout(root, tree, ctx) {
       hub: app.hub,
       layout: api,
       theme: typeof app.theme === 'function' ? app.theme : () => ({}),
+      // The page's shared GPU budget (IMPLEMENTATION_NOTES 68); same object as ctx.app.gpuBudget.
+      get gpuBudget() { return app.gpuBudget || null; },
       tools: leaf.toolsEl,
       setStatus(text, title) {
         leaf.statusEl.textContent = text || '';
         if (title !== undefined) leaf.statusEl.title = title;
       },
       setTitle(text) {
-        leaf.paneEl.querySelector('.pk-pane-title').textContent = text;
-        if (leaf.tabEl) leaf.tabEl.textContent = text;
+        setPaneTitle(leaf, text);
       },
+      get title() { return paneTitle(leaf); },
     };
   }
 
@@ -713,7 +749,7 @@ export function mountLayout(root, tree, ctx) {
     info(id) {
       const leaf = panes.get(id);
       if (!leaf) return null;
-      return {id: leaf.id, type: leaf.type, dataset: leaf.dataset, options: leaf.options, collapsed: !!leaf.collapsed,
+      return {id: leaf.id, type: leaf.type, title: paneTitle(leaf), dataset: leaf.dataset, options: leaf.options, collapsed: !!leaf.collapsed,
         mounted: !!leaf.mounted, visible: !!leaf.visible, el: leaf.paneEl, body: leaf.bodyEl, handle: leaf.handle};
     },
 

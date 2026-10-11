@@ -7,10 +7,14 @@
 //   subtract:  sel &= ~hit
 //   intersect: sel = (sel & hit) | (sel & ~drawable)   (rows the view cannot show keep their state)
 //
-// Hash serialization (`sel=`), checked in order:
-//   count <= IDS_IN_HASH_MAX (300)      -> "ids:<id1>,<id2>,..."   (each id encodeURIComponent'ed)
-//   n <= BITS_IN_HASH_MAX_N (200000)   -> "bits:<base64url(deflate-raw(mask packed LSB-first))>"
-//   otherwise                           -> "r:<base64url(deflate-raw(JSON(recipe)))>"
+// Hash serialization (`sel=`, IMPLEMENTATION_NOTES 92 supersedes the section 6.3 order): the
+// shorter (in the URL) of
+//   recipe form  "ids:<id1>,<id2>,..."  (recipe = one replace op of kind ids, <= 300 ids), or
+//                "r:<base64url(deflate-raw(JSON(recipe)))>"  (any other complete recipe)
+//   mask form    "bits:<base64url(deflate-raw(mask packed LSB-first))>"  (n <= 200000)
+// where a recipe with brush ops (rows drawable under the filters at replay time) competes only
+// when there is no mask form. The form depends on the selection alone and survives a reload
+// unchanged; see Selection.serialize.
 // deflate-raw / inflate-raw are implemented here synchronously (fixed-Huffman LZ77 encoder;
 // full stored/fixed/dynamic decoder) because serialize()/parse() are synchronous and the
 // browser CompressionStream API is asynchronous. Both are exported for legacyhash.js and tests.
@@ -419,6 +423,26 @@ function safeDecode(s) {
   }
 }
 
+/**
+ * Hash value encoding used by core/hash.js formatHash: encodeURIComponent, keeping
+ * ',' ':' '/' '@' '!' '*' '(' ')' '~' readable. hash.js re-exports it.
+ */
+export function encodeHashValue(v) {
+  return encodeURIComponent(String(v))
+    .replace(/%2C/gi, ',').replace(/%3A/gi, ':').replace(/%2F/gi, '/')
+    .replace(/%40/gi, '@').replace(/%21/g, '!').replace(/%2A/gi, '*')
+    .replace(/%28/g, '(').replace(/%29/g, ')');
+}
+
+/** Length of a `sel=` value once written into the URL hash (encodeHashValue). */
+export function hashLength(s) {
+  return encodeHashValue(s).length;
+}
+
+function idsForm(ids) {
+  return 'ids:' + ids.map((id) => encodeURIComponent(String(id))).join(',');
+}
+
 /** Undo depth rule: min(maxUndo, floor(undoBytes / n)), at least 1. */
 export function undoDepth(n, maxUndo = UNDO_MAX, undoBytes = UNDO_BYTES) {
   const byBytes = n > 0 ? Math.floor(undoBytes / n) : maxUndo;
@@ -643,30 +667,107 @@ export class Selection {
   }
 
   /**
-   * Hash form of the selection: 'ids:..' | 'bits:..' | 'r:..' | ''.
-   * '' means empty, or not serializable (n > BITS_IN_HASH_MAX_N with an incomplete recipe).
+   * Stored row indices that index-only ids ops of the recipe (setIndices without a RecipeOp)
+   * refer to, unique, in first-seen order. serialize() needs `idOf` for exactly these rows
+   * (selected or not: a subtract op names rows that are no longer selected).
+   */
+  recipeIndices() {
+    const seen = new Set();
+    const out = [];
+    if (!this._recipeOk) return Int32Array.from(out);
+    for (const op of this._recipe) {
+      if (!op._idx || op.ids) continue;
+      for (const i of op._idx) if (!seen.has(i)) { seen.add(i); out.push(i); }
+    }
+    return Int32Array.from(out);
+  }
+
+  /**
+   * True when every recipe op replays to the same rows whatever the view state at load time:
+   * ids ops, selection presets, and filter ops that carry their `filters`. Brush ops (rect,
+   * circle, lasso) hit only the rows drawable under the filters in force when they are replayed,
+   * so a reload after a filter change would select different rows. False for an incomplete or
+   * empty recipe.
+   */
+  get recipeExact() {
+    if (!this._recipeOk || !this._recipe.length) return false;
+    return this._recipe.every((op) => op.kind === 'ids' || op.kind === 'preset' || (op.kind === 'filter' && !!op.filters));
+  }
+
+  /**
+   * Recipe form of the selection, or '' when the recipe cannot reproduce it (incomplete, empty,
+   * or index-only ids ops whose ids `idOf` cannot supply). A recipe of exactly one `replace`
+   * op of kind `ids` with at most IDS_IN_HASH_MAX ids is spelled `ids:<id>,<id>` (the compact
+   * form of that recipe); any other recipe is `r:<base64url(deflate-raw(JSON))>`.
+   */
+  recipeForm(idOf) {
+    if (!this._recipeOk || !this._recipe.length) return '';
+    const ops = [];
+    for (const op of this._recipe) {
+      if (op._idx && !op.ids) {
+        if (typeof idOf !== 'function') return '';
+        const ids = [];
+        for (const i of op._idx) {
+          const id = idOf(i);
+          if (id === undefined || id === null) return '';
+          ids.push(String(id));
+        }
+        ops.push(Object.assign({}, op, {ids}));
+      } else {
+        ops.push(op);
+      }
+    }
+    if (ops.length === 1 && ops[0].op === 'replace' && ops[0].kind === 'ids' && Array.isArray(ops[0].ids)
+        && ops[0].ids.length > 0 && ops[0].ids.length <= IDS_IN_HASH_MAX) {
+      return idsForm(ops[0].ids);
+    }
+    return 'r:' + b64urlEncode(deflateRaw(utf8Encode(JSON.stringify(ops))));
+  }
+
+  /** Mask form `bits:<...>` when n <= BITS_IN_HASH_MAX_N, else ''. */
+  bitsForm() {
+    if (this.n > BITS_IN_HASH_MAX_N) return '';
+    return 'bits:' + b64urlEncode(deflateRaw(packBits(this._mask)));
+  }
+
+  /**
+   * `ids:` form of the selected rows (1..IDS_IN_HASH_MAX of them) spelled through idOf, or ''
+   * when idOf is missing or cannot spell one of them.
+   */
+  _selectedIdsForm(idOf) {
+    if (typeof idOf !== 'function' || this._count === 0 || this._count > IDS_IN_HASH_MAX) return '';
+    const ids = [];
+    for (const i of this.indices()) {
+      const id = idOf(i);
+      if (id === undefined || id === null) return '';
+      ids.push(String(id));
+    }
+    return idsForm(ids);
+  }
+
+  /**
+   * Hash form of the selection: 'ids:..' | 'bits:..' | 'r:..' | '' (IMPLEMENTATION_NOTES 92).
+   * The form is chosen from the selection itself:
+   * - with a mask form (`bits:`, n <= BITS_IN_HASH_MAX_N), the recipe form (recipeForm: `ids:`
+   *   or `r:`) competes with it only when the recipe replays independently of the view state
+   *   (recipeExact); the shorter one in the URL (hashLength) wins and a tie goes to the recipe;
+   * - without a mask form (n > BITS_IN_HASH_MAX_N), the recipe form is used whatever its ops.
+   * A restored selection carries the same recipe (or, from `bits:`, none), so it writes the same
+   * form before and after a reload. `idOf` is needed for the index-only ids ops of the recipe
+   * (recipeIndices()). When the recipe is complete and exact but `idOf` cannot spell those
+   * rows, or when there is neither a recipe form nor a mask form, an `idOf` that spells every
+   * selected row (count <= IDS_IN_HASH_MAX) gives the `ids:` form of the selected rows, i.e. the
+   * compact form of the equivalent replace-ids recipe. '' means empty or not serializable.
    */
   serialize(idOf) {
     if (this._count === 0) return '';
-    if (this._count <= IDS_IN_HASH_MAX && typeof idOf === 'function') {
-      const ids = [];
-      const m = this._mask;
-      for (let i = 0; i < m.length; i++) if (m[i]) ids.push(encodeURIComponent(String(idOf(i))));
-      return 'ids:' + ids.join(',');
-    }
-    if (this.n <= BITS_IN_HASH_MAX_N) {
-      return 'bits:' + b64urlEncode(deflateRaw(packBits(this._mask)));
-    }
-    if (!this._recipeOk || !this._recipe.length) return '';
-    const ops = this._recipe.map((op) => {
-      if (op._idx && !op.ids) {
-        if (typeof idOf !== 'function') return null;
-        return Object.assign({}, op, {ids: Array.from(op._idx, (i) => String(idOf(i)))});
-      }
-      return op;
-    });
-    if (ops.includes(null)) return '';
-    return 'r:' + b64urlEncode(deflateRaw(utf8Encode(JSON.stringify(ops))));
+    const bits = this.bitsForm();
+    const exact = this.recipeExact;
+    let rec = bits && !exact ? '' : this.recipeForm(idOf);
+    if (!rec && (!bits || exact)) rec = this._selectedIdsForm(idOf);
+    if (!rec) return bits;
+    if (!bits) return rec;
+    return hashLength(rec) <= hashLength(bits) ? rec : bits;
   }
 
   /**

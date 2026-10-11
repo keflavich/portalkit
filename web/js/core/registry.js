@@ -12,7 +12,13 @@ export const PANE_TYPES = Object.freeze([
 /** type -> module path relative to this file. */
 export const PANE_MODULES = Object.freeze(Object.fromEntries(PANE_TYPES.map((t) => [t, `../panes/${t}.js`])));
 
-/** type -> stylesheets (relative to this file) loaded before the pane mounts. */
+/**
+ * type -> stylesheets (relative to this file) loaded before the pane mounts
+ * (IMPLEMENTATION_NOTES 69). Plot panes load [<pane>.css, controls.css]; the hist pane has no
+ * stylesheet of its own (its rules live in controls.css), so it loads controls.css only. Every
+ * listed file exists in web/css/panes/ (tests/js/store.test.mjs checks it), so no pane CSS
+ * request 404s. UI widget styles all live in css/panes/ui.css, which boot loads.
+ */
 export const PANE_CSS = Object.freeze({
   list: ['../../css/panes/list.css'],
   table: ['../../css/panes/list.css'],

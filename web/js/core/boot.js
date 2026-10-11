@@ -13,11 +13,13 @@
 //  8. emit 'ready' {ms}
 //
 // App = {page, store, hub, layout, selections: Map<ds, Selection>, caps: Set<string>, emit, on,
-//        ...helpers documented in docs/js.md (selectionFor, resolveIds, applySelection, ...)}
+//        gpuBudget (one gl/budget.js Budget per page; panes never create one),
+//        ...helpers documented in docs/js.md (selectionFor, resolveIds, applySelection,
+//        importCsv, ...)}
 
-import {T0_MAX, T1_MAX} from './constants.js';
+import {T0_MAX, T1_MAX, BITS_IN_HASH_MAX_N} from './constants.js';
 import {createStore} from './store.js';
-import {Selection, unpackBits} from './selection.js';
+import {Selection, unpackBits, OPS} from './selection.js';
 import {parseHash, hashToPatch, bindHash, formatHash, stateToHash} from './hash.js';
 import {takeCarry, broadcastFocus, onBroadcastFocus} from './carry.js';
 import {bindKeys, KEYMAP} from './keys.js';
@@ -28,12 +30,87 @@ import {loadCSS} from './loadscript.js';
 import {fmtCount, escapeHtml} from './fmt.js';
 import {mountLayout, normalizeTree} from '../layout/layout.js';
 import {createHub} from '../data/hub.js';
+import {Budget} from '../gl/budget.js';
 
 /** Pane types that get a rendering tier from their catalog's N (section 7.1). */
 export const TIERED_PANES = Object.freeze(['scatter', 'manifold', 'hist', 'sky', 'list', 'table']);
 
 /** UI widgets mounted by boot: each may export install(app) -> (destroy fn | void). */
 export const UI_MODULES = Object.freeze(['toast', 'nav', 'help', 'hover', 'lightbox']);
+
+/**
+ * Most ids boot prefetches so that index-only selection ops (Selection.recipeIndices) can be
+ * written to the hash as ids; larger index sets fall back to the `bits:` form or are left out.
+ */
+export const PREFETCH_IDS_MAX = 1000;
+
+/**
+ * app.resolveIds looks up at least this many unknown ids in one pass over the catalog's id list
+ * (DataClient.export format 'ids') instead of one DataClient.find call per id.
+ */
+export const RESOLVE_BATCH_MIN = 16;
+
+/**
+ * First stored row of each wanted id in `text`, the newline-separated id list in stored order
+ * (DataClient.export({mask: 'all', format: 'ids'})). Exact string match. Returns Map(id -> row).
+ */
+export function matchIdList(text, wanted) {
+  const found = new Map();
+  if (!wanted || !wanted.size) return found;
+  const s = String(text ?? '');
+  let row = 0;
+  let a = 0;
+  while (a < s.length && found.size < wanted.size) {
+    let b = s.indexOf('\n', a);
+    if (b < 0) b = s.length;
+    const id = s.slice(a, b);
+    if (wanted.has(id) && !found.has(id)) found.set(id, row);
+    row += 1;
+    a = b + 1;
+  }
+  return found;
+}
+
+/**
+ * Core of app.importCsv (IMPLEMENTATION_NOTES 93), exported for tests. Parses `text` with
+ * io.parseImportText, matches entries with io.resolveImport (ids and aliases through
+ * deps.resolveIds, then positions through client.crossmatch when the manifest has `pos`), and
+ * applies the matched rows to `sel` with `mode` in one setIndices call.
+ * deps = {mode, sel, client: {n, manifest, crossmatch?}, io: ui/export.js, resolveIds, radiusArcsec?}
+ * Returns {mode, format, entries, skipped, matched, byId, byPosition, missing, missingLabels,
+ *          rows, count, summary}; the selection is left untouched when no entry was recognised.
+ */
+export async function importSelection(text, deps) {
+  const {sel, client, io} = deps;
+  const mode = deps.mode ?? 'replace';
+  if (!OPS.includes(mode)) throw new TypeError(`unknown import mode: ${mode}`);
+  const parsed = io.parseImportText(String(text ?? ''));
+  const out = {
+    mode, format: parsed.format, entries: parsed.entries.length, skipped: parsed.skipped || 0,
+    matched: 0, byId: 0, byPosition: 0, missing: 0, missingLabels: [], rows: 0, count: sel.count, summary: '',
+  };
+  if (!parsed.entries.length) {
+    out.summary = parsed.format === 'empty' ? 'Nothing to import.' : 'No ids or positions were recognised.';
+    return out;
+  }
+  const pos = !!(client.manifest && client.manifest.pos) && typeof client.crossmatch === 'function';
+  const r = Number(deps.radiusArcsec);
+  const res = await io.resolveImport(parsed.entries, {
+    n: client.n,
+    radiusArcsec: Number.isFinite(r) && r > 0 ? r : undefined,
+    resolveIds: deps.resolveIds,
+    crossmatch: pos ? (ra, dec, rad) => client.crossmatch(ra, dec, rad) : null,
+  });
+  sel.setIndices(Array.from(res.indices), mode);
+  const label = typeof io.entryLabel === 'function' ? io.entryLabel : (e) => String(e && (e.id ?? `line ${e.line}`));
+  Object.assign(out, {
+    matched: res.matched.length, byId: res.byId, byPosition: res.byPosition, missing: res.missing.length,
+    missingLabels: res.missing.slice(0, 50).map(label), rows: res.indices.length, count: sel.count,
+  });
+  out.summary = typeof io.importSummary === 'function' ? io.importSummary(res, parsed.entries.length)
+    : `Matched ${fmtCount(out.matched)} of ${fmtCount(out.entries)}`;
+  return out;
+}
 
 /**
  * Tier for a pane from N and runtime support, with +-10 % hysteresis around the boundaries
@@ -208,7 +285,7 @@ async function bootInner(t0, hooks) {
   if (Array.isArray(grammar) && grammar.length) {
     try {
       const mod = await import('./legacyhash.js');
-      const res = mod.mapLegacy(grammar, {hash: location.hash, search: location.search});
+      const res = mod.mapLegacy(grammar, {hash: location.hash, search: location.search, page});
       if (res && res.hash && Object.keys(res.hash).length) {
         legacyHash = res.hash;
         legacyUsed = true;
@@ -249,6 +326,9 @@ async function bootInner(t0, hooks) {
     emit: (topic, payload) => store.emit(topic, payload),
     on: (topic, fn) => store.onEvent(topic, fn),
     theme: () => theme.tokens(),
+    // One GPU memory budget per page (IMPLEMENTATION_NOTES 68), shared by every plot pane
+    // through ctx.app.gpuBudget (also ctx.gpuBudget).
+    gpuBudget: new Budget(),
   };
 
   // 3. hub + manifest prefetch -----------------------------------------------------------
@@ -282,7 +362,7 @@ async function bootInner(t0, hooks) {
     if (!ref.context) {
       sel.onChange((s) => {
         store.set({[`sel:${ds}`]: {version: s.version, count: s.count}}, {source: 'selection'});
-        if (ds === primaryDs) prefetchSelectedIds(ds, s);
+        if (ds === primaryDs) prefetchRecipeIds(ds, s);
       });
       store.set({[`sel:${ds}`]: {version: sel.version, count: sel.count}}, {source: 'selection'});
       if (pendingSel.has(ds)) {
@@ -300,6 +380,18 @@ async function bootInner(t0, hooks) {
 
   // Exact alias lookup: manifest ids.alias_file ({"alias": stored row}, section 5.2), loaded
   // once per dataset on the first id that is not an exact id match.
+  // The newline-separated id list of a catalog (stored order), fetched from the worker once per
+  // dataset on the first batch lookup and kept for later imports (about 12 bytes per row).
+  const idLists = new Map();      // ds -> Promise<string>
+  function idListText(ds, client) {
+    if (!idLists.has(ds)) {
+      const p = client.export({mask: 'all', format: 'ids'}).then((blob) => blob.text());
+      p.catch(() => { if (idLists.get(ds) === p) idLists.delete(ds); });
+      idLists.set(ds, p);
+    }
+    return idLists.get(ds);
+  }
+
   const aliasMaps = new Map();    // ds -> Promise<Map(alias -> i) | null>
   function aliasMap(ds, client) {
     if (aliasMaps.has(ds)) return aliasMaps.get(ds);
@@ -338,14 +430,38 @@ async function bootInner(t0, hooks) {
    * ids -> stored row indices (-1 when not found). A row matches when its id equals the text
    * (searched through DataClient.find, which also returns substring hits) or when the text is
    * one of its aliases (exact lookup in the alias file). Substring hits never count.
+   * RESOLVE_BATCH_MIN or more unknown ids (or any number once the list is cached) are matched in
+   * one pass over the catalog's id list (one worker call, then kept per dataset) and then through
+   * the alias file; only ids containing line breaks (which the id list cannot hold) still go
+   * through DataClient.find one by one.
    */
   app.resolveIds = async (ds, ids) => {
     const client = await app.catalog(ds);
-    const out = [];
-    for (const raw of ids) {
-      const id = String(raw);
-      const known = idIndex.get(ds) && idIndex.get(ds).get(id);
-      if (known !== undefined) { out.push(known); continue; }
+    const list = Array.from(ids || [], (raw) => String(raw));
+    const out = new Array(list.length).fill(-1);
+    const known = idIndex.get(ds);
+    let todo = [];
+    list.forEach((id, k) => {
+      const i = known && known.get(id);
+      if (i !== undefined) out[k] = i; else todo.push(k);
+    });
+    if (todo.length && (todo.length >= RESOLVE_BATCH_MIN || idLists.has(ds)) && typeof client.export === 'function') {
+      const lineSafe = (id) => !/[\r\n]/.test(id);
+      const found = matchIdList(await idListText(ds, client), new Set(todo.map((k) => list[k]).filter(lineSafe)));
+      const rest = [];
+      for (const k of todo) {
+        const i = found.get(list[k]);
+        if (i !== undefined) { out[k] = i; cacheId(ds, i, list[k]); } else rest.push(k);
+      }
+      const am = rest.length ? await aliasMap(ds, client) : null;
+      todo = [];
+      for (const k of rest) {
+        if (am && am.has(list[k])) out[k] = am.get(list[k]);
+        else if (!lineSafe(list[k])) todo.push(k);
+      }
+    }
+    for (const k of todo) {
+      const id = list[k];
       const cands = await client.find(id, {limit: 10});
       let hit = -1;
       for (const i of cands || []) {
@@ -357,7 +473,7 @@ async function bootInner(t0, hooks) {
         const am = await aliasMap(ds, client);
         if (am && am.has(id)) hit = am.get(id);
       }
-      out.push(hit);
+      out[k] = hit;
     }
     return out;
   };
@@ -372,18 +488,40 @@ async function bootInner(t0, hooks) {
   };
 
   let unbindHash = null;
-  async function prefetchSelectedIds(ds, sel) {
-    if (sel.count === 0 || sel.count > 300) return;
+
+  /** Rows whose ids Selection.serialize may ask for (index-only ids ops of the recipe). */
+  function idRowsOf(sel) {
+    if (typeof sel.recipeIndices === 'function') return sel.recipeIndices();
+    return sel.count <= PREFETCH_IDS_MAX ? sel.indices() : new Int32Array(0);
+  }
+
+  // Fetch the ids that index-only recipe ops need, then rewrite the hash once they are known.
+  // The sel= form itself is chosen by the Selection (IMPLEMENTATION_NOTES 92).
+  async function prefetchRecipeIds(ds, sel) {
+    if (sel.count === 0) return;
+    // A recipe with brush ops is written as bits: while a mask form exists (Selection.serialize).
+    if (sel.recipeExact === false && typeof sel.bitsForm === 'function' && sel.n <= BITS_IN_HASH_MAX_N) return;
+    const rows = idRowsOf(sel);
+    if (!rows.length || rows.length > PREFETCH_IDS_MAX) return;
+    const c = idCache.get(ds);
+    const missing = Array.from(rows).filter((i) => !(c && c.has(i)));
+    if (!missing.length) return;
     const version = sel.version;
-    const idx = Array.from(sel.indices());
-    await Promise.all(idx.map((i) => app.idOf(ds, i)));
+    try {
+      await Promise.all(missing.map((i) => app.idOf(ds, i)));
+    } catch (err) {
+      // Worker/network failures surface as Error subclasses; the hash keeps the bits:/'' form.
+      if (!(err instanceof Error)) throw err;
+      console.warn(`could not fetch selected ids of ${ds}`, err);
+      return;
+    }
     if (sel.version === version && unbindHash) unbindHash.touch();
   }
 
+  /** Synchronous idOf over the id cache, or undefined while a needed id is still unknown. */
   function syncIdOf(ds, sel) {
-    const c = idCache.get(ds);
-    if (!c) return undefined;
-    for (const i of sel.indices()) if (!c.has(i)) return undefined;
+    const c = idCache.get(ds) || new Map();
+    for (const i of idRowsOf(sel)) if (!c.has(i)) return undefined;
     return (i) => c.get(i);
   }
 
@@ -458,6 +596,30 @@ async function bootInner(t0, hooks) {
     }
     if (skipped) store.emit('toast', {level: 'warn', text: `${skipped} step(s) of the linked selection could not be replayed.`});
   }
+
+  /**
+   * Select rows from import text (CSV/TSV with an id or ra/dec header, ids or positions one per
+   * line, DS9 regions, JSON), IMPLEMENTATION_NOTES 93. Parsing and matching use ui/export.js
+   * parseImportText + resolveImport (ids and aliases first, then a positional crossmatch when
+   * the catalog has positions). opts: {mode: 'replace'|'add'|'subtract'|'intersect' (default
+   * 'replace'), ds (default the primary dataset), radiusArcsec}. Resolves to counts:
+   * {ds, mode, format, entries, skipped, matched, byId, byPosition, missing, missingLabels,
+   *  rows, count, summary}. Nothing is applied when the text holds no entries.
+   */
+  app.importCsv = async (text, opts = {}) => {
+    const mode = opts.mode ?? 'replace';
+    if (!OPS.includes(mode)) throw new TypeError(`unknown import mode: ${mode}`);
+    const ds = opts.ds || primaryDs;
+    if (!ds || !page.datasets[ds] || page.datasets[ds].kind !== 'catalog') {
+      throw new Error(ds ? `not a catalog dataset: ${ds}` : 'this page has no catalog to import into');
+    }
+    const [io, client] = await Promise.all([import('../ui/export.js'), app.catalog(ds)]);
+    const sel = await app.selectionFor(ds);
+    const out = await importSelection(text, {
+      mode, sel, client, io, radiusArcsec: opts.radiusArcsec, resolveIds: (ids) => app.resolveIds(ds, ids),
+    });
+    return Object.assign({ds}, out);
+  };
 
   /** Payload for carry.js stashCarry (used by ui/nav.js on clicks to sibling pages). */
   app.carryPayload = () => {

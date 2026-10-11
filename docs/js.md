@@ -31,7 +31,9 @@ web/css/{tokens,base,layout,print}.css
    stored theme.
 2. Build the store: defaults <- `page.state` <- carry (`takeCarry`) <- legacy hash mapping <-
    canonical hash. The legacy step runs only when `page.page.legacy.grammar` is non-empty; it
-   imports `./legacyhash.js` dynamically and calls `mapLegacy(grammars, {hash, search})`.
+   imports `./legacyhash.js` dynamically and calls `mapLegacy(grammars, {hash, search, page})`
+   (IMPLEMENTATION_NOTES 90; `page` is the parsed page.json, so mappings can read page ids and
+   defaults).
    Consumed query keys are removed from the URL with `replaceState`, and the canonical hash is
    written once boot finishes.
 3. `createHub(page, store)` from `data/hub.js`; manifests of every catalog used by a
@@ -79,7 +81,7 @@ output in `page.caps.enabled`; `app.notes` records the runtime reason.
 | `theme()` | `theme.tokens()` |
 | `catalog(ds)` | cached `hub.catalog(ds)`; also creates the dataset's Selection |
 | `selectionFor(ds)` | `Promise<Selection>` |
-| `resolveIds(ds, ids)` | `Promise<number[]>` stored row indices, -1 when not found. A row matches when its id equals the text (candidates from `client.find`, whose substring hits never count) or the text is one of its aliases (exact lookup in the manifest's `ids.alias_file`, loaded on first need) |
+| `resolveIds(ds, ids)` | `Promise<number[]>` stored row indices, -1 when not found. A row matches when its id equals the text or the text is one of its aliases (exact lookup in the manifest's `ids.alias_file`, loaded on first need); substring hits never count. Ids already in the id cache resolve at once. `RESOLVE_BATCH_MIN` (16) or more unknown ids are matched in one pass over `client.export({mask: 'all', format: 'ids'})` (`matchIdList`, first row wins) and then the alias file. The id list text is fetched once per dataset and kept (about 12 bytes per row), after which every lookup uses it. Fewer ids before that, and ids containing line breaks, go through `client.find` one at a time (about 0.1 s per id at 1M rows) |
 | `idOf(ds, i)` | `Promise<string>` cached id lookup |
 | `applySelection(ds, str)` | apply an `ids:`/`bits:`/`r:` string as one replace (recipes replay on an empty scratch Selection through `client.brush`, `client.query` and presets, then load with `sel.replaceWith`) |
 | `carryPayload()` | `{ds, focusId, sel}` for `stashCarry` |
@@ -87,10 +89,29 @@ output in `page.caps.enabled`; `app.notes` records the runtime reason.
 | `hashLink()` | the canonical hash string for "copy link" actions (no side effects) |
 | `hashLinkInfo()` | `{str, dropped, omitted}`: `dropped` = the selection is too long for the link, `omitted` = the link leaves a non-empty selection out (copy-link actions warn on it) |
 | `slots` | `{header, nav, tools, main, selbar}` DOM slots for UI widgets |
+| `gpuBudget` | the page's one `gl/budget.js` `Budget` (note 68). Every GPU pane requests and releases bytes through it (`ctx.gpuBudget` is the same object); panes never create their own |
+| `importCsv(text, {mode, ds, radiusArcsec})` | CSV / id-list import into a selection (note 93); see below |
+
+`app.importCsv(text, opts)` is the runtime entry for the import dialog (`ui/export.js`). `mode`
+is one of `replace` (default), `add`, `subtract`, `intersect` (anything else throws
+`TypeError`); `ds` defaults to `primaryDs` and must be a catalog. The text is parsed with
+`parseImportText` and matched with `resolveImport` from `ui/export.js` (ids and aliases through
+`app.resolveIds`; positions through `client.crossmatch` when the manifest has `pos`), and the
+matched rows are applied as one `sel.setIndices(rows, mode)` (an `ids` recipe op, so it can go
+in the URL). It resolves to `{ds, mode, format, entries, skipped, matched, byId, byPosition,
+missing, missingLabels (first 50), rows, count, summary}`, where `count` is the selection size
+afterwards and `summary` is the one-line `importSummary` text. Text with no recognisable entry
+leaves the selection unchanged. The pure core is exported as `importSelection(text, {mode, sel,
+client, io, resolveIds, radiusArcsec})` for tests.
 
 Selections: boot uses `client.selection()` when it returns an object with `apply`, `mask` and
 `onChange` (a `core/selection.js` Selection); otherwise it creates `new Selection(client.n)`.
 Selection changes are mirrored into `sel:<ds>` = `{version, count}` with source `'selection'`.
+
+Id prefetch for the hash: while a selection's `ids:`/`r:` form needs ids that are not cached,
+boot fetches them (`app.idOf`) for up to `PREFETCH_IDS_MAX` (1000) rows of
+`sel.recipeIndices()` and then rewrites the hash once; above that the hash uses `bits:` or the
+other recipe ops.
 
 Focus: writers may set `focus = {ds, i, id: null}` or `{ds, i: null, id}`; boot fills the
 missing half asynchronously (source `'boot'`), including once at startup for a focus that came
@@ -160,10 +181,31 @@ Serialization (`serialize(idOf)` / `Selection.parse(s)`):
 
 | Form | When | Payload |
 |---|---|---|
-| `''` | empty, or n > 200 000 with an incomplete recipe | |
-| `ids:<id>,<id>` | count <= 300 and `idOf` given | `encodeURIComponent` per id |
+| `''` | empty, or n > 200 000 with an incomplete recipe (or an `_idx` op whose id is not cached) and no `idOf` that spells the selected rows | |
+| `ids:<id>,<id>` | recipe form of a single `replace` ids op with 1..300 ids | `encodeURIComponent` per id |
+| `r:<b64url>` | recipe form of any other complete recipe | base64url(deflate-raw(UTF-8 JSON RecipeOp[])); `r:[...]` raw JSON is also accepted |
 | `bits:<b64url>` | n <= 200 000 | base64url(deflate-raw(packed bits, LSB first)) |
-| `r:<b64url>` | otherwise | base64url(deflate-raw(UTF-8 JSON RecipeOp[])); `r:[...]` raw JSON is also accepted |
+
+Choice of form (IMPLEMENTATION_NOTES 92): `serialize(idOf)` computes the recipe form
+(`recipeForm(idOf)`: `ids:` or `r:`, `''` when the recipe is incomplete) and the bitmask form
+(`bitsForm()`, `''` above 200 000 rows) and writes the one that is shorter in the URL
+(`hashLength(s)` = length after `encodeHashValue`, so `%`-escaped ids count as written); a tie
+goes to the recipe. With a bitmask form available, the recipe competes only when
+`sel.recipeExact` is true: every op is an `ids` op, a `preset` op, or a `filter` op that carries
+its `filters`. Brush ops (`rect`/`circle`/`lasso`) replay against the rows drawable under the
+filters in force at load time, so a brush selection on n <= 200 000 rows is always written as
+`bits:` and restores the same rows after a filter change; above 200 000 rows the recipe (with
+its brush ops) is the only form. The choice depends only on the selection (its recipe and mask),
+so a selection restored from the URL writes the same form before and after a reload.
+
+`idOf` spells index-only ids ops (`setIndices` records `{kind: 'ids', _idx: rows}`);
+`sel.recipeIndices()` lists the rows those ops reference (including rows a `subtract` op
+removed). While any of those ids is unknown the recipe form is `''`: boot's hash binding then
+uses `bits:` and rewrites the hash once the prefetched ids arrive. When `idOf` covers only the
+selected rows (e.g. `ui/chips.js`) and the recipe form is `''` (exact recipe with an unknown
+id, or no bitmask form), an `idOf` that spells every selected row (count <= 300) gives the
+`ids:` form of the selected rows, which is the compact spelling of the equivalent replace-ids
+recipe.
 
 `deflateRaw`/`inflateRaw` are synchronous (fixed-Huffman LZ77 encoder; full stored/fixed/dynamic
 decoder) so serialization stays synchronous. `b64urlDecode` also accepts standard base64.
@@ -191,7 +233,7 @@ come last in alphabetical order:
 | `feat` | `features` | comma list |
 | `spec` | `spec` minus `xr` | base64url JSON |
 | `wl` | `spec.xr` | `w0,w1` |
-| `sky`, `base`, `ovl` | `sky` | `ra,dec,fov`; base survey id; `id:opacity,id` |
+| `sky`, `base`, `ovl` | `sky` | `ra,dec,fov`; base survey id; `id:opacity,id` (`-` = no overlays) |
 | `rung`, `beat`, `role` | same | strings |
 | `fac` | `facets` | base64url JSON |
 | `lb` | `lightbox` | `set,index` or `index` |
@@ -207,6 +249,13 @@ for colour), e.g. `#c=none&feat=-&tpl=-`. `hashToPatch` reads `-` for every key 
 `f`/`fac` `{}`, `<pane>.x`/`.y` null, `tpl`/`rung`/`beat`/`role`/`lb` null, `feat` `[]`,
 `wl` no range, `sky` no centre, `base` null, `ovl` `[]`, `view` no pop-out, `sel` empty), so
 a reload or Back keeps the cleared state.
+
+Overlays (IMPLEMENTATION_NOTES 72): `sky.overlays` undefined means "the layout default"
+(`options.overlays` of each pane) and writes no `ovl`; an array writes `ovl=<list>`, and an
+empty array writes `ovl=-`, independent of the page default, so an explicit "no overlays"
+survives a reload. On navigation, an absent `ovl` removes `sky.overlays` (back to the layout
+default) unless the page default itself carries an overlay list. Panes read `undefined` as
+"use my `options.overlays`" and `[]` as "none".
 
 Writing: `replaceState` debounced by 250 ms; a change of focus id (or any set with
 `history: true`) uses `pushState` at once, so Back returns to the previous source. Reading:
@@ -255,6 +304,12 @@ LayoutNode: `{row: [...]}`, `{col: [...]}` or a pane leaf
 - Panes mount lazily the first time they become visible. A `ResizeObserver` calls
   `handle.resize(w, h, dpr)` once per frame and emits `pane:resize {pane, w, h}`.
 
+- Titles (IMPLEMENTATION_NOTES 77): `options.title` (a non-blank string or a finite number)
+  seeds the header text, the mobile tab text and the pane `aria-label`; otherwise the title
+  is `PANE_TITLES[type]`. `ctx.setTitle(text)` replaces all three at run time; `''`, `null` or
+  `undefined` restores the default. `ctx.title` and `info(id).title` return the current title.
+  `seedTitle(options)` is exported for tests.
+
 API: `pane(id)` (handle or null), `panes()`, `info(id)`, `whenMounted(id)`, `popout(id, mode)`,
 `collapse(id, on)`, `reveal(id)`, `isTabMode()`, `destroy()`, `el`.
 
@@ -265,7 +320,8 @@ API: `pane(id)` (handle or null), `panes()`, `info(id)`, `whenMounted(id)`, `pop
 export const meta = {type: 'example', caps: [], needs: ['catalog']};
 
 export function mount(el, ctx) {
-  // ctx = {id, config, dataset, app, store, hub, layout, theme, tools, setStatus, setTitle}
+  // ctx = {id, config, dataset, app, store, hub, layout, theme, gpuBudget, tools,
+  //        setStatus, setTitle, title}
   const canvas = document.createElement('canvas');
   el.append(canvas);
   let visible = true;
@@ -302,7 +358,9 @@ transform used to draw; never call another pane directly. Add the type to
 `core/registry.js` (`PANE_MODULES`, `PANE_CSS`, `PANE_TITLES`).
 
 Pane tools go into `ctx.tools` (header, right side). `ctx.setStatus(text, title)` writes the
-small status text in the header.
+small status text in the header; `ctx.setTitle(text)` changes the pane title (section 5).
+GPU panes take memory from `ctx.gpuBudget` (`request`/`release`/`plan`, `gl/budget.js`), the
+page-wide budget shared by all panes; they release their share in `destroy()`.
 
 ## 7. Events
 
@@ -317,6 +375,8 @@ Store events are synchronous. Topics used by the core:
 | `hash:sel-dropped` | `{ds, length}` | hash |
 | `caps:change` | `{cap, enabled, reason}` | `app.disableCap` |
 | `brush:commit` | `{pane, ds, shape, op, count}` | brushing panes, test hooks |
+| `narrative:highlight` | `{pane, ds, ids, beat, goto?}` | narrative pane (note 71): beat `beat` highlights source ids `ids` of `ds`; `pane` is the beat's target pane id (else the sticky pane type); an empty `ids` clears the highlight; `goto: true` asks the target to bring the rows into view (set when the beat has a non-sky view that is not suppressed). Scatter, manifold and sky panes listen |
+| `narrative:sync` | `{pane}` | a scatter, manifold or sky pane at mount: asks the narrative pane to re-emit its current `narrative:highlight`, so a pane that mounts after the beat still shows it |
 
 **Offer protocol.** Keyboard actions that a pane or widget may own are emitted with a payload
 that carries `handled: false`. The first listener that acts sets `payload.handled = true`; when
@@ -376,7 +436,10 @@ Missing values print as an en dash.
 - `loadscript.js`: `loadScript([cdn, mirror], {timeout, test})` tries each URL in order and
   rejects with `LoadScriptError` (`.attempts`); `loadCSS(href, {media})`.
 - `registry.js`: `load(type)` loads the pane CSS, imports the module and checks `mount`;
-  `register(type, mod)` injects modules for tests.
+  `register(type, mod)` injects modules for tests. `PANE_CSS` (note 69) loads
+  `[<pane>.css, controls.css]` for scatter and manifold and `[controls.css]` for hist (its rules
+  live in controls.css; there is no hist.css). Every listed file exists, so no stylesheet
+  request 404s; UI widget styles live in `css/panes/ui.css`, loaded by boot.
 - `keys.js`: shortcut table `KEYMAP`; shortcuts are ignored while typing in inputs (except
   Esc), and arrow keys are left to focused separators, sliders, list boxes, tab lists and grids.
   `k` (keep only) sets `filters:<ds>.ids` for up to 5000 selected rows.
@@ -395,5 +458,39 @@ With `?pktest=1`, `window.__pk` exists from the first line of boot:
 node --test tests/js/store.test.mjs tests/js/selection.test.mjs tests/js/hash.test.mjs tests/js/fmt.test.mjs
 ```
 
-The selection tests check the DEFLATE codec against `node:zlib` in both directions. The hash
-tests drive `bindHash` with a fake window and manual timers.
+The selection tests check the DEFLATE codec against `node:zlib` in both directions, the
+shorter-of form choice (note 92) and that `serialize` gives the same string before and after
+`Selection.parse` + replay. The hash tests drive `bindHash` with a fake window and manual
+timers, including the `ovl=-` / absent-`ovl` round trips (note 72) and a reload of each `sel`
+form through a real Selection. `store.test.mjs` also checks that every `PANE_CSS` file exists
+(note 69), the `options.title` seeding (note 77) and `importSelection` against the real
+`ui/export.js` (note 93). The full suite is `node --test tests/js/*.test.mjs`.
+
+## 14. Runtime contracts from IMPLEMENTATION_NOTES 68-93
+
+Where each JS-facing note lives (details in the module headers):
+
+| Note | Contract | Module |
+|---|---|---|
+| 68 | one `Budget` per page as `app.gpuBudget` / `ctx.gpuBudget`; panes never create one | `core/boot.js`, `gl/budget.js` |
+| 69 | pane CSS map; UI widget styles in `css/panes/ui.css` | `core/registry.js` (section 11) |
+| 70 | category `default_off` levels are applied by the filter owner once per page and dataset when no filter is set; chips only render the state | `data/hub.js`, `ui/chips.js` |
+| 71 | `narrative:highlight`, `narrative:sync` | section 7 |
+| 72 | `ovl=-` = no overlays, absent = layout default | `core/hash.js` (section 4) |
+| 73 | `client.record(ds, i, {channel})` aborts only the previous unfinished call on the same channel | `data/client.js` |
+| 74 | `client.order(key, dir)` -> `Int32Array` argsort computed in the worker; id sort is `key: 'id'`; list and gallery use it | `data/client.js` |
+| 75 | A_V / R_V / template / feature controls have one implementation (`modelControls(ctx, opts)` and the helpers it composes) | `ui/controls.js` |
+| 76 | `isCategory`, `levelColors` and GPU colour helpers are shared | `ui/legend.js` |
+| 77 | `options.title`, `ctx.setTitle`, `ctx.title` | `layout/layout.js` (section 5) |
+| 78 | raster layer options `x`, `y`, `cell` (bind a layer to an axis pair or grid cell); detail templates `photometry`, `compact` | `panes/scatter.js` (raster layers), `panes/detail.js` |
+| 79 | spectrum2d writes `spec.xr` when `link1d` is on (two-way x link with spectrum1d) | `panes/spectrum2d.js` |
+| 80 | lightbox providers may define `ready()`, `encode(pos)`, `decode(index)`; `lb=<set>,<k>` opens item k; a null set prefers the Gallery set | `ui/lightbox.js` |
+| 81 | images.json and pki1 `png` sidecar URLs resolve against the page URL with `{res}`/`{assets}` substituted; detail product links resolve against the records index URL | `data/hub.js`, `panes/detail.js` |
+| 82 | Aladin loads once per page; one viewer per sky pane | `panes/sky.js` |
+| 84 | gallery focus without a catalog is `{ds: <images ds>, i, id}` | `panes/gallery.js` |
+| 85 | landing search opens one worker per search manifest on the first keystroke | `panes/landing.js` |
+| 86 | scatter folds `dm` into linear-magnitude axes and passes `dm = 0` to overlays; the manifold reads `cfg.overlays` | `panes/scatter.js`, `panes/manifold.js` |
+| 90 | `mapLegacy(grammar, {hash, search, page})` | `core/boot.js`, `core/legacyhash.js` |
+| 91 | `<manifold>.frame=<preset>` accepts `axes` presets as well as `frame` presets | `panes/manifold.js` |
+| 92 | `sel=` form = shorter (in the URL) of the recipe form and `bits:`; brush recipes compete only above 200 000 rows | `core/selection.js` (section 3) |
+| 93 | `app.importCsv(text, {mode, ds, radiusArcsec})` | `core/boot.js` (section 1), `ui/export.js` |

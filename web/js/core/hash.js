@@ -4,7 +4,8 @@
 //
 // Canonical value formats (see docs/js.md, "Hash grammar"):
 //   id=<id>                       focus.id (focus.ds = primary dataset; boot resolves focus.i)
-//   sel=ids:..|bits:..|r:..       Selection.serialize() of the primary dataset
+//   sel=ids:..|bits:..|r:..       Selection.serialize() of the primary dataset (the form is
+//                                 chosen by the Selection alone; see selection.js)
 //   f=<b64url(JSON)>              filters:<primaryDs>  (raw JSON starting with '{' also accepted)
 //   <pane>.x=<expr>, <pane>.y=<expr>   axes:<pane>.x / .y
 //   <pane>.frame=<preset>|b64:<b64url(f32 LE F)>   frame:<pane>
@@ -14,6 +15,7 @@
 //   feat=<fam>,<fam>              features
 //   spec=<b64url(JSON)>           spec without xr;   wl=<w0>,<w1>  spec.xr
 //   sky=<ra>,<dec>,<fov>  base=<id>  ovl=<id>:<opacity>,<id>   sky
+//                                 (ovl=- explicitly no overlays; ovl absent = layout default)
 //   rung=, beat=, role=           strings
 //   fac=<b64url(JSON)>            facets
 //   lb=<set>,<index> | <index>    lightbox
@@ -24,7 +26,7 @@
 // for `c`) so a reload or Back keeps the cleared state instead of restoring the default.
 
 import {HASH_DEBOUNCE_MS, HASH_MAX_CHARS} from './constants.js';
-import {b64urlEncode, b64urlDecode, utf8Encode, utf8Decode} from './selection.js';
+import {b64urlEncode, b64urlDecode, utf8Encode, utf8Decode, encodeHashValue} from './selection.js';
 
 /** Stable key order for formatHash (section 6.2 table order). Pane-scoped keys sit after `f`. */
 export const HASH_ORDER = Object.freeze([
@@ -66,13 +68,11 @@ export function parseHash(h) {
   return out;
 }
 
-/** encodeURIComponent, keeping ',' ':' '/' '@' '!' '*' '(' ')' '~' readable. */
-export function encodeHashValue(v) {
-  return encodeURIComponent(String(v))
-    .replace(/%2C/gi, ',').replace(/%3A/gi, ':').replace(/%2F/gi, '/')
-    .replace(/%40/gi, '@').replace(/%21/g, '!').replace(/%2A/gi, '*')
-    .replace(/%28/g, '(').replace(/%29/g, ')');
-}
+/**
+ * encodeURIComponent, keeping ',' ':' '/' '@' '!' '*' '(' ')' '~' readable. Defined in
+ * selection.js (Selection.serialize measures `sel=` forms with it) and re-exported here.
+ */
+export {encodeHashValue};
 
 function orderOf(k) {
   const i = HASH_ORDER.indexOf(k);
@@ -120,8 +120,12 @@ export function decodeJSONParam(s) {
 /** Marker for "cleared relative to the page default" (see header). */
 export const CLEARED = '-';
 
-/** Keys that always carry a number (never cleared) or are not cleared through the marker. */
-const NO_CLEAR_KEYS = new Set(['sel', 'av', 'rv', 'dm']);
+/**
+ * Keys that always carry a number (never cleared) or are not cleared through the marker by
+ * bindHash. `ovl` writes its own marker: stateToHash gives `ovl=-` for an explicitly empty
+ * overlay list (IMPLEMENTATION_NOTES 72), and an absent overlay list means the layout default.
+ */
+const NO_CLEAR_KEYS = new Set(['sel', 'av', 'rv', 'dm', 'ovl']);
 
 /**
  * Number -> short decimal text. Magnitudes >= 1e-3 keep 1e-6 absolute precision (coordinates,
@@ -244,11 +248,14 @@ export function stateToHash(state, opts = {}) {
       out.sky = `${num(sky.ra)},${num(sky.dec)},${num(sky.fov)}`;
     }
     if (sky.base) out.base = String(sky.base);
-    if (Array.isArray(sky.overlays) && sky.overlays.length) {
-      out.ovl = sky.overlays.map((o) => {
-        if (typeof o === 'string') return o;
-        return Number.isFinite(o.opacity) ? `${o.id}:${num(o.opacity)}` : String(o.id);
-      }).join(',');
+    // overlays: absent/undefined = the layout default (no `ovl`); [] = explicitly none (`ovl=-`).
+    if (Array.isArray(sky.overlays)) {
+      const toks = sky.overlays.filter((o) => o !== null && o !== undefined && (typeof o === 'string' ? o : o.id !== undefined && o.id !== null && o.id !== ''))
+        .map((o) => {
+          if (typeof o === 'string') return o;
+          return Number.isFinite(o.opacity) ? `${o.id}:${num(o.opacity)}` : String(o.id);
+        });
+      out.ovl = toks.length ? toks.join(',') : CLEARED;
     }
   }
   for (const k of ['rung', 'beat', 'role']) {
@@ -675,6 +682,16 @@ export function bindHash(store, opts = {}) {
     }
     const fromDefaults = hashToPatch(absentDefaults, {primaryDs, state: Object.assign({}, snap, patch)}).patch;
     for (const k of Object.keys(fromDefaults)) if (!(k in patch)) patch[k] = fromDefaults[k];
+    // `ovl` absent (and no page default for it): the sky overlays return to the layout default,
+    // i.e. the store holds no `overlays` list at all.
+    if (filter('ovl') && !('ovl' in h) && !(defaultsHash && 'ovl' in defaultsHash)) {
+      const sky = 'sky' in patch ? patch.sky : snap.sky;
+      if (sky && typeof sky === 'object' && Object.prototype.hasOwnProperty.call(sky, 'overlays')) {
+        const next = Object.assign({}, sky);
+        delete next.overlays;
+        patch.sky = next;
+      }
+    }
     for (const hk of Object.keys(CLEAR_ON_ABSENT)) {
       const sk = CLEAR_ON_ABSENT[hk];
       if (!filter(hk) || hk in h || sk in patch || (defaultsHash && hk in defaultsHash)) continue;

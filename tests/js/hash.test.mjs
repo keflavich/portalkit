@@ -598,3 +598,127 @@ test('broadcast focus replaces the entry instead of pushing', () => {
   assert.equal(win.length, 1);
   assert.equal(win.log.at(-1)[0], 'replace');
 });
+
+// ---------------------------------------------------------------- ovl=- (IMPLEMENTATION_NOTES 72)
+
+test('ovl: [] writes the explicit-empty marker, absent overlays write nothing', () => {
+  const base = {ra: 10, dec: -5, fov: 1};
+  assert.equal(stateToHash({sky: Object.assign({}, base, {overlays: []})}).ovl, '-');
+  assert.equal('ovl' in stateToHash({sky: base}), false, 'undefined overlays = layout default');
+  assert.equal('ovl' in stateToHash({sky: null}), false);
+  assert.equal(stateToHash({sky: {overlays: [{id: 'msa'}, 'dith', {id: 'ψ', opacity: 0.25}]}}).ovl, 'msa,dith,ψ:0.25');
+  assert.equal(stateToHash({sky: {overlays: [null, {id: ''}, {opacity: 1}]}}).ovl, '-', 'unusable entries are dropped');
+  // parse side
+  assert.deepEqual(hashToPatch({ovl: '-'}, {state: {sky: {ra: 1, dec: 2}}}).patch.sky, {ra: 1, dec: 2, overlays: []});
+  assert.deepEqual(hashToPatch({ovl: 'a:0.5,b'}, {state: {}}).patch.sky.overlays, [{id: 'a', opacity: 0.5}, {id: 'b'}]);
+  assert.equal('sky' in hashToPatch({}, {state: {sky: {overlays: []}}}).patch, false);
+});
+
+test('ovl round-trips through formatHash / parseHash for [], one and several layers', () => {
+  for (const overlays of [[], [{id: 'msa'}], [{id: 'msa', opacity: 0.5}, {id: 'g_ü', opacity: 1}], ['plain']]) {
+    const text = formatHash(stateToHash({sky: {ra: 266.4, dec: -29, fov: 0.2, overlays}}));
+    const back = hashToPatch(parseHash('#' + text), {state: {sky: null}}).patch.sky;
+    const want = overlays.map((o) => (typeof o === 'string' ? {id: o} : o));
+    assert.deepEqual(back.overlays, want, text);
+    assert.deepEqual([back.ra, back.dec, back.fov], [266.4, -29, 0.2]);
+  }
+  assert.match(formatHash(stateToHash({sky: {overlays: []}})), /^ovl=-$/);
+});
+
+test('bindHash: ovl=- survives a reload; absent ovl restores the layout default on navigation', () => {
+  const win = fakeWindow('');
+  const store = makeStore();
+  bindHash(store, {primaryDs: 'src', defaults: DEF, win});
+  store.set({sky: {ra: 1, dec: 2, fov: 3, overlays: []}}, {source: 'sky'});
+  win.advance(HASH_DEBOUNCE_MS);
+  assert.equal(win.location.hash, '#sky=1,2,3&ovl=-');
+  // reload: a fresh store bound to the written hash
+  const store2 = makeStore();
+  bindHash(store2, {primaryDs: 'src', defaults: DEF, win: fakeWindow(win.location.hash)});
+  assert.deepEqual(store2.get('sky').overlays, [], 'explicitly empty, not the layout default');
+  // overlays chosen, then Back to the entry written without ovl
+  win.userNavigate('sky=1,2,3');
+  assert.equal(Object.prototype.hasOwnProperty.call(store.get('sky'), 'overlays'), false, 'layout default');
+  assert.equal(store.get('sky').ra, 1);
+  win.back();
+  assert.deepEqual(store.get('sky').overlays, []);
+  win.forward();
+  assert.equal(store.get('sky').overlays, undefined);
+});
+
+test('bindHash: a page default overlay list is omitted, cleared with ovl=-, restored when absent', () => {
+  const defs = Object.assign({}, DEF, {sky: {overlays: [{id: 'msa'}]}});
+  const win = fakeWindow('');
+  const store = makeStore({sky: {overlays: [{id: 'msa'}]}});
+  bindHash(store, {primaryDs: 'src', defaults: defs, win});
+  store.set({av: 1});
+  win.advance(HASH_DEBOUNCE_MS);
+  assert.equal(win.location.hash, '#av=1', 'default overlays are not written');
+  store.set({sky: {overlays: []}});
+  win.advance(HASH_DEBOUNCE_MS);
+  assert.equal(win.location.hash, '#av=1&ovl=-');
+  store.set({sky: {}});
+  win.advance(HASH_DEBOUNCE_MS);
+  assert.equal(win.location.hash, '#av=1', 'no list: not turned into an explicit empty list');
+  win.userNavigate('av=2');
+  assert.deepEqual(store.get('sky').overlays, [{id: 'msa'}], 'absent ovl restores the page default');
+  win.userNavigate('av=2&ovl=-');
+  assert.deepEqual(store.get('sky').overlays, []);
+});
+
+// ---------------------------------------------------------------- sel= form (IMPLEMENTATION_NOTES 92)
+
+test('bindHash + Selection: the sel= form written before a reload is written again after it', async () => {
+  const {Selection} = await import('../../web/js/core/selection.js');
+  const N = 5000;
+  const idOf = (i) => `S${i}`;
+  const rowOf = (id) => Number(String(id).slice(1));
+  // restore the way boot.applySelection does
+  const restore = (sel, str) => {
+    const p = Selection.parse(str);
+    if (!p) return;
+    if (p.kind === 'ids') sel.setIndices(p.ids.map(rowOf), 'replace', {op: 'replace', kind: 'ids', view: {ds: 'src'}, ids: p.ids});
+    else if (p.kind === 'bits') sel.apply(unpack(p.bytes, sel.n), 'replace');
+    else {
+      const tmp = new Selection(sel.n);
+      for (const op of p.ops) tmp.apply(hitOf(op, sel.n), op.op, undefined, op);
+      sel.replaceWith(tmp.mask, tmp.recipe(), tmp.recipeComplete);
+    }
+  };
+  const unpack = (bytes, n) => Uint8Array.from({length: n}, (_, i) => (bytes[i >> 3] >> (i & 7)) & 1);
+  const hitOf = (op, n) => {
+    const h = new Uint8Array(n);
+    if (op.kind === 'rect') for (let i = op.shape.x0; i < op.shape.x1; i++) h[i] = 1;
+    else for (const id of op.ids) h[rowOf(id)] = 1;
+    return h;
+  };
+  const scenarios = [
+    (s) => s.setIndices([3, 4000], 'replace', {op: 'replace', kind: 'ids', view: {ds: 'src'}, ids: ['S3', 'S4000']}),
+    (s) => s.apply(hitOf({kind: 'rect', shape: {x0: 100, x1: 2600}}, N), 'replace', undefined,
+      {op: 'replace', kind: 'rect', view: {ds: 'src', x: 'a', y: 'b'}, shape: {x0: 100, x1: 2600}}),
+    (s) => { s.setIndices([1, 2, 3], 'replace'); s.setIndices([2], 'subtract'); },
+    (s) => s.apply(Uint8Array.from({length: N}, (_, i) => (i * 7919) % 13 === 0 ? 1 : 0), 'replace'),
+  ];
+  for (const make of scenarios) {
+    const sel = new Selection(N);
+    make(sel);
+    const win = fakeWindow('');
+    const store = makeStore();
+    bindHash(store, {primaryDs: 'src', defaults: DEF, win,
+      selection: {serialize: () => sel.serialize(idOf), apply: (x) => restore(sel, x), count: () => sel.count}});
+    store.set({'sel:src': {version: sel.version, count: sel.count}}, {source: 'selection'});
+    win.advance(HASH_DEBOUNCE_MS);
+    const written = parseHash(win.location.hash).sel;
+    assert.ok(written, 'sel written');
+    const sel2 = new Selection(N);
+    const win2 = fakeWindow(win.location.hash);
+    const store2 = makeStore();
+    bindHash(store2, {primaryDs: 'src', defaults: DEF, win: win2,
+      selection: {serialize: () => sel2.serialize(idOf), apply: (x) => restore(sel2, x), count: () => sel2.count}});
+    assert.deepEqual(sel2.mask, sel.mask);
+    store2.set({'sel:src': {version: sel2.version, count: sel2.count}}, {source: 'selection'});
+    store2.set({av: 1});
+    win2.advance(HASH_DEBOUNCE_MS);
+    assert.equal(parseHash(win2.location.hash).sel, written, `form kept: ${written.slice(0, 12)}`);
+  }
+});

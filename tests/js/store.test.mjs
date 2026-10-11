@@ -209,3 +209,107 @@ test('large values and unicode keys', () => {
   s.set({big});
   assert.equal(got.length, 1, 'same typed-array identity is not a change');
 });
+
+// ---------------------------------------------------------------- core wiring (notes 69, 77, 93)
+
+test('registry: every pane stylesheet exists; plot panes load controls.css (note 69)', async () => {
+  const {existsSync} = await import('node:fs');
+  const {fileURLToPath} = await import('node:url');
+  const reg = await import('../../web/js/core/registry.js');
+  const base = new URL('../../web/js/core/registry.js', import.meta.url);
+  for (const type of reg.PANE_TYPES) {
+    assert.ok(Array.isArray(reg.PANE_CSS[type]) && reg.PANE_CSS[type].length, `${type} has css`);
+    for (const rel of reg.PANE_CSS[type]) {
+      assert.ok(existsSync(fileURLToPath(new URL(rel, base))), `${type}: ${rel} exists`);
+    }
+    assert.ok(existsSync(fileURLToPath(new URL(reg.PANE_MODULES[type], base))), `${type} module exists`);
+  }
+  for (const t of ['scatter', 'manifold']) {
+    assert.deepEqual(reg.PANE_CSS[t].map((p) => p.split('/').pop()), [`${t}.css`, 'controls.css']);
+  }
+  assert.deepEqual(reg.PANE_CSS.hist.map((p) => p.split('/').pop()), ['controls.css']);
+  assert.ok(existsSync(fileURLToPath(new URL('../../css/panes/ui.css', base))), 'UI widget css');
+});
+
+test('layout titles: options.title seeds the pane title (note 77)', async () => {
+  const {seedTitle, normalizeTree} = await import('../../web/js/layout/layout.js');
+  assert.equal(seedTitle({title: 'Colour–magnitude ★'}), 'Colour–magnitude ★');
+  assert.equal(seedTitle({title: '   '}), null);
+  assert.equal(seedTitle({title: 42}), '42');
+  for (const bad of [{title: NaN}, {title: null}, {title: {}}, {}, null, undefined]) assert.equal(seedTitle(bad), null);
+  const norm = normalizeTree({row: [
+    {pane: 'scatter', options: {title: 'CMD'}},
+    {pane: 'scatter'},
+    {col: [{pane: 'list', id: 'srcs', options: {title: ''}}]},
+  ]});
+  assert.deepEqual(norm.order, ['scatter', 'scatter-2', 'srcs']);
+  assert.equal(norm.panes.get('scatter').title, 'CMD');
+  assert.equal(norm.panes.get('scatter-2').title, null);
+  assert.equal(norm.panes.get('srcs').title, null);
+});
+
+test('matchIdList: one pass over the exported id list finds the first row of each id', async () => {
+  const {matchIdList, RESOLVE_BATCH_MIN} = await import('../../web/js/core/boot.js');
+  assert.ok(RESOLVE_BATCH_MIN >= 1);
+  const text = 'A\nB\n\nC D\nB\nÜ\n';   // DataClient.export format 'ids': one id per line, trailing \n
+  const m = matchIdList(text, new Set(['B', 'C D', 'Ü', 'zzz', 'A']));
+  assert.deepEqual(Object.fromEntries(m), {A: 0, B: 1, 'C D': 3, 'Ü': 5});
+  assert.equal(matchIdList(text, new Set()).size, 0);
+  assert.equal(matchIdList('', new Set(['A'])).size, 0);
+  assert.deepEqual(Object.fromEntries(matchIdList('x\ny', new Set(['y']))), {y: 1}, 'no trailing newline');
+  // 20000 ids, 300 wanted: rows match their index
+  const ids = Array.from({length: 20000}, (_, i) => `SYN-${String(i).padStart(7, '0')}`);
+  const want = new Set(Array.from({length: 300}, (_, k) => ids[k * 61]));
+  const big = matchIdList(ids.join('\n') + '\n', want);
+  assert.equal(big.size, 300);
+  for (const [id, i] of big) assert.equal(ids[i], id);
+});
+
+test('importSelection: counts, modes and matching through ui/export.js (note 93)', async () => {
+  const {importSelection, PREFETCH_IDS_MAX} = await import('../../web/js/core/boot.js');
+  const io = await import('../../web/js/ui/export.js');
+  const {Selection} = await import('../../web/js/core/selection.js');
+  assert.ok(PREFETCH_IDS_MAX >= 300);
+  const ids = ['A', 'B', 'Ünï', 'D', 'E'];
+  const alias = {'alias-d': 3};
+  const resolveIds = async (list) => list.map((x) => (ids.includes(x) ? ids.indexOf(x) : alias[x] ?? -1));
+  const ra = [10, 20, 30, 40, 50];
+  const client = {
+    n: ids.length, manifest: {pos: {enc: 'f64'}},
+    crossmatch: async (r, d) => Int32Array.from(r, (x) => ra.indexOf(Math.round(x))),
+  };
+  const sel = new Selection(ids.length);
+  let out = await importSelection('id,ra,dec\nA,,\nalias-d,,\nnope,30.0000001,0\nzzz,,\n', {sel, client, io, resolveIds});
+  assert.equal(out.format, 'csv');
+  assert.equal(out.mode, 'replace');
+  assert.equal(out.entries, 4);
+  assert.equal(out.matched, 3);
+  assert.equal(out.byId, 2);
+  assert.equal(out.byPosition, 1);
+  assert.equal(out.missing, 1);
+  assert.deepEqual(out.missingLabels, ['zzz']);
+  assert.equal(out.rows, 3);
+  assert.equal(out.count, 3);
+  assert.deepEqual(Array.from(sel.indices()), [0, 2, 3]);
+  assert.match(out.summary, /Matched 3/);
+  out = await importSelection('Ünï\nE', {sel, client, io, resolveIds, mode: 'subtract'});
+  assert.equal(out.count, 2);
+  assert.deepEqual(Array.from(sel.indices()), [0, 3]);
+  out = await importSelection('E', {sel, client, io, resolveIds, mode: 'add'});
+  assert.deepEqual(Array.from(sel.indices()), [0, 3, 4]);
+  out = await importSelection('A\nB', {sel, client, io, resolveIds, mode: 'intersect'});
+  assert.deepEqual(Array.from(sel.indices()), [0]);
+  // nothing recognised: selection untouched
+  const v = sel.version;
+  out = await importSelection('   \n# only a comment\n', {sel, client, io, resolveIds});
+  assert.equal(out.format, 'empty');
+  assert.equal(out.entries, 0);
+  assert.equal(out.count, 1);
+  assert.equal(sel.version, v);
+  // no positions in the manifest: coordinates are not crossmatched
+  const noPos = Object.assign({}, client, {manifest: {}});
+  out = await importSelection('10.0 0.0', {sel, client: noPos, io, resolveIds});
+  assert.equal(out.matched, 0);
+  assert.equal(out.count, 0, 'replace with no match empties the selection');
+  await assert.rejects(importSelection('A', {sel, client, io, resolveIds, mode: 'xor'}), TypeError);
+});
