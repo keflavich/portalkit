@@ -897,5 +897,38 @@
    "docs/js.md"
   ],
   "description": "Implement IMPLEMENTATION_NOTES 112. Measured on the 1M synthetic explorer (WPB3 probe): the list pane reports data-state=ready when mount() resolves, before rows/r0000 is fetched, so app.afterFirstPaint() resolves with only app JS + manifest loaded (973 kB) and the deferred reads (cls c000+c001, good, f115w c000+c001 = 2.1 MB from pickHoverColumns/class colouring; pos dra+ddec 2.9 MB) race the first screen. Fix: (1) layout awaits handle.firstPaint before 'ready' (guarded); list/table/gallery/scatter/manifold/hist expose it; (2) list hover columns and class colours read from the rows it holds (row records carry exact values; quantized fallback rows carry them too), full-column values() only on sort/filter/colour-by or idle after a quiet period; (3) testhooks __pk.firstPaintAt(); DevServer RequestRecord.t; test_perf_budget counts bytes finished before firstPaintAt and also reports bytes to quiet settle; wait_panes_settled unchanged in meaning (now correct because panes hold loading). Prove with a 1M and 50k probe: report bytes before first paint, first-paint time, and the order of requests (r0000 must finish before any deferred column/pos read starts)."
+ },
+ {
+  "id": "WPD2",
+  "title": "Wave D: narrative beat hash determinism",
+  "depends_on": [],
+  "files": [
+   "web/js/panes/narrative.js",
+   "web/js/panes/sky.js",
+   "web/js/core/hash.js",
+   "tests/e2e/test_deep_links.py",
+   "tests/js/hash.test.mjs",
+   "tests/js/plotpanes.test.mjs"
+  ],
+  "description": "G2 run at 656f853: tests/e2e/test_deep_links.py::test_legacy_beat fails 2 of 3 runs. Load narrative.html#beat=b3&x=1 -> canonical hash '#beat=b3' (stable 600 ms) -> reload -> '#sky=266.4368,-29.0078,0.14&ovl=fields,marks&beat=b3'. The narrative applies a beat by store.set({beat, sky:{...overlays, ra/dec/fov}}) (narrative.js ~180-203) and the sky pane writes the settled Aladin view back (sky.js writeView, SETTLE_MS) once Aladin is ready, so whether sky=/ovl= reach the hash depends on timing. Make it deterministic with this rule (port table msata: 'suppressView keeps user zoom; #beat= hash'): a view and overlay set that a beat applied is implied by beat= and is not written to the hash; once the user pans/zooms or toggles an overlay after the beat, sky=/ovl= are written; loading '#sky=..&beat=b3' keeps the hash's sky view over the beat's view. Aladin's rounding/aspect adjustment of a programmatic goto must not count as a user change. Prove with 10 consecutive passes of test_legacy_beat and the whole test_deep_links.py plus the narrative tests in tests/e2e (PK_SYNTH_DIR=<scratch>/WPD2/synth), plus unit tests for the rule."
+ },
+ {
+  "id": "WPD3",
+  "title": "Wave D: 50k first-paint gap",
+  "depends_on": [],
+  "files": [
+   "web/js/panes/scatter.js",
+   "web/js/panes/manifold.js",
+   "web/js/panes/hist.js",
+   "web/js/panes/list.js",
+   "web/js/layout/layout.js",
+   "web/js/core/boot.js",
+   "web/js/plot/canvas2d.js",
+   "web/js/gl/xyrenderer.js",
+   "web/js/gl/budget.js",
+   "tests/js/listpanes.test.mjs",
+   "tests/js/layout.test.mjs"
+  ],
+  "description": "Level 3 at 656f853 (host load ~120 on a 2-CPU cgroup, SwiftShader): explorer@50000 first_paint_s 3.49-4.31 s vs the 3.0 s budget; WPD1's request order shows rows/r0000 finished ~3.27 s BEFORE firstPaintAt, so ~3 s is spent after the data is in. Trace where (Playwright tracing/CDP Performance and the panes' firstPaint latch timings): which pane's latch resolves last, and what that pane waits on (WebGL program/first raster on SwiftShader, density grid colourise, idle callback FIRST_PAINT_IDLE_TIMEOUT_MS, layout guard, scatter waiting for full x/y columns instead of the head chunk/density grid). Fix what is ours: e.g. scatter first paint from the pre-binned grid or the LOD head chunk then progressive full draw; resolve afterFirstPaint without an idle wait longer than needed; avoid main-thread blocking work before first paint. Keep note 112 semantics (latch = first data-backed paint). Report before/after first_paint_s for 50k and 1M over >=3 interleaved runs each (python -m pytest tests/perf -m perf -q -k 'not 5000000', PK_SYNTH_DIR=<scratch>/WPD3/synth) and the trace breakdown. Do not change budgets."
  }
 ]
