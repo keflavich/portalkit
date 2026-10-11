@@ -292,3 +292,5 @@ starting.
     for sort, filter or colour-by, or at idle after a quiet period. `__pk.firstPaintAt()` returns a Promise of the
     epoch-ms time `afterFirstPaint` resolved; DevServer `RequestRecord.t` is the epoch-ms time the response finished.
     The Level 3 byte budget counts responses finished before `firstPaintAt`; bytes up to the quiet settle are reported.
+    A pane hidden (folded, inactive tab) while its first paint is pending has `data-state="paused"` and does not
+    hold `afterFirstPaint`; it returns to `loading` when shown, and the state is left alone once the latch settles.
