@@ -9,11 +9,20 @@
 //   - above `maxLabels` features in view no names are drawn at all (LABEL_MAX = 34);
 //   - `requires_coverage` features are drawn dashed where the spectrum has no data.
 
+import {featureToggles as featureTogglesUI} from '../ui/controls.js';
+
 export const C_KMS = 299792.458;
 export const LABEL_MAX = 34;
 export const ROW_GAP = 13;
 
 const FALLBACK_COLORS = ['#58a6ff', '#e5534b', '#57ab5a', '#c69026', '#b083f0', '#39c5cf', '#ec775c', '#768390', '#d4a72c', '#6cb6ff'];
+
+/** Display colour of family `fam` (familiesOf entry) at position `i`: its own colour or a fallback. */
+export function familyColor(fam, i = 0) {
+  if (fam && typeof fam.color === 'string' && fam.color) return fam.color;
+  const k = Number.isInteger(i) && i >= 0 ? i : 0;
+  return FALLBACK_COLORS[k % FALLBACK_COLORS.length];
+}
 
 /** 1 + v/c for a velocity in km/s (non-finite or <= -c -> 1). */
 export function dopplerFactor(vel) {
@@ -306,57 +315,9 @@ export function drawFeatures(ctx, view, layout, opts = {}) {
 /**
  * Family toggle chips writing store key `features`. `getDoc()` returns the current
  * pk-features/1 document (or null while loading). Returns {el, update(), destroy()}.
+ * The widget is implemented once in ui/controls.js (IMPLEMENTATION_NOTES 75); this keeps the
+ * (store, getDoc, opts) signature used by the sed and spectrum panes.
  */
 export function featureToggles(store, getDoc, opts = {}) {
-  const el = document.createElement('div');
-  el.className = 'pk-feat-toggles';
-  el.setAttribute('role', 'group');
-  el.setAttribute('aria-label', opts.label || 'Spectral features');
-  const source = opts.source || 'features';
-  let builtKey = null;
-  // chips are rebuilt only when the family list changes; a `features` change just flips
-  // aria-pressed in place so a keyboard-toggled chip keeps focus
-  const update = () => {
-    const doc = getDoc();
-    const fams = familiesOf(doc);
-    const on = new Set(store.get('features') || []);
-    const key = JSON.stringify(fams.map((f) => [f.key, f.label, f.count, f.color || '', f.source || '']));
-    if (key === builtKey) {
-      for (const b of el.querySelectorAll('.pk-feat-chip')) b.setAttribute('aria-pressed', on.has(b.dataset.family) ? 'true' : 'false');
-      return;
-    }
-    builtKey = key;
-    el.textContent = '';
-    el.hidden = !fams.length;
-    fams.forEach((fam, i) => {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'pk-btn pk-feat-chip';
-      b.textContent = fam.label;
-      b.title = `${fam.label}: ${fam.count} features${fam.source ? ` (${fam.source})` : ''}`;
-      b.dataset.family = fam.key;
-      b.setAttribute('aria-pressed', on.has(fam.key) ? 'true' : 'false');
-      b.style.setProperty('--pk-feat-color', fam.color || FALLBACK_COLORS[i % FALLBACK_COLORS.length]);
-      b.addEventListener('click', () => {
-        const cur = new Set(store.get('features') || []);
-        if (cur.has(fam.key)) cur.delete(fam.key);
-        else cur.add(fam.key);
-        // keep the document's family order so hashes are stable
-        const next = familiesOf(getDoc()).map((f) => f.key).filter((k) => cur.has(k));
-        for (const k of cur) if (!next.includes(k)) next.push(k);
-        store.set({features: next}, {source});
-      });
-      el.append(b);
-    });
-  };
-  const off = store.on(['features'], update);
-  update();
-  return {
-    el,
-    update,
-    destroy() {
-      if (typeof off === 'function') off();
-      el.remove();
-    },
-  };
+  return featureTogglesUI({...opts, store, getDoc, source: opts.source || 'features'});
 }

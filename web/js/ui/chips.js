@@ -6,8 +6,9 @@
 // Rows (each shown only when the catalog has something for it):
 //   category  one chip per level of every category column with <= MAX_LEVELS levels (except
 //             `exclude`, normally the legend's colour-by key) with counts; a click toggles the
-//             level in filters:<ds>.cats[key]; alt-click shows only that level. The levels in
-//             a column's `default_off` start hidden when the page opens with no filters.
+//             level in filters:<ds>.cats[key]; alt-click shows only that level. A column's
+//             `default_off` levels are applied by the filter owner (data/hub.js, when the
+//             catalog opens; IMPLEMENTATION_NOTES 70); the chips only render the filter state.
 //   flag      tri-state chip per flag column: any -> 1 -> 0 -> any (filters:<ds>.flags[key])
 //   S/N       "S/N ≥ k" chip cycling off -> 3 -> 5 -> 10 -> off, scoped to the active projection
 //             (filters:<ds>.snr = {min, scope: 'projection'}; hub.js derives the bands)
@@ -94,23 +95,6 @@ export function nextSnr(cur) {
   return SNR_STEPS[(i + 1) % SNR_STEPS.length];
 }
 
-/** Apply manifest `default_off` levels once per page and dataset, only when no filter is set. */
-export function applyDefaultOff(app, store, client, ds, source) {
-  if (!app) return false;
-  app._pkDefaultOff = app._pkDefaultOff || new Set();
-  if (app._pkDefaultOff.has(ds)) return false;
-  app._pkDefaultOff.add(ds);
-  const f = store.get(`filters:${ds}`) || {};
-  if (Object.keys(f).length) return false;
-  const cats = {};
-  for (const c of client.manifest.cols || []) {
-    if (isCategory(c) && Array.isArray(c.default_off) && c.default_off.length) cats[c.key] = c.default_off.slice();
-  }
-  if (!Object.keys(cats).length) return false;
-  store.set({[`filters:${ds}`]: {...f, cats}}, {source});
-  return true;
-}
-
 /**
  * Mount the chip rows into `host`. opts: {app, store, client, ds, pane, exclude?: () => key,
  * show?: {cats, flags, snr, presets, saved}}. Returns {el, refresh(), destroy()}.
@@ -124,8 +108,6 @@ export function createChips(host, opts) {
   const catCounts = new Map();   // key -> Uint32Array
   const skey = storageKey(app, ds);
   let saving = false;
-
-  applyDefaultOff(app, store, client, ds, pane);
 
   const filters = () => store.get(`filters:${ds}`) || {};
   const setFilters = (f) => store.set({[`filters:${ds}`]: f}, {source: pane});

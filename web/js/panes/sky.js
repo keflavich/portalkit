@@ -10,9 +10,13 @@
 // layers), reads `focus`/`hover` (rings, pan to a focused source that is out of view), writes
 // `focus`/`hover` from marker clicks, reacts to `vis:<ds>`, `sel:<ds>`, `color`, `tier:<pane>`
 // and `theme`.
-// Events: emits `brush:commit` (through sky/skybrush.js) and `narrative:sync` {pane} at mount;
-// listens to `narrative:highlight` {pane, ds, ids, beat} and draws circles around those rows.
-// The Aladin viewer is created once per pane (sky/aladin.js) and survives remounts. When
+// Events (IMPLEMENTATION_NOTES 71): emits `brush:commit` (through sky/skybrush.js) and
+// `narrative:sync` {pane} once the viewer is ready; listens to `narrative:highlight`
+// {pane, ds, ids, beat, goto?} addressed to this pane id, to 'sky' or to no pane, and draws
+// circles around those rows (centring on them with `goto`). A highlight received while Aladin is
+// still loading is kept and drawn when the viewer is ready.
+// The Aladin library loads once per page and each sky pane owns one viewer (sky/aladin.js,
+// IMPLEMENTATION_NOTES 82); the viewer survives remounts. When
 // Aladin cannot be loaded from the CDN or the mirror, the pane shows an error note and the rest
 // of the page keeps working.
 
@@ -193,9 +197,11 @@ export function mount(el, ctx) {
   };
 
   const drawHighlight = async (p) => {
-    if (!S.highlight) return;
     const tok = ++S.hlTok;
     S.hl = p && Array.isArray(p.ids) && p.ids.length ? p : null;
+    // a highlight that arrives while the viewer is still loading is kept in S.hl and drawn at
+    // the end of setup()
+    if (!S.highlight || !S.h || S.h.state !== 'ready') return;
     if (!S.hl) {
       S.highlight.clear();
       S.hlCount = 0;
@@ -214,9 +220,13 @@ export function mount(el, ctx) {
       const ra = pts.reduce((a, q) => a + q.ra, 0) / pts.length;
       const dec = pts.reduce((a, q) => a + q.dec, 0) / pts.length;
       S.h.goto({ra, dec});
+      // goto applies once: later redraws (zoom settle, theme, ready) keep the user's view
+      if (S.hl === p) S.hl = Object.assign({}, p, {goto: false});
     }
   };
   S.hlTok = 0;
+  S.hlHeld = null;           // last narrative payload accepted by this pane
+  S.hlGotoBeat = undefined;  // beat whose goto this pane has received
 
   // ------------------------------------------------------------- build
 
@@ -331,15 +341,21 @@ export function mount(el, ctx) {
     offs.push(hd.on('resizeChanged', () => { if (S.markers) S.markers.viewChanged(); }));
     const v = hd.view();
     if ([v.ra, v.dec, v.fov].every(Number.isFinite)) coord.textContent = `${fmtRA(v.ra)} ${fmtDec(v.dec)} · ${fmtAngle(v.fov)}`;
+    if (S.hl) drawHighlight(S.hl).catch(highlightErr);
     store.emit('narrative:sync', {pane: id, type: 'sky'});
   };
+
+  function highlightErr(err) {
+    if (err && err.name === 'AbortError') return;
+    console.warn(`sky ${id}: narrative highlight failed`, err);
+  }
 
   let ringTimer = null;
   const drawRingsSoon = () => {
     clearTimeout(ringTimer);
     ringTimer = setTimeout(() => {
       drawRings();
-      if (S.hl) drawHighlight(S.hl);
+      if (S.hl) drawHighlight(S.hl).catch(highlightErr);
     }, SETTLE_MS);
   };
 
@@ -374,13 +390,28 @@ export function mount(el, ctx) {
     if (S.markers) S.markers.restyle();
     if (S.vector) S.vector.retheme();
     drawRings();
-    if (S.hl) drawHighlight(S.hl);
+    if (S.hl) drawHighlight(S.hl).catch(highlightErr);
   }));
   offs.push(store.onEvent('narrative:highlight', (p) => {
-    if (!p) return;
-    if (p.pane && p.pane !== id && p.pane !== 'sky') return;
-    if (p.ds && ctx.dataset && p.ds !== ctx.dataset && !(app.page.datasets || {})[p.ds]) return;
-    drawHighlight(p);
+    if (!p || typeof p !== 'object') return;
+    if (p.beat !== S.hlGotoBeat) S.hlGotoBeat = undefined;
+    const elsewhere = (p.pane && p.pane !== id && p.pane !== 'sky') ||
+      (p.ds && ctx.dataset && p.ds !== ctx.dataset && !(app.page.datasets || {})[p.ds]);
+    if (elsewhere) {
+      // the next beat targets another pane: its rings replace this pane's
+      if (S.hlHeld && p.beat !== S.hlHeld.beat) {
+        S.hlHeld = null;
+        if (S.hl) drawHighlight(null).catch(highlightErr);
+      }
+      return;
+    }
+    S.hlHeld = p;
+    if (p.goto) {
+      // a replay of the same beat (narrative:sync answer) does not move the view again
+      if (p.beat != null && p.beat === S.hlGotoBeat) p = Object.assign({}, p, {goto: false});
+      else S.hlGotoBeat = p.beat;
+    }
+    drawHighlight(p).catch(highlightErr);
   }));
 
   const ready = setup().catch((err) => {

@@ -61,6 +61,10 @@
 .pk-ctl-expr { width: 10em; min-width: 6em; }
 .pk-ctl-chips, .pk-features, .pk-ctl-features { display: inline-flex; flex-wrap: wrap; gap: 2px; min-width: 0; max-width: 100%; }
 .pk-ctl-chips .pk-chip[aria-pressed="false"], .pk-features .pk-chip[aria-pressed="false"] { opacity: .65; }
+/* feature family chips (ui/controls.js featureToggles; same rules in sed.css / spectrum.css) */
+.pk-feat-toggles[hidden], .pk-ctl-template[hidden] { display: none; }
+.pk-feat-chip { border-left: 3px solid var(--pk-feat-color, var(--pk-accent)); }
+.pk-feat-chip[aria-pressed="false"] { opacity: .7; }
 .pk-color-by { max-width: 12em; }
 .pk-cmap { display: inline-flex; align-items: center; gap: var(--pk-sp-1); }
 .pk-cmap-swatch {

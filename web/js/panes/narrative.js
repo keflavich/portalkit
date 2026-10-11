@@ -150,6 +150,11 @@ export function mount(el, ctx) {
     const tgt = targetPane(S.beats[S.current] && S.beats[S.current].view);
     const p = Object.assign({pane: tgt ? tgt.id : S.stickyType, ds: (hl && hl.ds) || null,
       ids: (hl && Array.isArray(hl.ids) ? hl.ids.map(String) : []), beat: beatId}, extra);
+    const prev = S.hl;
+    // the highlight moves to another pane: clear the rings left on the previous target
+    if (prev && prev.ids.length && prev.pane !== p.pane) {
+      store.emit('narrative:highlight', Object.assign({}, prev, {ids: [], goto: false}));
+    }
     S.hl = p;
     store.emit('narrative:highlight', p);
   };

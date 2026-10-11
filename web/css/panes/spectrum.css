@@ -57,11 +57,14 @@
   padding: var(--pk-sp-1) 0;
 }
 
-/* feature family chips (spec/features.js featureToggles) */
+/* feature family chips (ui/controls.js featureToggles) */
 .pk-feat-chip { border-left: 3px solid var(--pk-feat-color, var(--pk-accent)); }
 .pk-feat-chip[aria-pressed="false"] { opacity: .7; }
 
-/* model controls (panes/sed.js modelControls; same rules in sed.css) */
+/* model controls (ui/controls.js modelControls; same rules in sed.css). The widget groups
+   inside .pk-models flow as one wrapped row. */
+.pk-models .pk-ctl-group { display: contents; }
+.pk-models .pk-models-bands input, .pk-models .pk-template-scale { width: 6em; }
 .pk-models { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--pk-sp-1) var(--pk-sp-2); min-width: 0; max-width: 100%; }
 .pk-models label { display: inline-flex; align-items: center; gap: var(--pk-sp-1); white-space: nowrap; color: var(--pk-fg-2); }
 .pk-models input[type="range"] { width: 8em; min-width: 5em; }

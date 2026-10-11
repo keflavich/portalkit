@@ -2,8 +2,9 @@
 // source's photometry on log-log axes in F_nu or nu F_nu, upper/lower limits drawn as arrows,
 // error bars, models (reddened stellar template scaled to the photometry, a blackbody fit or
 // guide curve, `sedcurve:<ds>` model curves) and a fullscreen dialog with a nearest-point
-// tooltip. Also exports the model controls (A_V slider, R_V, template, grid, normalization
-// bands) that panes/spectrum1d.js reuses, and the pure helpers tested in tests/js/sed.test.mjs.
+// tooltip. The model controls (A_V slider, R_V, template, grid, normalization bands) come from
+// ui/controls.js and are shared with panes/spectrum1d.js; this module also exports the pure
+// helpers tested in tests/js/sed.test.mjs.
 //
 // Legacy references: Brick2221_F1500W_SEDPortal.py lines 881-1079 (log-log, error bars,
 // template median ratio at the data points); best_impl.json live_sed_viewer.
@@ -17,6 +18,7 @@ import {
 import {kCurve} from '../data/extinction.js';
 import {TemplateSet, scaleTo} from '../data/templates.js';
 import {featureList, layoutFeatures, drawFeatures, featureToggles, featureAt} from '../spec/features.js';
+import {modelControls} from '../ui/controls.js';
 
 export const meta = {
   type: 'sed',
@@ -423,179 +425,9 @@ function fmtNum(v, digits = 3) {
   return Number(v.toPrecision(digits)).toString();
 }
 
-/**
- * Model controls bound to the store keys av, rv and template: an A_V slider (rAF-throttled)
- * with a number box, R_V select (3.1 / 5.5), and when `templates` (Promise<TemplateSet|null>)
- * is given a template select, grid select, normalization bands and scale. Returns
- * {el, update(), destroy()}.
- */
-export function modelControls(ctx, opts = {}) {
-  const store = ctx.store;
-  const source = opts.source || ctx.id;
-  const root = el('div', 'pk-models', {role: 'group', 'aria-label': 'Extinction and model template'});
-  const avLab = el('label', 'pk-models-av');
-  avLab.innerHTML = '<span>A<sub>V</sub></span>';
-  const avRange = el('input', null, {type: 'range', min: '0', max: String(opts.avMax ?? 60), step: '0.1', 'aria-label': 'A_V (mag)'});
-  const avNum = el('input', 'pk-models-num', {type: 'number', min: '0', step: '0.1', inputmode: 'decimal', 'aria-label': 'A_V value'});
-  avLab.append(avRange, avNum);
-  const rvLab = el('label', 'pk-models-rv');
-  rvLab.innerHTML = '<span>R<sub>V</sub></span>';
-  const rvSel = el('select', null, {'aria-label': 'R_V'});
-  rvLab.append(rvSel);
-  root.append(avLab, rvLab);
-
-  let pendingAv = null;
-  const flushAv = () => {
-    if (pendingAv === null) return;
-    const v = pendingAv;
-    pendingAv = null;
-    store.set({av: v}, {source});
-  };
-  const setAv = (v) => {
-    if (!Number.isFinite(v) || v < 0) return;
-    const r = Math.round(v * 1000) / 1000;
-    const schedule = pendingAv === null;
-    pendingAv = r;
-    if (schedule) raf(flushAv);
-  };
-  avRange.addEventListener('input', () => { avNum.value = avRange.value; setAv(Number(avRange.value)); });
-  avNum.addEventListener('change', () => setAv(Number(avNum.value)));
-  rvSel.addEventListener('change', () => store.set({rv: Number(rvSel.value)}, {source}));
-
-  let tplSet = null;
-  let tplSel = null, gridSel = null, bandsIn = null, scaleIn = null;
-  if (opts.templates) {
-    const tLab = el('label', 'pk-models-tpl');
-    tLab.innerHTML = '<span>Template</span>';
-    tplSel = el('select', null, {'aria-label': 'Model template'});
-    tLab.append(tplSel);
-    const gLab = el('label', 'pk-models-grid');
-    gLab.innerHTML = '<span>Grid</span>';
-    gridSel = el('select', null, {'aria-label': 'Template wavelength grid'});
-    gLab.append(gridSel);
-    const bLab = el('label', 'pk-models-bands');
-    bLab.innerHTML = '<span>Norm</span>';
-    bandsIn = el('input', null, {type: 'text', placeholder: opts.bandsPlaceholder || 'auto', size: '10',
-      'aria-label': 'Normalization bands (comma separated filters or band labels; empty = automatic)'});
-    bLab.append(bandsIn);
-    const sLab = el('label', 'pk-models-scale');
-    sLab.innerHTML = '<span>Scale</span>';
-    scaleIn = el('input', null, {type: 'text', placeholder: 'auto', size: '6', 'aria-label': 'Template scale (auto or a positive number)'});
-    sLab.append(scaleIn);
-    root.append(tLab, gLab, bLab, sLab);
-    const cur = () => store.get('template') || null;
-    const write = (patch) => {
-      const t = cur();
-      if (!t || !t.key) return;
-      const next = {key: t.key};
-      const merged = {...t, ...patch};
-      if (merged.grid) next.grid = merged.grid;
-      next.scale = merged.scale === undefined ? 'auto' : merged.scale;
-      if (Array.isArray(merged.bands) && merged.bands.length) next.bands = merged.bands;
-      store.set({template: next}, {source});
-    };
-    tplSel.addEventListener('change', () => {
-      const key = tplSel.value;
-      if (!key) { store.set({template: null}, {source}); return; }
-      const t = cur() || {};
-      const next = {key, scale: t.scale ?? 'auto'};
-      if (gridSel.value) next.grid = gridSel.value;
-      if (Array.isArray(t.bands) && t.bands.length) next.bands = t.bands;
-      store.set({template: next}, {source});
-    });
-    gridSel.addEventListener('change', () => write({grid: gridSel.value || undefined}));
-    bandsIn.addEventListener('change', () => {
-      const list = bandsIn.value.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
-      write({bands: list.length ? list : undefined});
-    });
-    scaleIn.addEventListener('change', () => {
-      const s = scaleIn.value.trim();
-      const v = Number(s);
-      if (!s || s.toLowerCase() === 'auto') write({scale: 'auto'});
-      else if (Number.isFinite(v) && v > 0) write({scale: v});
-      else scaleIn.value = typeof (cur() || {}).scale === 'number' ? String(cur().scale) : '';
-    });
-    Promise.resolve(opts.templates).then((ts) => {
-      tplSet = ts;
-      update();
-    }, (err) => {
-      root.querySelectorAll('.pk-models-tpl, .pk-models-grid, .pk-models-bands, .pk-models-scale').forEach((n) => { n.hidden = true; });
-      console.warn('templates unavailable', err);
-    });
-  }
-
-  function update() {
-    const av = Number(store.get('av')) || 0;
-    if (pendingAv === null) {
-      if (av > Number(avRange.max)) avRange.max = String(Math.ceil(av * 1.5));
-      avRange.value = String(av);
-      if (document.activeElement !== avNum) avNum.value = String(av);
-    }
-    const rv = Number(store.get('rv')) || 3.1;
-    const rvs = [3.1, 5.5];
-    if (!rvs.includes(rv)) rvs.push(rv);
-    rvSel.textContent = '';
-    for (const r of rvs.sort((a, b) => a - b)) {
-      const o = el('option');
-      o.value = String(r);
-      o.textContent = String(r);
-      rvSel.append(o);
-    }
-    rvSel.value = String(rv);
-    if (!tplSel) return;
-    const t = store.get('template') || null;
-    const list = tplSet ? tplSet.list() : [];
-    const grids = tplSet ? tplSet.gridNames() : [];
-    tplSel.textContent = '';
-    const none = el('option');
-    none.value = '';
-    none.textContent = tplSet ? 'none' : 'loading…';
-    tplSel.append(none);
-    for (const e of list) {
-      const o = el('option');
-      o.value = e.key;
-      o.textContent = e.label || e.key;
-      tplSel.append(o);
-    }
-    if (t && t.key && !list.some((e) => e.key === t.key)) {
-      const o = el('option');
-      o.value = t.key;
-      o.textContent = t.key;
-      tplSel.append(o);
-    }
-    tplSel.value = t && t.key ? t.key : '';
-    gridSel.textContent = '';
-    const auto = el('option');
-    auto.value = '';
-    auto.textContent = 'auto';
-    gridSel.append(auto);
-    for (const g of grids) {
-      const o = el('option');
-      o.value = g;
-      o.textContent = g;
-      gridSel.append(o);
-    }
-    gridSel.value = t && t.grid && grids.includes(t.grid) ? t.grid : '';
-    gridSel.disabled = !t;
-    bandsIn.disabled = !t;
-    scaleIn.disabled = !t;
-    if (document.activeElement !== bandsIn) bandsIn.value = t && Array.isArray(t.bands) ? t.bands.join(',') : '';
-    if (document.activeElement !== scaleIn) scaleIn.value = t && typeof t.scale === 'number' ? String(t.scale) : '';
-  }
-  const off = store.on(['av', 'rv', 'template'], (changed, s, sources) => {
-    if (sources && sources.size === 1 && sources.has(source) && changed && changed.has && changed.has('av') && changed.size === 1) return;
-    update();
-  });
-  update();
-  return {
-    el: root,
-    update,
-    destroy() {
-      off();
-      root.remove();
-    },
-  };
-}
+// modelControls (A_V, R_V, template picker) lives in ui/controls.js (IMPLEMENTATION_NOTES 75);
+// it is re-exported here for callers that import it from this module.
+export {modelControls};
 
 // ------------------------------------------------------------------ drawing
 
@@ -930,14 +762,17 @@ export function mount(host, ctx) {
       recompute();
       return;
     }
-    // Staleness uses this pane's own seq: DataClient's record token counter is shared by every
-    // pane on the same catalog client, so a tokened call here could null another pane's fetch.
+    // Record channel (IMPLEMENTATION_NOTES 73): a newer focus aborts this pane's previous
+    // fetch only; the superseded call resolves to null (or rejects with AbortError) and the
+    // pane's own seq drops it (a new focus bumps seq before it aborts the channel). A null row
+    // with a current seq is a row the catalog lacks and shows "No photometry". The channel name
+    // carries the pane id so two SED panes on one catalog do not cancel each other.
     let row;
     try {
-      row = await client.record(i);
+      row = await client.record(i, {channel: `sed:${ctx.id}`});
     } catch (err) {
       if (my !== seq || destroyed) return; // a superseded focus never reports
-      if (err && err.name === 'AbortError') throw err;
+      if (err && err.name === 'AbortError') return;
       console.warn(`catalog row ${i} unavailable`, err);
       Object.assign(st, {i, id: focus.id ?? null, row: null, points: [], sedcurveRaw: [],
         message: `Photometry for ${focus.id ?? i} unavailable`});

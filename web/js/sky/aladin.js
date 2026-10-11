@@ -9,10 +9,11 @@
 // - aladinFor(owner, opts): one Aladin instance per owning pane, created on first use and kept
 //   for the life of the page (a remount, pop-out or tab switch re-attaches the same host div
 //   instead of creating a new viewer). Commands issued before the viewer is ready are queued
-//   with handle.run(fn) and replayed in order. Deviation from section 8.2 ("single instance per
-//   page"): the library is loaded once per page, and a layout with one sky-type pane (every
-//   current page) has exactly one viewer; a layout with two sky panes (e.g. sky + wavelength)
-//   gets one viewer per pane, because a single Aladin canvas cannot show two different views.
+//   with handle.run(fn) and replayed in order. IMPLEMENTATION_NOTES 82: the library loads once
+//   per page and each sky pane owns one viewer, so a layout with one sky-type pane has one
+//   viewer and a layout with two (e.g. sky + wavelength) has two, since one Aladin canvas shows
+//   one view. A failed library load is also kept for the page: later panes get the same
+//   rejection without another download attempt (loadAladin(page, {retry: true}) starts over).
 // - Feature detection for the API drift between Aladin v3 builds: layer opacity
 //   (setOpacity / setAlpha / setOptions / opacity property), HiPS construction (A.HiPS /
 //   createImageSurvey / newImageSurvey), base layer (setBaseImageLayer / setImageSurvey),
@@ -80,10 +81,11 @@ export function initBudget(timeout, url, elapsed) {
 
 /**
  * Load Aladin Lite once per page. Resolves {A, url, index, source: 'cdn'|'mirror'|'preloaded'}.
- * opts.timeout overrides ALADIN_TIMEOUT_MS (per source).
+ * opts.timeout overrides ALADIN_TIMEOUT_MS (per source). The first call's promise is returned to
+ * every later call, including a rejected one; opts.retry = true replaces a failed load.
  */
 export function loadAladin(page, opts = {}) {
-  if (lib && lib.state !== 'error') return lib.promise;
+  if (lib && !(opts.retry && lib.state === 'error')) return lib.promise;
   const urls = aladinSources(page);
   const timeout = opts.timeout ?? ALADIN_TIMEOUT_MS;
   const st = {state: 'loading', url: null, index: -1, source: null, error: null, promise: null};

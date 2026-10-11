@@ -683,10 +683,12 @@ export function mount(host, ctx) {
     const my = focusSeq;
     const i = await focusIndex(ctx, catDs, f);
     if (i === null || my !== focusSeq) return;
-    const row = await catClient.record(i);
-    if (my !== focusSeq || !row) return;
+    // per-pane record channel (IMPLEMENTATION_NOTES 73): a newer focus supersedes this fetch
+    const row = await catClient.record(i, {channel: `spectrum1d:${ctx.id}`});
+    if (my !== focusSeq) return;
     try {
-      sedPts = sedPoints(row, filtersDoc, catClient.manifest.cols || []);
+      // a row the catalog lacks (null) drops the previous source's points
+      sedPts = row ? sedPoints(row, filtersDoc, catClient.manifest.cols || []) : [];
     } catch (err) {
       if (!(err instanceof RangeError)) throw err;
       sedPts = [];

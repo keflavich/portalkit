@@ -27,6 +27,12 @@
 // drawing), GL canvas (XYRenderer), over canvas (overlays, focus / hover rings, brush preview;
 // receives the pointer). Every layer derives from the same plot/axes.js view.
 //
+// Events (IMPLEMENTATION_NOTES 71): listens for `narrative:highlight` {pane, ds, ids, beat,
+// goto?} addressed to this pane id, to 'scatter' or to no pane, and draws rings around those
+// rows (`goto` re-centres the view when some are out of view); emits `narrative:sync` {pane}
+// after mount. stats().view reports the view geometry (viewStats) and stats().highlight the
+// number of highlighted rows. The GPU budget is the page's app.gpuBudget (note 68).
+//
 // Store: axes:<pane> {x, y, xlog, ylog, xinv, yinv, xr?, yr?} (xr / yr written when a zoom or
 // pan settles), color, av, rv, dm, filters:<ds> (via chips / legend), vis:<ds>, sel:<ds>,
 // focus, hover, tier:<pane>, layout. Distance modulus: dm folds into the axis constant
@@ -47,7 +53,7 @@ import {
 import {attachBrush, drawBrushPreview, eventToViewPx} from '../plot/brushui.js';
 import {resolveOverlays, drawOverlays} from '../plot/overlays.js';
 import {XYRenderer} from '../gl/xyrenderer.js';
-import {Budget, XY_VERTEX_BYTES} from '../gl/budget.js';
+import {XY_VERTEX_BYTES} from '../gl/budget.js';
 import {fold, oneHotRows, scatterDims, compileLinear, foldCamera} from '../math/fold.js';
 import {fmtCount} from '../core/fmt.js';
 import {createAxisPicker, exprLabel} from '../ui/axis_picker.js';
@@ -129,30 +135,46 @@ export function docOf(ctx, kind) {
   return m.get(ds);
 }
 
-/** The page-wide GPU budget (created by the first plot pane; boot does not create one). */
+/**
+ * The page-wide GPU budget: `app.gpuBudget`, owned by boot.js (IMPLEMENTATION_NOTES 68). Panes
+ * read it and never create one; without it (tests, embedding without boot) this returns null and
+ * callers skip the budget bookkeeping.
+ */
 export function gpuBudget(app) {
-  if (!app) return new Budget();
-  if (!app.gpuBudget) app.gpuBudget = new Budget();
-  if (!app.gpuPanes) app.gpuPanes = new Map();
-  return app.gpuBudget;
+  return (app && app.gpuBudget) || null;
+}
+
+/** Device pixel ratio clamped to [1, 2] (Budget.plan's DPR cap). */
+function clampDpr(d) {
+  return Math.min(2, Math.max(1, Number(d) || 1));
 }
 
 /**
  * Register a pane's GPU needs and run Budget.plan over all registered panes (section 7.5).
- * info: {cssW, cssH, density, vertexBytes}. Returns {dpr, refused: bool, plan}.
+ * info: {cssW, cssH, density, vertexBytes}. Returns {dpr, refused: bool, plan}; without a page
+ * budget the pane keeps the clamped device DPR, nothing is refused and plan is null.
  */
 export function planGpu(app, id, info, deviceDpr = 1) {
   const B = gpuBudget(app);
+  if (!B) return {dpr: clampDpr(deviceDpr), refused: false, plan: null};
+  if (!app.gpuPanes) app.gpuPanes = new Map();
   app.gpuPanes.set(id, {id, cssW: info.cssW, cssH: info.cssH, density: !!info.density, vertexBytes: info.vertexBytes || 0});
   const panes = Array.from(app.gpuPanes.values());
   const vb = panes.reduce((s, p) => s + (p.vertexBytes || 0), 0);
-  const plan = B.plan(panes, vb, {dpr: Math.min(2, Math.max(1, deviceDpr || 1))});
+  const plan = B.plan(panes, vb, {dpr: clampDpr(deviceDpr)});
   return {dpr: plan.dpr, refused: plan.refused.includes(id), plan};
+}
+
+/** Request `bytes` of GPU memory under `key` (true when granted or when there is no budget). */
+export function requestGpu(app, key, bytes) {
+  const B = gpuBudget(app);
+  return B ? B.request(key, bytes) : true;
 }
 
 export function releaseGpu(app, id) {
   if (app && app.gpuPanes) app.gpuPanes.delete(id);
-  if (app && app.gpuBudget) app.gpuBudget.release(id);
+  const B = gpuBudget(app);
+  if (B) B.release(id);
 }
 
 /** Current tier of a pane (store, else tierFor(n)). */
@@ -598,6 +620,145 @@ export function limitDir(client, expr, lim) {
   return dir;
 }
 
+// ------------------------------------------------------------ narrative highlight (notes 71)
+
+/** Most rows a narrative highlight draws rings for. */
+export const HIGHLIGHT_MAX = 2000;
+
+/**
+ * Whether a `narrative:highlight` payload {pane, ds, ids, beat, goto?} applies to a plot pane
+ * {id, type, ds}: the payload names no pane, this pane id or this pane type, and its dataset is
+ * unset or this pane's dataset (a payload naming this pane by id applies to any dataset; its ids
+ * are then resolved in the pane's own catalog).
+ */
+export function highlightApplies(p, pane) {
+  if (!p || typeof p !== 'object') return false;
+  if (p.pane && p.pane !== pane.id && p.pane !== pane.type) return false;
+  if (p.ds && p.ds !== pane.ds && p.pane !== pane.id) return false;
+  return true;
+}
+
+/**
+ * Domain [d0, d1] moved (span kept, orientation kept) so its centre is `c`; geometric on a log
+ * axis. Returns `d` when c or the domain is not usable.
+ */
+export function recentreDomain(d, c, log = false) {
+  if (!Array.isArray(d) || d.length < 2 || !Number.isFinite(c)) return d;
+  const [d0, d1] = d;
+  if (log) {
+    if (!(d0 > 0 && d1 > 0 && c > 0)) return d;
+    const f = c / Math.sqrt(d0 * d1);
+    return [d0 * f, d1 * f];
+  }
+  const delta = c - (d0 + d1) / 2;
+  return [d0 + delta, d1 + delta];
+}
+
+/**
+ * Centre of the points (x[i], y[i]) for rows `idx` with finite values (positive on a log axis):
+ * arithmetic mean, geometric on log axes. Points outside `dom` ({x, y} domains) are counted in
+ * `outside`. Returns {x, y, n, outside} or null when no row is usable.
+ */
+export function highlightCentre(idx, x, y, {xlog = false, ylog = false, dom = null} = {}) {
+  let sx = 0, sy = 0, k = 0, out = 0;
+  const inside = (d, v) => !d || (v >= Math.min(d[0], d[1]) && v <= Math.max(d[0], d[1]));
+  for (const i of idx) {
+    const a = x[i], b = y[i];
+    if (!Number.isFinite(a) || !Number.isFinite(b) || (xlog && !(a > 0)) || (ylog && !(b > 0))) continue;
+    sx += xlog ? Math.log(a) : a;
+    sy += ylog ? Math.log(b) : b;
+    k++;
+    if (dom && !(inside(dom.x, a) && inside(dom.y, b))) out++;
+  }
+  if (!k) return null;
+  return {x: xlog ? Math.exp(sx / k) : sx / k, y: ylog ? Math.exp(sy / k) : sy / k, n: k, outside: out};
+}
+
+/**
+ * Narrative highlight state of one plot pane: listens for `narrative:highlight`, resolves the
+ * ids to rows of `ds` through app.resolveIds and calls onChange(rows, payload) (rows = Int32Array,
+ * empty when cleared); asks for the current highlight with `narrative:sync` {pane} on start.
+ * A payload of another beat addressed to another pane clears this pane's highlight (the next beat
+ * targets a different pane). `goto` is delivered once per beat: a replay of the same beat (a
+ * `narrative:sync` answer, a phrase hover restore) reaches onChange with goto false.
+ * Returns {rows(), payload(), sync(), destroy()}.
+ */
+export function narrativeHighlight(ctx, ds, type, onChange) {
+  const {store, app, id} = ctx;
+  let rows = new Int32Array(0);
+  let cur = null;
+  let held = null;         // last accepted payload (set before its ids resolve)
+  let gotoBeat;            // beat whose goto was delivered (undefined: none)
+  let tok = 0;
+  let dead = false;
+  const deliver = (p) => {
+    if (p && p.goto) {
+      if (p.beat != null && p.beat === gotoBeat) p = Object.assign({}, p, {goto: false});
+      else gotoBeat = p.beat;
+    }
+    cur = p;
+    onChange(rows, cur);
+  };
+  const off = store.onEvent('narrative:highlight', (p) => {
+    if (p && typeof p === 'object' && p.beat !== gotoBeat) gotoBeat = undefined;
+    if (!highlightApplies(p, {id, type, ds})) {
+      if (p && typeof p === 'object' && held && p.beat !== held.beat) {
+        ++tok;
+        held = null;
+        if (cur || rows.length) {
+          rows = new Int32Array(0);
+          cur = null;
+          onChange(rows, null);
+        }
+      }
+      return;
+    }
+    const my = ++tok;
+    held = p;
+    const ids = Array.isArray(p.ids) ? p.ids.slice(0, HIGHLIGHT_MAX).map(String) : [];
+    if (!ids.length || !app || typeof app.resolveIds !== 'function') {
+      rows = new Int32Array(0);
+      deliver(ids.length ? p : null);
+      return;
+    }
+    Promise.resolve(app.resolveIds(ds, ids)).then((idx) => {
+      if (dead || my !== tok) return;
+      rows = Int32Array.from((idx || []).filter((i) => Number.isInteger(i) && i >= 0));
+      deliver(p);
+    }, (err) => {
+      if (dead || my !== tok || (err && err.name === 'AbortError')) return;
+      console.warn(`${id}: narrative highlight ids unavailable`, err);
+    });
+  });
+  const sync = () => { if (!dead) store.emit('narrative:sync', {pane: id, type}); };
+  return {
+    rows: () => rows,
+    payload: () => cur,
+    sync,
+    destroy() { dead = true; if (typeof off === 'function') off(); },
+  };
+}
+
+/**
+ * View geometry for stats() (tests and e2e checks map data to pixels with it): axis expressions
+ * and flags, displayed domains xr / yr ([d0, d1] in display order, distance modulus included),
+ * plot rectangle and margins in CSS px, pixels per data unit kx / ky (per decade on log axes)
+ * and the dm shift [dx, dy] added to catalog values on linear axes.
+ */
+export function viewStats(view, axes = {}, {shift = [0, 0], xinv = false, yinv = false} = {}) {
+  if (!view) return null;
+  const P = view.plot;
+  return {
+    x: axes.x ?? null, y: axes.y ?? null, xlog: !!axes.xlog, ylog: !!axes.ylog, xinv: !!xinv, yinv: !!yinv,
+    xr: [view.sx.d0, view.sx.d1], yr: [view.sy.d0, view.sy.d1],
+    width: view.width, height: view.height,
+    plot: {left: P.left, top: P.top, right: P.right, bottom: P.bottom, width: P.width, height: P.height},
+    margin: {left: P.left, top: P.top, right: view.width - P.right, bottom: view.height - P.bottom},
+    kx: Math.abs(view.sx.b), ky: Math.abs(view.sy.b),
+    shift: [Number(shift[0]) || 0, Number(shift[1]) || 0],
+  };
+}
+
 // =============================================================== pane
 
 export async function mount(host, ctx) {
@@ -658,6 +819,7 @@ export async function mount(host, ctx) {
   let sel = null;
   let renderer = null;
   let frame = 0;
+  let hl = null;           // narrative highlight (narrativeHighlight), set once the listeners exist
 
   function normAxes(a) {
     const o = {x: a.x ?? cfg.x ?? null, y: a.y ?? cfg.y ?? null, xlog: !!(a.xlog ?? cfg.xlog), ylog: !!(a.ylog ?? cfg.ylog),
@@ -1114,10 +1276,29 @@ export async function mount(host, ctx) {
     const fi = storeRow(store, 'focus', ds), hi = storeRow(store, 'hover', ds);
     if (S.xy) {
       const [dx, dy] = S.shift;
+      if (hl && S.hlGoto) gotoHighlight(hl.rows());
+      const hr = hl ? hl.rows() : null;
+      if (hr) for (let k = 0; k < hr.length; k++) drawFocusRing(o, view, S.xy.x[hr[k]] + dx, S.xy.y[hr[k]] + dy, {hover: true, tokens: tk, color: tk.focus, width: 1.75, r: 7});
       if (hi >= 0 && hi !== fi) drawFocusRing(o, view, S.xy.x[hi] + dx, S.xy.y[hi] + dy, {hover: true, tokens: tk, r: 6});
       if (fi >= 0) drawFocusRing(o, view, S.xy.x[fi] + dx, S.xy.y[fi] + dy, {tokens: tk});
     }
     if (S.preview) drawBrushPreview(o, view, S.preview, tk);
+  }
+
+  /** Narrative `goto`: re-centre the view on the highlighted rows when some are out of view. */
+  function gotoHighlight(rows) {
+    if (!S.xy) { S.hlGoto = true; return; }
+    S.hlGoto = false;
+    if (!rows || !rows.length || (gridOn && S.focusCell === null)) return;
+    const ax = S.axes;
+    const [dx, dy] = S.shift;
+    const d = domain();
+    const raw = {x: d.x.map((v) => v - dx), y: d.y.map((v) => v - dy)};
+    const c = highlightCentre(rows, S.xy.x, S.xy.y, {xlog: ax.xlog, ylog: ax.ylog, dom: raw});
+    if (!c || !c.outside) return;
+    S.dom = {x: recentreDomain(d.x, c.x + dx, ax.xlog), y: recentreDomain(d.y, c.y + dy, ax.ylog)};
+    schedule();
+    commitDomain();
   }
 
   function overlayState(x = S.axes.x, y = S.axes.y) {
@@ -1703,6 +1884,12 @@ export async function mount(host, ctx) {
     p.handled = true;
     sel.invert(drawableMask(S.xy.gx, S.xy.gy, S.vis, n));
   }));
+  // narrative beats (IMPLEMENTATION_NOTES 71): rings around the beat's rows, `goto` re-centres
+  hl = narrativeHighlight(ctx, ds, meta.type, (rows, p) => {
+    if (p && p.goto && rows.length) gotoHighlight(rows);
+    if (S.view) drawOver(S.view, tokensOf(ctx.theme()));
+  });
+  offs.push(() => hl.destroy());
 
   function warnErr(what) {
     return (err) => {
@@ -1745,6 +1932,7 @@ export async function mount(host, ctx) {
   loadColorState();
   loadOverlays().catch(warnErr('overlays'));
   reloadData();
+  hl.sync();
 
   // ------------------------------------------------------------ handle
   return {
@@ -1798,6 +1986,8 @@ export async function mount(host, ctx) {
       return {renderMs: S.renderMs, tier: S.tier, mode: stage.dataset.mode || null, n, shown: S.lastCount,
         selected: sel ? sel.count : 0, inView: S.inView, gl, grid: !!(gridOn && S.focusCell === null), gridDrawn,
         overlays: S.overlays.length, stat: S.stat ? S.stat.key : null,
+        highlight: hl ? hl.rows().length : 0,
+        view: viewStats(S.view, S.axes, {shift: S.shift, xinv: xInv(), yinv: yInv()}),
         cells: cells.map((c) => ({k: c.k, drawn: !!c.view, density: !!c.dens, context: c.ctx ? c.ctx.grids.length : 0}))};
     },
     async brush(shape, op = 'replace') {

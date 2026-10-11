@@ -26,7 +26,14 @@
 // (IMPLEMENTATION_NOTES 35); otherwise the hash stores the selection bits.
 //
 // Store: frame:<pane> {preset?, F (2·D numbers), dims} written when motion settles (not
-// during drift), color, dm, vis:<ds>, sel:<ds>, focus, hover, tier:<pane>.
+// during drift), color, dm, vis:<ds>, sel:<ds>, focus, hover, tier:<pane>. A `preset` names
+// 'pca', `pair:i,j`, a manifest frame preset or an `axes` preset (unit weights on its x / y
+// dims; IMPLEMENTATION_NOTES 91).
+// Events (IMPLEMENTATION_NOTES 71): listens for `narrative:highlight` {pane, ds, ids, beat,
+// goto?} addressed to this pane id, to 'manifold' or to no pane, and rings those rows in the
+// current projection (`goto` re-centres the view when some are out of view); emits
+// `narrative:sync` {pane} after mount. GPU memory is accounted in the page's app.gpuBudget
+// when boot provides one (note 68).
 
 import {
   MAXD_GPU, SEMANTIC_ZOOM_MARKERS, BITS_IN_HASH_MAX_N, MOTION_PREFIX, T0_MAX,
@@ -48,9 +55,10 @@ import {createLegend} from '../ui/legend.js';
 import {createChips} from '../ui/chips.js';
 import {createControls} from '../ui/controls.js';
 import {
-  el, iconButton, paneDataset, docOf, gpuBudget, planGpu, releaseGpu, paneTier, setPaneTier, makeStage,
+  el, iconButton, paneDataset, docOf, gpuBudget, planGpu, requestGpu, releaseGpu, paneTier, setPaneTier, makeStage,
   brushToolbar, snapshotCanvases, clipToPlot, magKeys, loadColor, rowColor, pickRadius, applyBrush, idsRecipe, focusRow,
   storeRow, contextDatasets, resolvesIn, sampledExtent, WHEEL_STEP, HOVER_MS,
+  narrativeHighlight, highlightCentre, recentreDomain,
 } from './scatter.js';
 
 export const meta = {
@@ -199,16 +207,31 @@ export function remapFrame(F, fromDims, toDims) {
   return out;
 }
 
-/** Frame presets of a catalog: [{key, label, dims, F}] from manifest presets and manifold.frames. */
-export function framePresets(client) {
+/**
+ * Frame presets of a catalog: [{key, label, dims, F, kind}] from manifold.frames, manifest
+ * presets of kind 'frame', and (IMPLEMENTATION_NOTES 91) presets of kind 'axes', which become
+ * the frame with unit weight on dim x (row 0) and dim y (row 1). When `dimKeys` is given, an
+ * axes preset is kept only if both its x and y are among those dims. Earlier entries win on a
+ * repeated key.
+ */
+export function framePresets(client, dimKeys = null) {
   const man = client.manifest || {};
   const out = [];
+  const seen = new Set();
+  const add = (q) => { if (q.key && !seen.has(q.key)) { seen.add(q.key); out.push(q); } };
   const mdims = (man.manifold && man.manifold.dims) || [];
   for (const [k, F] of Object.entries((man.manifold && man.manifold.frames) || {})) {
-    if (Array.isArray(F) && F.length === 2 * mdims.length) out.push({key: k, label: k, dims: mdims, F});
+    if (Array.isArray(F) && F.length === 2 * mdims.length) add({key: k, label: k, dims: mdims, F, kind: 'frame'});
   }
+  const have = Array.isArray(dimKeys) ? new Set(dimKeys) : null;
   for (const p of man.presets || []) {
-    if (p && p.kind === 'frame' && Array.isArray(p.dims) && Array.isArray(p.F)) out.push({key: p.key, label: p.label || p.key, dims: p.dims, F: p.F});
+    if (!p) continue;
+    if (p.kind === 'frame' && Array.isArray(p.dims) && Array.isArray(p.F)) {
+      add({key: p.key, label: p.label || p.key, dims: p.dims, F: p.F, kind: 'frame'});
+    } else if (p.kind === 'axes' && typeof p.x === 'string' && typeof p.y === 'string' && p.x && p.y && p.x !== p.y) {
+      if (have && !(have.has(p.x) && have.has(p.y))) continue;
+      add({key: p.key, label: p.label || p.key, dims: [p.x, p.y], F: [1, 0, 0, 1], kind: 'axes'});
+    }
   }
   return out;
 }
@@ -297,7 +320,7 @@ export async function mount(host, ctx) {
   }));
   const dimMeta = Object.fromEntries(dims.map((d) => [d.key, {center: d.center, scale: d.scale}]));
   const baseKeys = baseKeysOf(dims);
-  const presets = framePresets(client);
+  const presets = framePresets(client, dimKeys);
 
   async function presetFrame(name) {
     if (!name || name === 'pca') {
@@ -353,6 +376,7 @@ export async function mount(host, ctx) {
     prebinned: null,               // {g, i, j} manifest density grid of a dim-pair frame
   };
   let sel = null;
+  let hl = null;             // narrative highlight (scatter.js narrativeHighlight)
   let xy = null;
   let gc = null;
   let gcData = null;
@@ -495,7 +519,7 @@ export async function mount(host, ctx) {
 
   function setPath() {
     const p = choosePath();
-    if (p !== 'gc' && gc) { gc.destroy(); gc = null; gcData = null; gpuBudget(app).release(`${id}:gc`); }
+    if (p !== 'gc' && gc) { gc.destroy(); gc = null; gcData = null; releaseGpu(app, `${id}:gc`); }
     if (p !== 'xy' && xy) { xy.destroy(); xy = null; }
     if (p !== 'gc' && p !== 'xy') releaseGpu(app, id);
     if (p !== S.path && p === 'gc') {
@@ -544,7 +568,7 @@ export async function mount(host, ctx) {
     if (gc) {
       gc.resize(S.w, S.h, S.glDpr);
       const bytes = vb + Math.round(S.w * S.glDpr) * Math.round(S.h * S.glDpr) * 48;
-      if (!gpuBudget(app).request(`${id}:gc`, bytes)) lowerTier('GPU memory budget');
+      if (!requestGpu(app, `${id}:gc`, bytes)) lowerTier('GPU memory budget');
     }
   }
 
@@ -1128,6 +1152,14 @@ export async function mount(host, ctx) {
     const o = prepareCanvas(over, S.w, S.h, S.dpr);
     o.clearRect(0, 0, S.w, S.h);
     if (S.overlays.length) drawOverlays(o, view, S.overlays, overlayState());
+    if (hl) {
+      const hr = hl.rows();
+      if (S.hlGoto) gotoHighlight(hr);
+      for (let k = 0; k < hr.length; k++) {
+        const q = focusXY(hr[k]);
+        if (q) drawFocusRing(o, view, q[0], q[1], {hover: true, tokens: tk, color: tk.focus, width: 1.75, r: 7});
+      }
+    }
     const fi = storeRow(store, 'focus', ds), hi = storeRow(store, 'hover', ds);
     const hp = hi !== fi ? focusXY(hi) : null;
     if (hp) drawFocusRing(o, view, hp[0], hp[1], {hover: true, tokens: tk, r: 6});
@@ -1137,6 +1169,24 @@ export async function mount(host, ctx) {
       drawCompass(o, tour.frame, dims, {...compassOpts(), tokens: tk, hover: S.hoverDim, background: true});
     }
     if (S.preview) drawBrushPreview(o, view, S.preview, tk);
+  }
+
+  /** Narrative `goto`: re-centre on the highlighted rows when some are outside the view. */
+  function gotoHighlight(rows) {
+    if (!S.cpu && !(S.proj && S.proj.token === S.token)) { S.hlGoto = true; return; }
+    S.hlGoto = false;
+    if (!rows || !rows.length) return;
+    const xs = [], ys = [];
+    for (const i of rows) {
+      const q = focusXY(i);
+      if (q) { xs.push(q[0]); ys.push(q[1]); }
+    }
+    const d = domain();
+    const c = highlightCentre(xs.map((_, k) => k), xs, ys, {dom: d});
+    if (!c || !c.outside) return;
+    S.dom = {x: recentreDomain(d.x, c.x), y: recentreDomain(d.y, c.y)};
+    settleZoom();
+    schedule();
   }
 
   // ------------------------------------------------------------ interaction
@@ -1339,6 +1389,12 @@ export async function mount(host, ctx) {
     for (let i = 0; i < n; i++) d[i] = S.proj.vis[i] > 0 && Number.isFinite(S.proj.x[i]) ? 1 : 0;
     sel.invert(d);
   }));
+  // narrative beats (IMPLEMENTATION_NOTES 71)
+  hl = narrativeHighlight(ctx, ds, meta.type, (rows, p) => {
+    if (p && p.goto && rows.length) gotoHighlight(rows);
+    if (S.view) drawOver(S.view, tokensOf(ctx.theme()));
+  });
+  offs.push(() => hl.destroy());
   sel = await app.selectionFor(ds);
   offs.push(sel.onChange(() => {
     if (gc) gc.setSelection(sel.count ? sel.mask : null);
@@ -1370,6 +1426,7 @@ export async function mount(host, ctx) {
   loadOverlays().catch(warnErr('overlays'));
   syncTourButtons();
   if (cfg.tour === true && fr0.F === undefined && fr0.preset === undefined && cfg.autoplay) toggleDrift();
+  hl.sync();
 
   return {
     resize() { measure(); },
@@ -1389,7 +1446,7 @@ export async function mount(host, ctx) {
       if (ro) ro.disconnect();
       if (xy) xy.destroy();
       if (gc) gc.destroy();
-      gpuBudget(app).release(`${id}:gc`);
+      releaseGpu(app, `${id}:gc`);
       releaseGpu(app, id);
       controls.destroy();
       legend.destroy();
@@ -1418,7 +1475,8 @@ export async function mount(host, ctx) {
         shown: S.shown || 0, selected: sel ? sel.count : 0, tour: tour.mode, token: S.token,
         projected: !!(S.proj && S.proj.token === S.token), gl: xy ? xy.stats() : gc && gcData ? {renderer: 'gc', n: gcData.cols.n, dims: gcData.keys.length} : null,
         frame: Array.from(tour.frame), dims: dimKeys.slice(), status: fmtCount(n),
-        inView: S.inView, prebinned: !!S.prebinned, colorNote: colorNote(S.color)};
+        inView: S.inView, prebinned: !!S.prebinned, colorNote: colorNote(S.color),
+        preset: S.preset || null, highlight: hl ? hl.rows().length : 0};
     },
     async brush(shape, op = 'replace') {
       if (!S.proj || S.proj.token !== S.token) await (S.projPromise || settleNow());
