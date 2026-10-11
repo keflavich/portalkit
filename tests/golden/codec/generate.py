@@ -26,6 +26,10 @@ Run from the repo root::
 * ``kind = "density"``: ``meta`` is the manifest density entry; ``codes`` the flat grid
   codes (row-major, ``iy * nx + ix``); ``expected`` the decoded counts.
 * ``kind = "rows"``: a row chunk (gz JSON array of row objects); ``expected`` is that array.
+* ``kind = "catalog_chunks"``: a chunked catalog with ``chunk_starts`` (IMPLEMENTATION_NOTES 98);
+  ``manifest`` is the ``pk-catalog/1`` subset (``n``, ``chunk_rows``, ``chunk_starts``, ``ids``,
+  ``cols`` with ``chunk_files``), ``files`` maps labels to every chunk file, ``expected`` is
+  ``{"ids": [...], "cols": {key: [decoded values in stored order]}}``.
 
 The byte-identity test (``tests/py/test_codec.py``) calls :func:`build` and compares every
 file with the stored one.
@@ -87,9 +91,11 @@ def build() -> tuple[dict[str, bytes], dict]:
     files: dict[str, bytes] = {}
     cases: list[dict] = []
 
-    def add(fname: str, data: bytes, case: dict) -> None:
-        files[fname] = data
-        cases.append(case)
+    def add(fname: str | None, data: bytes | None, case: dict | None) -> None:
+        if fname is not None:
+            files[fname] = data
+        if case is not None:
+            cases.append(case)
 
     # ---- u16q (free step, NaN, inf, large values)
     x = np.array([1.0, 2.5, np.nan, -3.25, 1e6, np.inf, 7.0, 0.0])
@@ -283,8 +289,78 @@ def build() -> tuple[dict[str, bytes], dict]:
     add("rows_chunk.bin", codec.gz(dumps_json(rows)),
         {"name": "rows_chunk", "kind": "rows", "file": "rows_chunk.bin", "expected": rows})
 
+    # ---- chunked catalog with explicit chunk_starts (IMPLEMENTATION_NOTES 98)
+    _catalog_chunks(add)
+
     index = {"schema": SCHEMA, "cases": cases}
     return files, index
+
+
+def _catalog_chunks(add) -> None:
+    """``kind = "catalog_chunks"``: a 10-row catalog split at ``chunk_starts`` [0, 3, 7].
+
+    Chunk boundaries are not byte aligned (bits); every column and the ids are cut there exactly
+    as ``bundle/catalog.py`` cuts them (``Encoded.file_bytes(a, b)`` per chunk). ``manifest`` is
+    the ``pk-catalog/1`` subset a reader needs; ``files`` maps a label to each chunk file;
+    ``expected`` holds the decoded ids and column values in stored order (null = missing).
+    """
+    n = 10
+    starts = [0, 3, 7]
+    geom = {"n": n, "chunk_rows": 1048576, "chunk_starts": starts}
+    ranges = codec.chunk_ranges(geom)
+    ids = ["a0", "Ü1", "日本2", "", "a4", "a5", "dup", "a7", "dup", "z9"]
+    encs = {
+        "mag": codec.encode_u16q(np.array([10.0, 11.5, np.nan, 12.25, 30.0, 10.0, 15.5, np.nan, 20.0, 29.999]),
+                                 step=0.001),
+        "cls": codec.encode_cat(np.array(["star", "yso", "gälaxy", "", "star", "yso", "star", "yso", "gälaxy",
+                                          "star"], dtype=object)),
+        "ok": codec.encode_bits(np.array([1, 0, 1, 1, 0, 0, 1, 1, 1, 0], dtype=bool)),
+        "flux": codec.encode_f32(np.array([1e-3, np.nan, 2.5, -1.0, 7.0, 0.0, 1e30, 3.0, 4.0, 5.0])),
+    }
+    roles = {"mag": "mag", "cls": "category", "ok": "flag", "flux": "value", "name": "text"}
+    names = ["n0", "nø1", None, "n3", "", "n5", "☃6", "n7", "n8", "n9"]
+    files: dict[str, str] = {}
+    cols = []
+    expected_cols: dict[str, list] = {}
+    for key in ("mag", "cls", "ok", "flux", "name"):
+        meta = {"key": key, "role": roles[key]}
+        chunk_files = []
+        for ci, (a, b) in enumerate(ranges):
+            if key == "name":
+                data = codec.gz(codec.encode_str(names[a:b]))
+            else:
+                data = encs[key].file_bytes(a, b)
+            fname = f"chunks_{key}.c{ci:03d}.bin"
+            add(fname, data, None)
+            files[f"{key}.c{ci:03d}"] = fname
+            chunk_files.append(fname)
+        if key == "name":
+            meta["enc"] = "str"
+            expected_cols[key] = ["" if s is None else s for s in names]
+        else:
+            e = encs[key]
+            meta.update({k: v for k, v in e.meta.items() if k in ("enc", "lo", "hi", "step", "shuffle", "levels")})
+            if meta["enc"] == "cat8":
+                expected_cols[key] = [None if int(c) == codec.CAT8_MISSING else meta["levels"][int(c)]
+                                      for c in e.codes]
+            elif meta["enc"] == "bits":
+                expected_cols[key] = [int(c) for c in e.codes]
+            else:
+                expected_cols[key] = _nulls(codec.dequant(meta, e.codes))
+        meta["chunk_files"] = chunk_files
+        cols.append(meta)
+    id_files = []
+    for ci, (a, b) in enumerate(ranges):
+        fname = f"chunks_ids.c{ci:03d}.bin"
+        add(fname, codec.gz(codec.encode_str(ids[a:b])), None)
+        files[f"ids.c{ci:03d}"] = fname
+        id_files.append(fname)
+    man = {"schema": "pk-catalog/1", "id": "chunks", **geom, "order": {"kind": "input"},
+           "ids": {"file": None, "enc": "str", "chunks": id_files}, "cols": cols}
+    add(None, None, {"name": "catalog_chunks", "kind": "catalog_chunks", "manifest": man, "files": files,
+                     "expected": {"ids": ids, "cols": expected_cols},
+                     "note": "chunk_starts [0, 3, 7]: chunk k holds rows [starts[k], starts[k+1]); "
+                             "bits chunks restart at bit 0; NaN -> null"})
 
 
 def main(argv: list[str]) -> int:

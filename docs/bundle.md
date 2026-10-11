@@ -38,6 +38,14 @@ img = images.write(spec: ImageSetSpec, dest, *, rows=cat.row_of, thumb=None,
 * Errors: `BundleError` (a `ValueError`) for bad input (duplicate or missing ids, bad column
   keys, unknown encodings); `StagingError` for a write outside the staging root or through a
   symlink.
+* `catalog.head_chunk_starts(n)` returns the manifest `chunk_starts` for `n` rows (or `None`);
+  `catalog.first_paint_files(manifest)` lists the data files counted as first paint (section 8).
+* Python readers (`portalkit.bundle.codec`, mirroring `web/js/workers/data.worker.js`):
+  `catalog_chunk_starts(man)` (`chunk_starts`, else `[0, chunk_rows, ...]`; `ValueError` on a
+  malformed list), `chunk_ranges(man, nfiles)` (`[first, end)` per chunk file; one file covers
+  `[0, n)`), `column_files(meta)`, `read_column(man, key_or_meta, read, chunks=None)` and
+  `read_ids(man, read, chunks=None)`, where `read(rel_path) -> bytes`. Tools and tests read
+  catalog columns through these, never by assuming `file`.
 
 ## 2. Files and naming (section 5.1)
 
@@ -145,7 +153,8 @@ count}`. Legacy codes take precedence over clip kinds for the same row.
     is never finer than `T*3.6e6/60000` mas, which keeps offsets within ±30000.
   * The tile scheme is portalkit's own; the GC builder used per-pointing tiles. Readers depend
     only on `tile_refs` and `step_mas`.
-* Position files are not chunked (`pos.files` values are single paths in the schema).
+* Position files are not chunked (`pos.files` values are single paths in the schema), also
+  when the columns carry `chunk_starts`.
 
 ## 5. Row order (section 5.4)
 
@@ -161,12 +170,26 @@ count}`. Legacy codes take precedence over clip kinds for the same row.
 
 ## 6. Chunking, ids, aliases, rows (section 5.5)
 
-* Columns with `N > chunk_rows` (1048576) are written as `chunk_files`, named
-  `cols/<key>.cNNN.<h8>.bin`. Each chunk is encoded independently with the column's shared
-  lo/hi/step and levels. `bits` chunks hold `chunk_rows` rows each.
+* Head chunk (IMPLEMENTATION_NOTES 98). When `N > LOD_MIN_N` (131072) the manifest carries
+  `chunk_starts`, the first row of each chunk:
+  `[0, LOD_BASE, LOD_BASE + CHUNK_ROWS, LOD_BASE + 2*CHUNK_ROWS, ...]` (strictly increasing,
+  every value < N; e.g. `[0, 32768]` for 1M rows and `[0, 32768, 1081344, 2129920, 3178496,
+  4227072]` for 5M). Every column is then written as `chunk_files` and the ids as `ids.chunks`,
+  with one file per entry of `chunk_starts`. Chunk 0 holds exactly the LOD base sample (rows
+  `[0, LOD_BASE)`), so a list's first screen, a hover card or a prefix load reads about 60 kB
+  per u16 column and the head ids chunk instead of whole files. Chunk `k` holds rows
+  `[chunk_starts[k], chunk_starts[k+1])` (the last ends at N); no chunk exceeds `CHUNK_ROWS`
+  rows.
+* Without `chunk_starts` (N <= 131072, and foreign GC manifests) the old rule holds: one file
+  per column when `N <= chunk_rows` (1048576), else `ceil(N / chunk_rows)` chunks of
+  `chunk_rows` rows.
+* Chunk files are named `cols/<key>.cNNN.<h8>.bin`. Each chunk is encoded independently with
+  the column's shared lo/hi/step and levels; a `bits` chunk restarts at bit 0 of its first
+  byte (chunk boundaries need not be multiples of 8); a `str` chunk is a complete `str`
+  payload. The column kind in the ledger is `chunk`.
 * `ids`:
-  * `{file: "ids.<h8>.bin", enc: "str", chunks: null}`. When `N > 2^20`, `file` is null and
-    `chunks` lists `ids.cNNN.<h8>.bin`.
+  * `{file: "ids.<h8>.bin", enc: "str", chunks: null}`. When the columns are chunked, `file` is
+    null and `chunks` lists `ids.cNNN.<h8>.bin`, split exactly like the columns.
   * Missing or duplicate ids raise `BundleError`. Numeric ids are written as decimal strings.
 * Aliases (`CatalogSpec.aliases`: a dict `id -> [alias]` or a column holding `|`-joined
   aliases) are written to `aliases.<h8>.json` as `{alias: stored_row}`.
@@ -209,7 +232,7 @@ count}`. Legacy codes take precedence over clip kinds for the same row.
 
 ## 8. Manifest assembly
 
-The key order is: `schema, id, title?, n, build?, order, chunk_rows, ids, pos?, bbox?, cols,
+The key order is: `schema, id, title?, n, build?, order, chunk_rows, chunk_starts?, ids, pos?, bbox?, cols,
 virtual?, groups?, presets?, density?, rows?, manifold?, links?, provenance?, caveats?,
 budget`.
 
@@ -221,9 +244,18 @@ budget`.
 * `budget: {first_paint_bytes, total_bytes}`, iterated until the manifest's own size is
   stable.
   * `total_bytes` is the sum of every file written for the dataset plus `manifest.json`.
-  * `first_paint_bytes` is `manifest.json` plus the first density grid. Without a density
-    grid it is `manifest.json` plus the first file or chunk of the two axis columns of the
-    first `axes` preset (or the first two numeric columns).
+  * `first_paint_bytes` counts what first paint reads (IMPLEMENTATION_NOTES 98-99):
+    `manifest.json`; the plot's first count density grid (the first grid when every grid is
+    a binned statistic), or without a grid every file (all chunks) of the two axis columns of
+    the first `axes` preset (or the first two numeric columns), because the scatter reads its
+    axes with an unprefixed `client.values()`; and the list's first screen, read with
+    `client.rows(first, last)`: `rows/r0000` when the catalog has row chunks, else the head
+    chunk of every stored column (the worker's quantized `rows()` decodes all of them) and
+    the head ids chunk. Positions are not counted (sky markers load them after first paint).
+    The head chunk is chunk 0: the LOD base sample with `chunk_starts`, else the whole file
+    (or the first `chunk_rows` rows).
+  * The same files carry `first_paint: true` in the ledger, so `Ledger.first_paint(ds)`
+    equals `first_paint_bytes`. `build.py` sums it over a page's catalogs.
 
 ## 9. Record sets (sections 5.6-5.8)
 
@@ -339,6 +371,10 @@ case:
 * `pks1` / `pki1`: `{file, expected:{header, wave, channels | codes, y, values}, tol_rel}`.
 * `shard`: `{file, entries:{id:[0, off, len]}, expected:{id: record}}`.
 * `rows`: `{file, expected: [row objects]}`.
+* `catalog_chunks`: `{manifest, files, expected:{ids, cols:{key: values}}}`: a 10-row catalog
+  with `chunk_starts` `[0, 3, 7]` whose u16q, cat8, bits, f32 and str columns and unicode ids
+  are split exactly as the writer splits them (bits chunks not byte aligned). `manifest` is
+  the `pk-catalog/1` subset a reader needs; `files` maps a label to every chunk file.
 
 The Python test `tests/py/test_codec.py` checks that `generate.build()` reproduces every byte
 and that the Python decoders return `expected`. JS readers should decode each file and compare

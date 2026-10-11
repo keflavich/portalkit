@@ -1413,6 +1413,193 @@
      "note": ""
     }
    ]
+  },
+  {
+   "name": "catalog_chunks",
+   "kind": "catalog_chunks",
+   "manifest": {
+    "schema": "pk-catalog/1",
+    "id": "chunks",
+    "n": 10,
+    "chunk_rows": 1048576,
+    "chunk_starts": [
+     0,
+     3,
+     7
+    ],
+    "order": {
+     "kind": "input"
+    },
+    "ids": {
+     "file": null,
+     "enc": "str",
+     "chunks": [
+      "chunks_ids.c000.bin",
+      "chunks_ids.c001.bin",
+      "chunks_ids.c002.bin"
+     ]
+    },
+    "cols": [
+     {
+      "key": "mag",
+      "role": "mag",
+      "enc": "u16q",
+      "lo": 10.0,
+      "hi": 75.534,
+      "step": 0.001,
+      "shuffle": true,
+      "chunk_files": [
+       "chunks_mag.c000.bin",
+       "chunks_mag.c001.bin",
+       "chunks_mag.c002.bin"
+      ]
+     },
+     {
+      "key": "cls",
+      "role": "category",
+      "enc": "cat8",
+      "levels": [
+       "gälaxy",
+       "star",
+       "yso"
+      ],
+      "shuffle": false,
+      "chunk_files": [
+       "chunks_cls.c000.bin",
+       "chunks_cls.c001.bin",
+       "chunks_cls.c002.bin"
+      ]
+     },
+     {
+      "key": "ok",
+      "role": "flag",
+      "enc": "bits",
+      "chunk_files": [
+       "chunks_ok.c000.bin",
+       "chunks_ok.c001.bin",
+       "chunks_ok.c002.bin"
+      ]
+     },
+     {
+      "key": "flux",
+      "role": "value",
+      "enc": "f32",
+      "shuffle": true,
+      "chunk_files": [
+       "chunks_flux.c000.bin",
+       "chunks_flux.c001.bin",
+       "chunks_flux.c002.bin"
+      ]
+     },
+     {
+      "key": "name",
+      "role": "text",
+      "enc": "str",
+      "chunk_files": [
+       "chunks_name.c000.bin",
+       "chunks_name.c001.bin",
+       "chunks_name.c002.bin"
+      ]
+     }
+    ]
+   },
+   "files": {
+    "mag.c000": "chunks_mag.c000.bin",
+    "mag.c001": "chunks_mag.c001.bin",
+    "mag.c002": "chunks_mag.c002.bin",
+    "cls.c000": "chunks_cls.c000.bin",
+    "cls.c001": "chunks_cls.c001.bin",
+    "cls.c002": "chunks_cls.c002.bin",
+    "ok.c000": "chunks_ok.c000.bin",
+    "ok.c001": "chunks_ok.c001.bin",
+    "ok.c002": "chunks_ok.c002.bin",
+    "flux.c000": "chunks_flux.c000.bin",
+    "flux.c001": "chunks_flux.c001.bin",
+    "flux.c002": "chunks_flux.c002.bin",
+    "name.c000": "chunks_name.c000.bin",
+    "name.c001": "chunks_name.c001.bin",
+    "name.c002": "chunks_name.c002.bin",
+    "ids.c000": "chunks_ids.c000.bin",
+    "ids.c001": "chunks_ids.c001.bin",
+    "ids.c002": "chunks_ids.c002.bin"
+   },
+   "expected": {
+    "ids": [
+     "a0",
+     "Ü1",
+     "日本2",
+     "",
+     "a4",
+     "a5",
+     "dup",
+     "a7",
+     "dup",
+     "z9"
+    ],
+    "cols": {
+     "mag": [
+      10.0,
+      11.5,
+      null,
+      12.25,
+      30.0,
+      10.0,
+      15.5,
+      null,
+      20.0,
+      29.999
+     ],
+     "cls": [
+      "star",
+      "yso",
+      "gälaxy",
+      null,
+      "star",
+      "yso",
+      "star",
+      "yso",
+      "gälaxy",
+      "star"
+     ],
+     "ok": [
+      1,
+      0,
+      1,
+      1,
+      0,
+      0,
+      1,
+      1,
+      1,
+      0
+     ],
+     "flux": [
+      0.0010000000474974513,
+      null,
+      2.5,
+      -1.0,
+      7.0,
+      0.0,
+      1.0000000150474662e+30,
+      3.0,
+      4.0,
+      5.0
+     ],
+     "name": [
+      "n0",
+      "nø1",
+      "",
+      "n3",
+      "",
+      "n5",
+      "☃6",
+      "n7",
+      "n8",
+      "n9"
+     ]
+    }
+   },
+   "note": "chunk_starts [0, 3, 7]: chunk k holds rows [starts[k], starts[k+1]); bits chunks restart at bit 0; NaN -> null"
   }
  ]
 }

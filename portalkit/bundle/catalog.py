@@ -3,11 +3,14 @@
 ``write(spec, dest)`` writes, under the dataset directory (``data/<ds>/``):
 
 * ``manifest.json`` (stable name);
-* ``cols/<key>.<h8>.bin`` per stored column, or ``cols/<key>.cNNN.<h8>.bin`` chunks of
-  ``CHUNK_ROWS`` rows when ``N > CHUNK_ROWS``;
+* ``cols/<key>.<h8>.bin`` per stored column, or ``cols/<key>.cNNN.<h8>.bin`` chunks. For
+  ``N > LOD_MIN_N`` the manifest carries ``chunk_starts`` ``[0, LOD_BASE, LOD_BASE +
+  CHUNK_ROWS, ...]`` and every column and the ids are split there, so chunk 0 is the LOD base
+  sample (IMPLEMENTATION_NOTES 98); otherwise chunks are ``CHUNK_ROWS`` rows (one file when
+  ``N <= CHUNK_ROWS``);
 * ``pos/{ra,dec}.<h8>.bin`` (``u32lin``, N <= 131072) or ``pos/{tile,dra,ddec}.<h8>.bin``
-  (``i16off``);
-* ``ids.<h8>.bin`` (``str``; ``ids.cNNN.<h8>.bin`` chunks when N > 2**20) and
+  (``i16off``), always single files;
+* ``ids.<h8>.bin`` (``str``; ``ids.cNNN.<h8>.bin`` chunks split like the columns) and
   ``aliases.<h8>.json``;
 * ``limits/<key>.<h8>.bin`` (``sparse``) for columns with legacy limit codes or clipping;
 * ``rows/rNNNN.<h8>.bin`` exact row chunks (gz JSON, 4096 rows) when
@@ -29,7 +32,8 @@ from typing import Any, Callable
 
 import numpy as np
 
-from ..constants import CHUNK_ROWS, EXACT_ROWS_MAX_N, FADE_WIDTH, LOD_MIN_N, MAG_STEP, ROW_CHUNK, T0_MAX
+from ..constants import (CHUNK_ROWS, EXACT_ROWS_MAX_N, FADE_WIDTH, LOD_BASE, LOD_MIN_N, MAG_STEP, ROW_CHUNK,
+                         T0_MAX)
 from . import codec
 from .codec import (Encoded, LIMIT_LOWER, LIMIT_UPPER, col_stats, encode_bits, encode_cat,
                     encode_f32, encode_i16off, encode_sparse, encode_str, encode_u8log, encode_u8q,
@@ -39,7 +43,8 @@ from .density import DensityError, base_keys, build_density, eval_linear, parse_
 from .order import SRC_INDEX_KEY, RowOrder, make_order, tile_morton_key
 from .writer import BundleError, BundleWriter, Ledger, dumps_json
 
-__all__ = ["write", "CatalogResult", "resolve_enc", "AUTO_ENC", "json_values", "COL_KEY_RE"]
+__all__ = ["write", "CatalogResult", "resolve_enc", "AUTO_ENC", "json_values", "COL_KEY_RE",
+           "head_chunk_starts", "first_paint_files"]
 
 COL_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
 
@@ -209,7 +214,28 @@ def resolve_enc(col: Any, values: np.ndarray | None, *, rows_written: bool,
     return e, step
 
 
-def _chunks(n: int) -> list[tuple[int, int]]:
+def head_chunk_starts(n: int) -> list[int] | None:
+    """Manifest ``chunk_starts`` for ``n`` rows (IMPLEMENTATION_NOTES 98), or None.
+
+    For ``n > LOD_MIN_N`` the chunks start at ``[0, LOD_BASE, LOD_BASE + CHUNK_ROWS,
+    LOD_BASE + 2*CHUNK_ROWS, ...]`` (every value < n), so chunk 0 holds exactly the LOD base
+    sample (rows ``[0, LOD_BASE)``). Smaller catalogs return None: their chunks follow the
+    ``ceil(n / chunk_rows)`` rule (one file for ``n <= CHUNK_ROWS``).
+    """
+    if n <= LOD_MIN_N:
+        return None
+    starts = [0]
+    s = LOD_BASE
+    while 0 < s < n:
+        starts.append(s)
+        s += CHUNK_ROWS
+    return starts
+
+
+def _chunks(n: int, starts: list[int] | None = None) -> list[tuple[int, int]]:
+    """``[first, end)`` row ranges of the column/ids chunks (``chunk_starts`` when given)."""
+    if starts is not None:
+        return [(a, starts[k + 1] if k + 1 < len(starts) else n) for k, a in enumerate(starts)]
     if n <= CHUNK_ROWS:
         return [(0, n)]
     return [(i, min(i + CHUNK_ROWS, n)) for i in range(0, n, CHUNK_ROWS)]
@@ -307,7 +333,6 @@ def write(spec: Any, dest: str | Path | BundleWriter, *, build: str | None = Non
 
     files: list[str] = []
     cols_meta: list[dict] = []
-    first_paint_candidates: dict[str, list[str]] = {}
     numeric_cache: dict[str, np.ndarray] = {}   # stored-order float values for density
 
     def put(rel_dir: str, stem: str, data: bytes, kind: str) -> str:
@@ -315,16 +340,18 @@ def write(spec: Any, dest: str | Path | BundleWriter, *, build: str | None = Non
         files.append(p)
         return p
 
+    starts = head_chunk_starts(n)
+    parts = _chunks(n, starts)
+    chunked = starts is not None or len(parts) > 1
+
     def write_codes(key: str, enc: Encoded | None, payload_fn=None, kind_single="column") -> dict:
         """Write one column (chunked when needed) -> {'file': ...} or {'chunk_files': [...]}."""
-        parts = _chunks(n)
         out_files = []
         for ci, (a, b) in enumerate(parts):
             data = payload_fn(a, b) if payload_fn is not None else enc.file_bytes(a, b)
-            stem = key if len(parts) == 1 else f"{key}.c{ci:03d}"
-            out_files.append(put("cols", stem, data, kind_single if len(parts) == 1 else "chunk"))
-        first_paint_candidates[key] = [out_files[0]]
-        return {"file": out_files[0]} if len(parts) == 1 else {"chunk_files": out_files}
+            stem = f"{key}.c{ci:03d}" if chunked else key
+            out_files.append(put("cols", stem, data, "chunk" if chunked else kind_single))
+        return {"chunk_files": out_files} if chunked else {"file": out_files[0]}
 
     # ---- stored columns
     skip = {id_key}
@@ -530,8 +557,7 @@ def write(spec: Any, dest: str | Path | BundleWriter, *, build: str | None = Non
                     "tile_refs": pos_data["tile_refs"], "files": pf}
 
     # ---- ids + aliases
-    parts = _chunks(n)
-    if len(parts) == 1:
+    if not chunked:
         ids_meta = {"file": put("", "ids", gz(encode_str(ids)), "ids"), "enc": "str", "chunks": None}
     else:
         ch = [put("", f"ids.c{ci:03d}", gz(encode_str(ids[a:b])), "ids") for ci, (a, b) in enumerate(parts)]
@@ -578,7 +604,6 @@ def write(spec: Any, dest: str | Path | BundleWriter, *, build: str | None = Non
                 dens_specs.append(_AutoDensity(p["key"], p["x"], p["y"]))
                 have.add(p["key"])
     dens_meta = []
-    dens_files = []
     for d in dens_specs:
         try:
             x = eval_linear(d.x, colvals)
@@ -593,7 +618,6 @@ def write(spec: Any, dest: str | Path | BundleWriter, *, build: str | None = Non
                                     stat=_get(d, "stat"), values=vals)
         p = put("density", d.key, data, "density")
         entry["file"] = p
-        dens_files.append(p)
         dens_meta.append(entry)
 
     # ---- manifest
@@ -605,6 +629,8 @@ def write(spec: Any, dest: str | Path | BundleWriter, *, build: str | None = Non
         man["build"] = build
     man["order"] = order.manifest()
     man["chunk_rows"] = CHUNK_ROWS
+    if starts is not None:
+        man["chunk_starts"] = list(starts)
     man["ids"] = ids_meta
     if pos_meta is not None:
         man["pos"] = pos_meta
@@ -651,15 +677,8 @@ def write(spec: Any, dest: str | Path | BundleWriter, *, build: str | None = Non
     if _get(spec, "caveats"):
         man["caveats"] = list(spec.caveats)
 
-    # ---- first paint (section 5.11): manifest + first density grid, else the first
-    # chunk/file of the two axis columns; ids not included
-    fp_files: list[str] = []
-    if dens_files:
-        fp_files = [dens_files[0]]
-    else:
-        axis = _axis_keys(presets, cols_meta)
-        for k in axis:
-            fp_files += first_paint_candidates.get(k, [])
+    # ---- first paint (section 5.11, IMPLEMENTATION_NOTES 98/99): see first_paint_files
+    fp_files = first_paint_files(man)
     for e in w.ledger.entries:
         if e.dataset == w.dataset and e.path in {w.root_rel(f) for f in fp_files}:
             e.first_paint = True
@@ -697,10 +716,65 @@ def _missing_code(enc: str) -> int:
     return -1
 
 
+def _head_file(meta: dict) -> str | None:
+    """First (head) chunk of a column or ids entry: ``chunk_files[0]`` / ``chunks[0]`` or ``file``."""
+    for k in ("chunk_files", "chunks"):
+        v = meta.get(k)
+        if v:
+            return v[0]
+    return meta.get("file")
+
+
+def first_paint_files(man: dict) -> list[str]:
+    """Data files a page reads before first paint (paths relative to the dataset directory).
+
+    The manifest itself is not listed (the caller adds its size). The set is:
+
+    * the plot: the first count density grid (``density[]`` without ``stat``; the first grid
+      when all are binned statistics), else every file (all chunks) of the two axis columns of
+      the first ``axes`` preset (the first two numeric columns without one), since the scatter
+      reads its axes with an unprefixed ``client.values()``;
+    * the list's first screen (IMPLEMENTATION_NOTES 99, ``client.rows(first, last)``):
+      ``rows.files[0]`` when the catalog has exact row chunks; otherwise the head chunk of
+      every stored column (the worker's quantized ``rows()`` decodes all of them) and the
+      head ids chunk. Nothing is read for ``n == 0``.
+
+    With ``chunk_starts`` the head chunk is the LOD base sample (rows ``[0, LOD_BASE)``); without
+    it, it is the first ``chunk_rows`` rows (the whole column when ``n <= chunk_rows``). Positions
+    are never part of first paint (sky markers load them afterwards).
+    """
+    out: list[str] = []
+
+    def add(p: str | None) -> None:
+        if p and p not in out:
+            out.append(p)
+
+    cols = [c for c in man.get("cols") or [] if isinstance(c, dict)]
+    by_key = {c.get("key"): c for c in cols}
+    dens = [d for d in man.get("density") or [] if isinstance(d, dict) and d.get("file")]
+    if dens:
+        count = [d for d in dens if not d.get("stat") or d.get("stat") == "count"]
+        add((count or dens)[0]["file"])
+    else:
+        # the scatter loads its axes with an unprefixed client.values(): every chunk
+        for k in _axis_keys(list(man.get("presets") or []), cols):
+            for f in codec.column_files(by_key[k]):
+                add(f)
+    n = man.get("n") or 0
+    rows = man.get("rows") or {}
+    if rows.get("files"):
+        add(rows["files"][0])
+    elif n > 0:
+        for c in cols:
+            add(_head_file(c))
+        add(_head_file(man.get("ids") or {}))
+    return out
+
+
 def _axis_keys(presets: list[dict], cols_meta: list[dict]) -> list[str]:
     stored = [c["key"] for c in cols_meta]
     for p in presets:
-        if p["kind"] == "axes" and "x" in p and "y" in p:
+        if isinstance(p, dict) and p.get("kind") == "axes" and "x" in p and "y" in p:
             ks: list[str] = []
             for e in (p["x"], p["y"]):
                 try:
@@ -711,7 +785,7 @@ def _axis_keys(presets: list[dict], cols_meta: list[dict]) -> list[str]:
                     continue
             if ks:
                 return ks[:2]
-    num = [c["key"] for c in cols_meta if c["enc"] in ("u16q", "u16log", "u8q", "u8log", "f32")
+    num = [c["key"] for c in cols_meta if c.get("enc") in ("u16q", "u16log", "u8q", "u8log", "f32")
            and c["key"] != SRC_INDEX_KEY]
     return num[:2]
 

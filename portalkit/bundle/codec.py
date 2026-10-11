@@ -14,6 +14,9 @@ Contents
 * Python decoders (:func:`decode_file`, :func:`dequant`, :func:`decode_str`,
   :func:`decode_sparse`, :func:`decode_pos`) used by tests and parity checks; they mirror
   ``web/js/data/codec.js``.
+* Catalog chunk geometry (:func:`catalog_chunk_starts`, :func:`chunk_ranges`; manifest
+  ``chunk_starts``, IMPLEMENTATION_NOTES 98) and whole-column readers (:func:`read_column`,
+  :func:`read_ids`), mirroring ``web/js/workers/data.worker.js``.
 
 Every multi-byte array is little-endian. A column file is ``gz(payload)``; when the payload is
 byte-shuffled the gzip stream uses ``filtered=True``.
@@ -30,6 +33,8 @@ from typing import Any, Iterable, Sequence
 
 import numpy as np
 
+from ..constants import CHUNK_ROWS
+
 __all__ = [
     "QMAX", "QMAX_U8", "U32_MISSING", "U32LIN_MAX", "I16_MISSING", "CAT8_MISSING", "CAT16_MISSING",
     "LIMIT_UPPER", "LIMIT_LOWER", "LIMIT_CLIP_LOW", "LIMIT_CLIP_HIGH", "LIMIT_FLAGGED",
@@ -42,6 +47,7 @@ __all__ = [
     "encode_str", "decode_str", "encode_sparse", "decode_sparse",
     "pack_codes", "file_bytes", "decode_file", "dequant", "decode_pos", "morton16",
     "to_float_array", "is_missing_obj",
+    "DEFAULT_CHUNK_ROWS", "catalog_chunk_starts", "chunk_ranges", "column_files", "read_column", "read_ids",
 ]
 
 # ---------------------------------------------------------------------------
@@ -900,3 +906,117 @@ def dequant(meta: dict, codes: np.ndarray) -> np.ndarray:
     if enc == "bits":
         return c.astype(np.float64)
     raise ValueError(f"dequant: unsupported encoding {enc!r}")
+
+
+# ---------------------------------------------------------------------------
+# catalog chunk geometry and whole-column readers (IMPLEMENTATION_NOTES 98)
+# ---------------------------------------------------------------------------
+
+#: default ``chunk_rows`` of a manifest that omits it (section 5.4)
+DEFAULT_CHUNK_ROWS = CHUNK_ROWS
+
+
+def _is_int(v: Any) -> bool:
+    return isinstance(v, (int, np.integer)) and not isinstance(v, (bool, np.bool_))
+
+
+def catalog_chunk_starts(man: dict) -> list[int]:
+    """First row of every chunk of a ``pk-catalog/1`` manifest.
+
+    Mirrors ``catalogChunkStarts`` in ``web/js/workers/data.worker.js``: the manifest's
+    ``chunk_starts`` when present (integers, starting at 0, strictly increasing, every value
+    < n), else ``[0, chunk_rows, 2*chunk_rows, ...]`` with ``ceil(n / chunk_rows)`` entries (one
+    chunk when ``n <= chunk_rows``, including ``n = 0``). Raises ValueError on a malformed
+    ``chunk_starts`` or ``chunk_rows``.
+    """
+    n = man.get("n")
+    if not _is_int(n) or n < 0:
+        raise ValueError(f"manifest n = {n!r}: expected a non-negative integer")
+    cs = man.get("chunk_starts")
+    if cs is not None:
+        if not isinstance(cs, (list, tuple)) or not cs:
+            raise ValueError("manifest chunk_starts must be a non-empty array")
+        for k, v in enumerate(cs):
+            ok = _is_int(v) and (v == 0 if k == 0 else (cs[k - 1] < v < n))
+            if not ok:
+                raise ValueError(f"manifest chunk_starts[{k}] = {v!r}: expected strictly increasing "
+                                 f"integers from 0, each < n ({n})")
+        return [int(v) for v in cs]
+    rows = man.get("chunk_rows")
+    rows = DEFAULT_CHUNK_ROWS if rows is None else rows
+    if not _is_int(rows) or rows <= 0:
+        raise ValueError(f"manifest chunk_rows = {rows!r}: expected a positive integer")
+    k = max(1, -(-n // rows))
+    return [c * int(rows) for c in range(k)]
+
+
+def chunk_ranges(man: dict, nfiles: int | None = None) -> list[tuple[int, int]]:
+    """``[first, end)`` rows of each chunk file of a column or of the ids.
+
+    ``nfiles`` is the number of files of that column (``len(chunk_files)``, 1 for ``file``);
+    one file always covers ``[0, n)``. Several files must match the catalog chunk count
+    (ValueError otherwise), as in the worker's ``fileStarts``.
+    """
+    n = int(man["n"])
+    if nfiles is not None and nfiles <= 1:
+        return [(0, n)]
+    starts = catalog_chunk_starts(man)
+    if nfiles is not None and nfiles != len(starts):
+        raise ValueError(f"{nfiles} chunk files, expected {len(starts)} (one per chunk of {n} rows)")
+    return [(a, starts[k + 1] if k + 1 < len(starts) else n) for k, a in enumerate(starts)]
+
+
+def column_files(meta: dict) -> list[str]:
+    """Files of a column (``chunk_files`` or ``[file]``) or of the ids (``chunks`` or ``[file]``)."""
+    for k in ("chunk_files", "chunks"):
+        v = meta.get(k)
+        if v:
+            return list(v)
+    f = meta.get("file")
+    return [f] if f else []
+
+
+def read_column(man: dict, key_or_meta: str | dict, read: Any, *, chunks: Sequence[int] | None = None
+                ) -> np.ndarray:
+    """Codes of a stored column in stored order (``str`` -> object array of strings).
+
+    ``read(rel_path) -> bytes`` fetches a file relative to the dataset directory. Chunks follow
+    :func:`chunk_ranges` (``chunk_starts`` when present); ``bits`` chunks are cut to their own row
+    counts. ``chunks`` limits the read to those chunk indices (concatenated in the order given),
+    e.g. ``[0]`` for the head chunk. Each chunk's decoded length is checked.
+    """
+    meta = key_or_meta if isinstance(key_or_meta, dict) else \
+        next((c for c in man.get("cols") or [] if c.get("key") == key_or_meta), None)
+    if meta is None:
+        raise KeyError(f"column {key_or_meta!r} not in manifest")
+    files = column_files(meta)
+    ranges = chunk_ranges(man, len(files))
+    sel = range(len(files)) if chunks is None else list(chunks)
+    parts = []
+    for ci in sel:
+        a, b = ranges[ci]
+        v = decode_file(meta, read(files[ci]), b - a)
+        if len(v) != b - a:
+            raise ValueError(f"column {meta.get('key')!r} chunk {ci}: {len(v)} rows, expected {b - a}")
+        parts.append(v)
+    if not parts:
+        return np.zeros(0, dtype=object if meta.get("enc") == "str" else np.uint8)
+    return np.concatenate(parts)
+
+
+def read_ids(man: dict, read: Any, *, chunks: Sequence[int] | None = None) -> list[str]:
+    """Catalog ids in stored order (``ids.file`` or ``ids.chunks``), checked per chunk."""
+    im = man.get("ids") or {}
+    files = column_files(im)
+    if not files:
+        return []
+    ranges = chunk_ranges(man, len(files))
+    out: list[str] = []
+    for ci in (range(len(files)) if chunks is None else chunks):
+        a, b = ranges[ci]
+        raw = read(files[ci])
+        s = decode_str(gunzip(raw) if raw[:2] == b"\x1f\x8b" else bytes(raw))
+        if len(s) != b - a:
+            raise ValueError(f"ids chunk {ci}: {len(s)} ids, expected {b - a}")
+        out += s
+    return out

@@ -587,6 +587,96 @@ def test_catalog_large_n_lod_and_chunk_files():
     assert _has(errs, "order.levels", "!= n")
 
 
+def _chunked_doc(n, starts, nfiles=None, ids_chunks=None):
+    """catalog_doc(n) with ``chunk_starts`` and every column/ids split into ``nfiles`` files."""
+    c = catalog_doc(n)
+    c["order"] = {"kind": "lod", "seed": 1, "levels": [32768, n], "sort": "tile-morton"}
+    c["rows"] = {"chunk": 4096, "files": [f"rows/r{i:04d}.bin" for i in range(-(-n // 4096))]}
+    if starts is not None:
+        c["chunk_starts"] = starts
+    k = len(starts) if nfiles is None else nfiles
+    for col in c["cols"]:
+        stem = col.pop("file").rsplit(".", 2)[0]
+        col["chunk_files"] = [f"{stem}.c{i:03d}.aaaaaaaa.bin" for i in range(k)]
+    c["ids"] = {"file": None, "enc": "str", "alias_file": None,
+                "chunks": [f"ids.c{i:03d}.bbbbbbbb.bin" for i in range(k if ids_chunks is None else ids_chunks)]}
+    return c
+
+
+def test_catalog_chunk_starts_head_chunk_valid():
+    # IMPLEMENTATION_NOTES 98: [0, LOD_BASE, LOD_BASE + CHUNK_ROWS, ...], every value < n
+    for n, starts in ((131073, [0, 32768]), (2_000_000, [0, 32768, 1081344]),
+                      (5_000_000, [0, 32768, 1081344, 2129920, 3178496, 4227072])):
+        c = _chunked_doc(n, starts)
+        assert schema.validate_catalog(c) == [], n
+    # chunk_starts wins over chunk_rows: n = 2M has 2 chunks by the ceil rule, 3 by chunk_starts
+    c = _chunked_doc(2_000_000, [0, 32768, 1081344], nfiles=2, ids_chunks=2)
+    errs = schema.validate_catalog(c)
+    assert _has(errs, "cols[0].chunk_files", "2 chunks, expected 3", "len(chunk_starts)=3")
+    assert _has(errs, "ids.chunks", "2 chunks, expected 3")
+    # a single-file column next to chunked ones is accepted (the reader maps one file to [0, n))
+    c = _chunked_doc(131073, [0, 32768])
+    c["cols"][4]["file"] = "cols/has_spec.19fe22c0.bin"
+    del c["cols"][4]["chunk_files"]
+    assert schema.validate_catalog(c) == []
+    # n = 0 and n = 1 with a one-chunk chunk_starts [0]
+    for n in (0, 1):
+        c = _chunked_doc(n, [0])
+        c["order"] = {"kind": "input"}
+        for col in c["cols"]:
+            col.pop("nvalid", None)
+        assert schema.validate_catalog(c) == [], n
+    # null chunk_starts means absent: the ceil(n / chunk_rows) rule applies
+    c = _chunked_doc(131073, None, nfiles=1, ids_chunks=1)
+    c["chunk_starts"] = None
+    assert schema.validate_catalog(c) == []
+    c = _chunked_doc(131073, None, nfiles=2, ids_chunks=2)
+    errs = schema.validate_catalog(c)
+    assert _has(errs, "chunk_files", "expected 1", "chunk_rows=1048576")
+    assert _has(errs, "ids.chunks", "expected 1")
+
+
+@pytest.mark.parametrize("starts, needle", [
+    ([], "empty array"),
+    ("0,32768", "expected array"),
+    ([1, 32768], "first chunk start must be 0"),
+    ([0, 32768, 32768], "strictly increasing"),
+    ([0, 40000, 32768], "strictly increasing"),
+    ([0, 32768, 131073], ">= n"),
+    ([0, 32768, 200000], ">= n"),
+    ([0, 32768.0], "must be an integer"),
+    ([0, True], "must be an integer"),
+    ([0, None], "must be an integer"),
+    ([0, -5], "strictly increasing"),
+])
+def test_catalog_chunk_starts_errors(starts, needle):
+    c = _chunked_doc(131073, [0, 32768])
+    c["chunk_starts"] = starts
+    errs = schema.validate_catalog(c)
+    assert _has(errs, "chunk_starts", needle), errs
+    # an invalid chunk_starts skips the chunk-count checks (no fallback to the chunk_rows rule)
+    assert not any("chunks, expected" in m for m in errs), errs
+
+
+def test_catalog_ids_chunks_follow_chunk_rule():
+    # without chunk_starts, ids.chunks follow ceil(n / chunk_rows) like the columns
+    n = 3_000_000
+    c = catalog_doc(n)
+    c["rows"] = {"chunk": 4096, "files": [f"rows/r{i}.bin" for i in range(-(-n // 4096))]}
+    c["ids"] = {"file": None, "enc": "str", "chunks": [f"ids.c{i:03d}.bin" for i in range(3)]}
+    for col in c["cols"]:
+        col.pop("nvalid", None)
+        stem = col.pop("file").rsplit(".", 2)[0]
+        col["chunk_files"] = [f"{stem}.c{i:03d}.bin" for i in range(3)]
+    assert schema.validate_catalog(c) == []
+    c["ids"]["chunks"] = c["ids"]["chunks"][:2]
+    assert _has(schema.validate_catalog(c), "ids.chunks", "2 chunks, expected 3", "chunk_rows=1048576")
+    c["ids"]["chunks"] = []
+    assert _has(schema.validate_catalog(c), "ids.chunks", "empty array")
+    c["ids"] = {"file": "ids.bin", "enc": "str", "chunks": ["ids.c000.bin"]}
+    assert _has(schema.validate_catalog(c), "ids", "at most one of 'file' or 'chunks'")
+
+
 def test_catalog_column_errors():
     c = catalog_doc()
     cols = c["cols"]

@@ -17,7 +17,7 @@ from portalkit.bundle import catalog, codec, images
 from portalkit.bundle.codec import decode_file, dequant
 from portalkit.bundle.order import SRC_INDEX_KEY
 from portalkit.bundle.writer import BundleError, BundleWriter, Ledger, StagingError
-from portalkit.constants import LOD_MIN_N, ROW_CHUNK
+from portalkit.constants import CHUNK_ROWS, LOD_BASE, LOD_MIN_N, ROW_CHUNK
 
 try:
     from portalkit.spec import (CatalogSpec, ColumnSpec, DensitySpec, Group, ImageItem, ImageSetSpec,
@@ -173,15 +173,13 @@ def make_spec(t: Table, **kw) -> CatalogSpec:
     return CatalogSpec(**base)
 
 
-def read_col(root: Path, meta: dict, n: int) -> np.ndarray:
-    files = meta.get("chunk_files") or [meta["file"]]
-    parts = []
-    for i, f in enumerate(files):
-        rows = n if len(files) == 1 else None
-        parts.append(decode_file(meta, (root / f).read_bytes(), rows))
-    if meta["enc"] == "bits" and len(files) > 1:
-        raise AssertionError("bits chunks need per-chunk n")
-    return np.concatenate(parts) if parts else np.array([])
+def read_col(root: Path, meta: dict, n: int, man: dict | None = None) -> np.ndarray:
+    """Codes of a column through the chunk-aware reader (``chunk_starts`` from ``man``)."""
+    return codec.read_column(man if man is not None else {"n": n}, meta, lambda f: (root / f).read_bytes())
+
+
+def read_ids(root: Path, man: dict) -> list[str]:
+    return codec.read_ids(man, lambda f: (root / f).read_bytes())
 
 
 def col_by_key(man: dict, key: str) -> dict:
@@ -353,14 +351,23 @@ def test_catalog_lod_order_src_index_and_i16off(tmp_path):
     assert man["order"]["kind"] == "lod" and man["order"]["levels"] == [32768, 65536, 131072, n]
     assert man["order"]["sort"] == "tile-morton"
     assert man["pos"]["enc"] == "i16off" and man["pos"]["step_mas"] > 0
+    # IMPLEMENTATION_NOTES 98: head chunk = LOD base sample, every column and the ids split there
+    assert man["chunk_starts"] == [0, LOD_BASE]
     src = col_by_key(man, SRC_INDEX_KEY)
-    s2i = read_col(tmp_path, src, n).astype(np.int64)
+    assert len(src["chunk_files"]) == 2 and "file" not in src
+    s2i = read_col(tmp_path, src, n, man).astype(np.int64)
     assert np.array_equal(np.sort(s2i), np.arange(n))
     np.testing.assert_array_equal(s2i, res.order.stored_to_input)
-    ids = codec.decode_str(codec.gunzip((tmp_path / man["ids"]["file"]).read_bytes()))
+    assert man["ids"]["file"] is None and len(man["ids"]["chunks"]) == 2
+    ids = read_ids(tmp_path, man)
     assert ids == [str(i) for i in s2i]
+    head = codec.read_ids(man, lambda f: (tmp_path / f).read_bytes(), chunks=[0])
+    assert head == ids[:LOD_BASE]
     m = col_by_key(man, "m")
-    v = dequant(m, read_col(tmp_path, m, n))
+    assert len(m["chunk_files"]) == 2
+    assert len(read_col(tmp_path, m, n, man)) == n
+    assert len(codec.read_column(man, m, lambda f: (tmp_path / f).read_bytes(), chunks=[0])) == LOD_BASE
+    v = dequant(m, read_col(tmp_path, m, n, man))
     assert np.max(np.abs(v - t["m"][s2i])) <= 0.0005 + 1e-9
     ra, dec = codec.decode_pos(man["pos"], {k: (tmp_path / f).read_bytes() for k, f in man["pos"]["files"].items()})
     sep = np.hypot((ra - t["ra"][s2i]) * np.cos(np.radians(dec)), dec - t["dec"][s2i])
@@ -368,6 +375,14 @@ def test_catalog_lod_order_src_index_and_i16off(tmp_path):
     # n > T0_MAX: automatic density grid for the axes preset, first paint uses it
     assert [d["key"] for d in man["density"]] == ["p"]
     assert man["budget"]["first_paint_bytes"] < man["budget"]["total_bytes"]
+    # first paint (no row chunks): manifest + density grid + head chunk of every column + head ids
+    fp = {e.path for e in res.writer.ledger.entries if e.first_paint}
+    want = {"manifest.json", man["density"][0]["file"], m["chunk_files"][0], src["chunk_files"][0],
+            man["ids"]["chunks"][0]}
+    assert fp == want
+    sizes = {e.path: e.bytes for e in res.writer.ledger.entries}
+    assert man["budget"]["first_paint_bytes"] == sum(sizes[p] for p in want)
+    assert not any(p.startswith("pos/") for p in fp)
 
 
 def test_catalog_chunked_columns_and_ids(tmp_path, monkeypatch):
@@ -377,10 +392,14 @@ def test_catalog_chunked_columns_and_ids(tmp_path, monkeypatch):
     man = res.manifest
     assert man["chunk_rows"] == 10
     assert_valid(man)
+    assert "chunk_starts" not in man           # n <= LOD_MIN_N: the ceil(n / chunk_rows) rule
     m = col_by_key(man, "F444W")
     assert "file" not in m and len(m["chunk_files"]) == 3
     assert all(".c00" in Path(f).name for f in m["chunk_files"])
     v = dequant(m, np.concatenate([decode_file(m, (tmp_path / f).read_bytes()) for f in m["chunk_files"]]))
+    np.testing.assert_array_equal(read_col(tmp_path, m, 25, man),
+                                  np.concatenate([decode_file(m, (tmp_path / f).read_bytes())
+                                                  for f in m["chunk_files"]]))
     ok = np.isfinite(t["F444W"])
     assert np.max(np.abs(v[ok] - t["F444W"][ok])) <= 0.0005 + 1e-9
     assert man["ids"]["file"] is None and len(man["ids"]["chunks"]) == 3
@@ -389,6 +408,194 @@ def test_catalog_chunked_columns_and_ids(tmp_path, monkeypatch):
     g = col_by_key(man, "good")
     bits = [decode_file(g, (tmp_path / f).read_bytes(), 10) for f in g["chunk_files"]]
     assert np.concatenate(bits)[:25].tolist() == [int(b) for b in t["good"]]
+
+
+# ---------------------------------------------------------------------------
+# head chunk: chunk_starts (IMPLEMENTATION_NOTES 98) and the first-paint ledger
+# ---------------------------------------------------------------------------
+
+def test_head_chunk_starts_rule():
+    assert catalog.head_chunk_starts(0) is None
+    assert catalog.head_chunk_starts(1) is None
+    assert catalog.head_chunk_starts(LOD_MIN_N) is None
+    assert catalog.head_chunk_starts(LOD_MIN_N + 1) == [0, LOD_BASE]
+    assert catalog.head_chunk_starts(LOD_BASE + CHUNK_ROWS) == [0, LOD_BASE]
+    assert catalog.head_chunk_starts(LOD_BASE + CHUNK_ROWS + 1) == [0, LOD_BASE, LOD_BASE + CHUNK_ROWS]
+    s = catalog.head_chunk_starts(5_000_000)
+    assert s == [0, LOD_BASE] + [LOD_BASE + k * CHUNK_ROWS for k in range(1, 5)]
+    assert all(b > a for a, b in zip(s, s[1:])) and s[-1] < 5_000_000
+    # the chunk-aware reader derives the same ranges from the manifest
+    man = {"n": 5_000_000, "chunk_rows": CHUNK_ROWS, "chunk_starts": s}
+    r = codec.chunk_ranges(man)
+    assert r[0] == (0, LOD_BASE) and r[-1] == (s[-1], 5_000_000)
+    assert all(b - a <= CHUNK_ROWS for a, b in r)
+
+
+def _small_lod(monkeypatch, lod_min_n=16, lod_base=8, chunk_rows=10):
+    """Shrink the chunk constants of the writer so a tiny catalog takes the chunk_starts path."""
+    monkeypatch.setattr(catalog, "LOD_MIN_N", lod_min_n)
+    monkeypatch.setattr(catalog, "LOD_BASE", lod_base)
+    monkeypatch.setattr(catalog, "CHUNK_ROWS", chunk_rows)
+
+
+def _unicode_table(n: int) -> Table:
+    t = make_table(n, seed=5)
+    t["id"] = np.array([["Ü", "日本", "a", "☃"][i % 4] + f"{i}" for i in range(n)], dtype="U12")
+    return t
+
+
+@pytest.mark.parametrize("exact_rows", [False, True])
+def test_catalog_chunk_starts_match_unchunked(tmp_path, monkeypatch, exact_rows):
+    """Every column and the ids split at chunk_starts decode identically to the one-file bundle."""
+    n = 37
+    t = _unicode_table(n)
+    plain = catalog.write(make_spec(t, exact_rows=exact_rows), tmp_path / "plain").manifest
+    assert "chunk_starts" not in plain
+    _small_lod(monkeypatch)
+    ledger = Ledger()
+    res = catalog.write(make_spec(t, exact_rows=exact_rows), tmp_path / "chunked", ledger=ledger)
+    man = res.manifest
+    assert_valid(man)
+    assert man["chunk_starts"] == [0, 8, 18, 28]           # 18 and 28: bits chunks not byte aligned
+    on_disk = json.loads((tmp_path / "chunked" / "manifest.json").read_text("utf-8"))
+    assert on_disk["chunk_starts"] == [0, 8, 18, 28]
+    assert [c["key"] for c in man["cols"]] == [c["key"] for c in plain["cols"]]
+    for c, p in zip(man["cols"], plain["cols"]):
+        assert "file" not in c and len(c["chunk_files"]) == 4, c["key"]
+        assert [Path(f).name.split(".")[1] for f in c["chunk_files"]] == ["c000", "c001", "c002", "c003"]
+        got = read_col(tmp_path / "chunked", c, n, man)
+        want = read_col(tmp_path / "plain", p, n, plain)
+        assert len(got) == n
+        assert got.tolist() == want.tolist(), c["key"]
+        # every chunk decodes to exactly its own row count
+        for ci, (a, b) in enumerate(codec.chunk_ranges(man, len(c["chunk_files"]))):
+            part = codec.read_column(man, c, lambda f: (tmp_path / "chunked" / f).read_bytes(), chunks=[ci])
+            assert part.tolist() == want[a:b].tolist()
+        for k in ("lo", "hi", "step", "levels", "center", "nvalid"):
+            assert c.get(k) == p.get(k), (c["key"], k)
+    assert man["ids"]["file"] is None and len(man["ids"]["chunks"]) == 4
+    ids = read_ids(tmp_path / "chunked", man)
+    assert ids == read_ids(tmp_path / "plain", plain) == list(t["id"]) == res.ids
+    head = codec.read_ids(man, lambda f: (tmp_path / "chunked" / f).read_bytes(), chunks=[0])
+    assert head == ids[:8]
+    if not exact_rows:
+        assert col_by_key(man, "note")["enc"] == "str"
+        assert read_col(tmp_path / "chunked", col_by_key(man, "note"), n, man).tolist() == list(t["note"])
+    # positions and limits stay single files
+    assert all(".c0" not in f for f in man["pos"]["files"].values())
+    assert all(".c0" not in c["limits"]["file"] for c in man["cols"] if c.get("limits"))
+    # first-paint ledger: manifest + every chunk of the two axis columns (no density: n <= T0_MAX;
+    # the scatter reads them whole) + the list's first screen (rows/r0000, else the head chunk of
+    # every column and the head ids chunk)
+    fp = {e.path for e in ledger.entries if e.first_paint}
+    heads = {c["key"]: c["chunk_files"][0] for c in man["cols"]}
+    want = {"manifest.json", *col_by_key(man, "F444W")["chunk_files"], *col_by_key(man, "flux")["chunk_files"]}
+    if exact_rows:
+        want.add(man["rows"]["files"][0])
+    else:
+        want |= set(heads.values()) | {man["ids"]["chunks"][0]}
+    assert fp == want
+    assert set(catalog.first_paint_files(man)) | {"manifest.json"} == want
+    sizes = {e.path: e.bytes for e in ledger.entries}
+    assert man["budget"]["first_paint_bytes"] == sum(sizes[p] for p in want) == ledger.first_paint("src")
+    assert sizes["manifest.json"] == (tmp_path / "chunked" / "manifest.json").stat().st_size
+    assert man["budget"]["total_bytes"] == ledger.total("src")
+
+
+@pytest.mark.parametrize("n", [0, 1, 9])
+def test_catalog_chunk_starts_tiny(tmp_path, monkeypatch, n):
+    # LOD_MIN_N patched to 0: n = 1 gives chunk_starts [0] (one chunk file per column);
+    # n = 9 gives [0, 8]; n = 0 keeps the one-file layout (no chunk_starts)
+    _small_lod(monkeypatch, lod_min_n=0)
+    t = _unicode_table(n)
+    res = catalog.write(make_spec(t), tmp_path)
+    man = res.manifest
+    assert_valid(man)
+    want = {0: None, 1: [0], 9: [0, 8]}[n]
+    assert man.get("chunk_starts") == want
+    for c in man["cols"]:
+        assert len(codec.column_files(c)) == (1 if want is None else len(want))
+        assert len(read_col(tmp_path, c, n, man)) == n
+    assert read_ids(tmp_path, man) == list(t["id"])
+
+
+def test_first_paint_files_rules():
+    cols = [{"key": "a", "enc": "u16q", "chunk_files": ["cols/a.c000.x.bin", "cols/a.c001.x.bin"]},
+            {"key": "b", "enc": "u16q", "chunk_files": ["cols/b.c000.x.bin", "cols/b.c001.x.bin"]},
+            {"key": "c", "enc": "cat8", "file": "cols/c.x.bin"}]
+    ids = {"file": None, "enc": "str", "chunks": ["ids.c000.x.bin", "ids.c001.x.bin"]}
+    base = {"n": 200000, "cols": cols, "ids": ids, "chunk_starts": [0, LOD_BASE]}
+    # no density, no presets: every chunk of the first two numeric columns (the scatter reads
+    # them whole), then the list's head chunks
+    assert catalog.first_paint_files(base) == ["cols/a.c000.x.bin", "cols/a.c001.x.bin", "cols/b.c000.x.bin",
+                                               "cols/b.c001.x.bin", "cols/c.x.bin", "ids.c000.x.bin"]
+    # a count grid wins over a binned statistic listed first; row chunks replace the head chunks
+    man = {**base, "density": [{"key": "s", "file": "density/s.bin", "stat": "median"},
+                               {"key": "d", "file": "density/d.bin"}],
+           "rows": {"chunk": 4096, "files": ["rows/r0000.x.bin", "rows/r0001.x.bin"]}}
+    assert catalog.first_paint_files(man) == ["density/d.bin", "rows/r0000.x.bin"]
+    man["density"] = man["density"][:1]
+    assert catalog.first_paint_files(man) == ["density/s.bin", "rows/r0000.x.bin"]
+    # axes preset picks its stored base keys
+    man = {**base, "presets": [{"key": "p", "kind": "axes", "x": "b - a", "y": "b"}],
+           "rows": {"chunk": 4096, "files": ["rows/r0000.x.bin"]}}
+    assert catalog.first_paint_files(man) == ["cols/b.c000.x.bin", "cols/b.c001.x.bin", "cols/a.c000.x.bin",
+                                              "cols/a.c001.x.bin", "rows/r0000.x.bin"]
+    # n = 0: nothing for the list
+    assert catalog.first_paint_files({**base, "n": 0, "density": [{"key": "d", "file": "d.bin"}]}) == ["d.bin"]
+
+
+def test_chunk_reader_errors():
+    with pytest.raises(ValueError, match="chunk_starts"):
+        codec.catalog_chunk_starts({"n": 10, "chunk_starts": [0, 10]})
+    with pytest.raises(ValueError, match="chunk_starts"):
+        codec.catalog_chunk_starts({"n": 10, "chunk_starts": []})
+    with pytest.raises(ValueError, match="chunk_starts"):
+        codec.catalog_chunk_starts({"n": 10, "chunk_starts": [0, 5, 5]})
+    with pytest.raises(ValueError, match="chunk_starts"):
+        codec.catalog_chunk_starts({"n": 10, "chunk_starts": [0, 2.0]})
+    with pytest.raises(ValueError, match="chunk_rows"):
+        codec.catalog_chunk_starts({"n": 10, "chunk_rows": 0})
+    with pytest.raises(ValueError, match="manifest n"):
+        codec.catalog_chunk_starts({"n": -1})
+    assert codec.catalog_chunk_starts({"n": 0}) == [0]
+    assert codec.catalog_chunk_starts({"n": 25, "chunk_rows": 10}) == [0, 10, 20]
+    assert codec.catalog_chunk_starts({"n": 25, "chunk_rows": 10, "chunk_starts": None}) == [0, 10, 20]
+    assert codec.chunk_ranges({"n": 25, "chunk_starts": [0, 3]}, 1) == [(0, 25)]
+    with pytest.raises(ValueError, match="3 chunk files, expected 2"):
+        codec.chunk_ranges({"n": 25, "chunk_starts": [0, 3]}, 3)
+    # a chunk whose row count disagrees with chunk_starts is an error
+    meta = {"key": "x", "enc": "u8q", "lo": 0, "hi": 1, "chunk_files": ["a", "b"]}
+    data = {"a": codec.file_bytes("u8q", np.ones(4, np.uint8)), "b": codec.file_bytes("u8q", np.ones(6, np.uint8))}
+    with pytest.raises(ValueError, match="chunk 0: 4 rows, expected 3"):
+        codec.read_column({"n": 10, "chunk_starts": [0, 3], "cols": [meta]}, "x", data.__getitem__)
+    assert len(codec.read_column({"n": 10, "chunk_starts": [0, 4], "cols": [meta]}, "x", data.__getitem__)) == 10
+    with pytest.raises(KeyError):
+        codec.read_column({"n": 10, "cols": [meta]}, "nope", data.__getitem__)
+
+
+def test_golden_catalog_chunks_decode():
+    """The cross-language chunk_starts golden (tests/golden/codec, kind catalog_chunks)."""
+    gold = Path(__file__).resolve().parents[1] / "golden" / "codec"
+    idx = json.loads((gold / "index.json").read_text("utf-8"))
+    (case,) = [c for c in idx["cases"] if c["kind"] == "catalog_chunks"]
+    man = case["manifest"]
+    assert_valid({**man, "id": "chunks"})
+    assert man["chunk_starts"] == [0, 3, 7]
+    read = lambda f: (gold / f).read_bytes()  # noqa: E731
+    assert codec.read_ids(man, read) == case["expected"]["ids"]
+    for c in man["cols"]:
+        codes = codec.read_column(man, c, read)
+        exp = case["expected"]["cols"][c["key"]]
+        if c["enc"] in ("str", "bits"):
+            assert codes.tolist() == exp
+        else:
+            got = dequant(c, codes).tolist()
+            for g, x in zip(got, exp):
+                if x is None:
+                    assert g is None or (isinstance(g, float) and math.isnan(g))
+                else:
+                    assert g == pytest.approx(x, rel=1e-12)
 
 
 # ---------------------------------------------------------------------------
@@ -756,7 +963,9 @@ def test_catalog_5m_rows_perf(tmp_path):
     dt = time.perf_counter() - t0
     man = res.manifest
     assert_valid(man)
-    assert man["order"]["levels"][-1] == n and len(col_by_key(man, "m")["chunk_files"]) == 5
+    # chunk_starts [0, LOD_BASE, LOD_BASE + CHUNK_ROWS, ...]: 6 chunks for 5M rows
+    assert man["chunk_starts"] == catalog.head_chunk_starts(n) and len(man["chunk_starts"]) == 6
+    assert man["order"]["levels"][-1] == n and len(col_by_key(man, "m")["chunk_files"]) == 6
     errs, _ = res.writer.ledger.check()
     assert errs == []
     assert dt < 300, f"5M-row catalog took {dt:.0f} s"

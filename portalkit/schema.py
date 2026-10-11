@@ -1016,7 +1016,53 @@ _COL_KEYS_OPT = ("file", "chunk_files", "label", "unit", "filter", "err", "group
                  "quantiles", "nvalid", "levels", "colors", "default_off", "limits", "validity")
 
 
-def _col(e: _E, cp: str, c: dict, n: Any, chunk_rows: Any) -> None:
+# stands in for a ``chunk_starts`` that is present but invalid: the chunk-count checks are skipped
+# (its own errors are already recorded) instead of falling back to the chunk_rows rule
+_BAD_STARTS: Any = object()
+
+
+def _want_chunks(n: Any, chunk_rows: Any, starts: Any) -> int | None:
+    """Number of chunk files a chunked column / ``ids.chunks`` must have (None: unknown).
+
+    ``len(chunk_starts)`` when the manifest carries a valid ``chunk_starts`` (IMPLEMENTATION_NOTES
+    98); None when it carries an invalid one (:data:`_BAD_STARTS`); else
+    ``max(1, ceil(n / chunk_rows))``.
+    """
+    if starts is _BAD_STARTS:
+        return None
+    if starts is not None:
+        return len(starts)
+    if _is_int(n) and _is_int(chunk_rows) and chunk_rows > 0:
+        return max(1, -(-n // chunk_rows))
+    return None
+
+
+def _chunk_starts(e: _E, cs: Any, n: Any) -> list | None:
+    """Validate manifest ``chunk_starts``; returns it when valid, else None (errors recorded)."""
+    if not _list(e, "chunk_starts", cs, nonempty=True):
+        return None
+    ok = True
+    for k, v in enumerate(cs):
+        kp = _p("chunk_starts", k)
+        if not _is_int(v):
+            e(kp, f"{v!r} must be an integer")
+            ok = False
+        elif k == 0:
+            if v != 0:
+                e(kp, f"first chunk start must be 0, got {v}")
+                ok = False
+        else:
+            prev = cs[k - 1]
+            if _is_int(prev) and v <= prev:
+                e(kp, f"chunk starts must be strictly increasing ({prev} then {v})")
+                ok = False
+            if _is_int(n) and v >= n:
+                e(kp, f"chunk start {v} >= n {n}")
+                ok = False
+    return list(cs) if ok else None
+
+
+def _col(e: _E, cp: str, c: dict, n: Any, chunk_rows: Any, starts: Any = None) -> None:
     _keys(e, cp, c, _COL_KEYS_REQ, _COL_KEYS_OPT)
     if _str(e, _p(cp, "key"), c.get("key")) and not _COL_KEY.match(c["key"]):
         e(_p(cp, "key"), f"{c['key']!r} must match [A-Za-z_][A-Za-z0-9_.]* (section 4.4)")
@@ -1032,11 +1078,10 @@ def _col(e: _E, cp: str, c: dict, n: Any, chunk_rows: Any) -> None:
     if has_chunks and _list(e, _p(cp, "chunk_files"), c["chunk_files"], nonempty=True):
         for i, f in enumerate(c["chunk_files"]):
             _relpath(e, _p(_p(cp, "chunk_files"), i), f)
-        if _is_int(n) and _is_int(chunk_rows) and chunk_rows > 0:
-            want = max(1, -(-n // chunk_rows))
-            if len(c["chunk_files"]) != want:
-                e(_p(cp, "chunk_files"), f"{len(c['chunk_files'])} chunks, expected {want} "
-                                        f"(n={n}, chunk_rows={chunk_rows})")
+        want = _want_chunks(n, chunk_rows, starts)
+        if want is not None and len(c["chunk_files"]) != want:
+            why = f"len(chunk_starts)={want}" if starts is not None else f"n={n}, chunk_rows={chunk_rows}"
+            e(_p(cp, "chunk_files"), f"{len(c['chunk_files'])} chunks, expected {want} ({why})")
     for k in ("label", "unit", "filter", "err", "group", "note", "fmt", "validity"):
         _opt_str(e, cp, c, k, nonempty=(k not in ("unit", "note", "label")))
     for k in ("log", "invert", "shuffle"):
@@ -1107,7 +1152,8 @@ def validate_catalog(obj: Any) -> list[str]:
     json_errors(obj, "", e)
     _schema_key(e, obj, "catalog", True)
     _keys(e, "", obj, ("id", "n", "order", "cols"),
-          ("schema", "title", "build", "chunk_rows", "ids", "pos", "bbox", "virtual", "groups", "presets",
+          ("schema", "title", "build", "chunk_rows", "chunk_starts", "ids", "pos", "bbox", "virtual", "groups",
+           "presets",
            "density", "rows", "manifold", "links", "provenance", "caveats", "budget"))
     _str(e, "id", obj.get("id"))
     _opt_str(e, "", obj, "title", nonempty=False)
@@ -1120,6 +1166,14 @@ def validate_catalog(obj: Any) -> list[str]:
     chunk_rows = obj.get("chunk_rows")
     if "chunk_rows" in obj and not _num(e, "chunk_rows", chunk_rows, 1, integer=True):
         chunk_rows = None
+    # IMPLEMENTATION_NOTES 98: explicit chunk starts (head chunk = LOD base sample); without
+    # them chunks are ceil(n / chunk_rows) slices of chunk_rows rows
+    starts = None
+    if obj.get("chunk_starts") is not None:
+        starts = _chunk_starts(e, obj["chunk_starts"], n)
+        if starts is None:
+            starts = _BAD_STARTS
+    eff_rows = chunk_rows if chunk_rows is not None else CHUNK_ROWS
     order = obj.get("order")
     if order is not None and _obj(e, "order", order):
         _keys(e, "order", order, ("kind",), ("seed", "levels", "sort"))
@@ -1146,9 +1200,15 @@ def validate_catalog(obj: Any) -> list[str]:
         _str(e, "ids.enc", ids.get("enc"), choices=("str",))
         if ids.get("file") is not None:
             _relpath(e, "ids.file", ids["file"])
-        if ids.get("chunks") is not None and _list(e, "ids.chunks", ids["chunks"]):
+        if ids.get("file") is not None and ids.get("chunks") is not None:
+            e("ids", "needs at most one of 'file' or 'chunks'")
+        if ids.get("chunks") is not None and _list(e, "ids.chunks", ids["chunks"], nonempty=True):
             for i, f in enumerate(ids["chunks"]):
                 _relpath(e, _p("ids.chunks", i), f)
+            want = _want_chunks(n, eff_rows, starts)
+            if want is not None and len(ids["chunks"]) != want:
+                why = f"len(chunk_starts)={want}" if starts is not None else f"n={n}, chunk_rows={eff_rows}"
+                e("ids.chunks", f"{len(ids['chunks'])} chunks, expected {want} ({why})")
         if ids.get("alias_file") is not None:
             _relpath(e, "ids.alias_file", ids["alias_file"])
     pos = obj.get("pos")
@@ -1188,7 +1248,7 @@ def validate_catalog(obj: Any) -> list[str]:
         for i, c in enumerate(cols):
             cp = _p("cols", i)
             if _obj(e, cp, c):
-                _col(e, cp, c, n, chunk_rows if chunk_rows is not None else CHUNK_ROWS)
+                _col(e, cp, c, n, eff_rows, starts)
         for i, c in enumerate(cols):
             if not isinstance(c, dict):
                 continue
