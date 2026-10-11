@@ -722,12 +722,22 @@ def test_unattached_resources_move_caps_to_disabled_and_prune_panes():
     assert caps.pane_types(plain["layout"]) == caps.pane_types(doc["layout"])
     assert set(plain["caps"]["disabled"]) == set(doc["caps"]["disabled"])
     assert validate_page(doc) == []
-    # with filters and features attached nothing moves
+    # extinction_vectors_on_ccd needs an extinction dataset too (IMPLEMENTATION_NOTES 110)
+    assert doc["caps"]["disabled"]["extinction_vectors_on_ccd"] == caps.NEEDS["extinction_vectors_on_ccd"][1]
+    # with filters and features (and extinction) attached nothing moves
     doc = config.assemble(_sed_page(), ds, {}, res, portal=PORTAL,
                           refs={"flt": {"kind": "filters", "url": "{res}f.json"},
-                                "feat": {"kind": "features", "url": "{res}feat.json"}})
+                                "feat": {"kind": "features", "url": "{res}feat.json"},
+                                "ext": {"kind": "extinction", "url": "{res}e.json"}})
     assert doc["caps"]["enabled"] == res.enabled
     assert doc["caps"]["disabled"] == res.disabled
+    # the shared attachment rule (caps.attachable_resources) gives exactly what is needed
+    urls = {k: "{res}" + k + ".json" for k in caps.SHARED_RESOURCES}
+    refs = caps.resource_refs(caps.attachable_resources(_sed_page(), ds, res), urls, taken=ds)
+    doc = config.assemble(_sed_page(), ds, {}, res, portal=PORTAL, refs=refs)
+    assert doc["caps"]["enabled"] == res.enabled
+    assert doc["caps"]["disabled"] == res.disabled
+    assert {r["kind"] for r in refs.values()} <= {r["kind"] for r in doc["datasets"].values()}
 
 
 def test_prune_drops_panes_that_only_served_dropped_caps():

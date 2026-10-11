@@ -826,11 +826,21 @@ def test_narrative_beats_leave_no_stray_overlays(e2e, request, p2k, open_page):
 
 
 def _collect_pairs() -> list[tuple[str, str]]:
+    """Enabled caps of each page, resolved as build.py resolves them (ms.resolve_page uses
+    the shared attachment rule, caps.attachable_resources; IMPLEMENTATION_NOTES 110).
+
+    resolve plus attachable_resources leaves no unmet need by construction: every shared
+    kind an enabled NEEDS capability requires is attached. The assertion makes a future
+    divergence between the two fail here, so the matrix cannot shrink silently."""
     ds, _ = ms.datasets(N)
     out = []
     for spec in ms.page_specs():
-        for cap in ms.resolve_page(spec, ds).enabled:
-            out.append((spec.id, cap))
+        res = ms.resolve_page(spec, ds)
+        pd = capsmod.page_data(spec, ds, {})
+        kinds = set(capsmod.available_kinds(pd, ms.page_resources(spec, ds, res), res.layout))
+        unmet = capsmod.unmet_needs(res.enabled, kinds)
+        assert not unmet, (spec.id, sorted(unmet))
+        out.extend((spec.id, cap) for cap in res.enabled)
     return out
 
 

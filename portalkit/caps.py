@@ -16,19 +16,23 @@ hips.json, ...). They take precedence over the specs, so a foreign (GC) catalog 
 table resolves from its manifest.
 
 Capabilities that draw on a document of a given kind (:data:`NEEDS`, IMPLEMENTATION_NOTES
-item 89) stay off unless the page has one: ``hips_layer_stacking`` needs a HiPS document,
-``live_sed_viewer`` a filters dataset and ``labeled_features_overlay`` a features dataset.
+items 89 and 110) stay off unless the page has one: ``hips_layer_stacking`` needs a HiPS
+document, ``live_sed_viewer`` a filters dataset, ``labeled_features_overlay`` a features
+dataset and ``extinction_vectors_on_ccd`` an extinction dataset.
 The kinds available to a page are those of its dataset specs and of the datasets its
 adapter layout names in pane options (``sky options.hips`` and the like), plus ``resources``, the shared
 resource kinds the caller attaches by reference (default :data:`SHARED_RESOURCES`: the
 build publishes templates, filters, extinction and features once and refers to them on
-demand). A caller that attaches only some of them (a test fixture, a page without shared
-resources) passes the kinds it attaches; ``resources=()`` means none.
+demand). A caller that attaches only some of them (a page without shared resources) passes
+the kinds it attaches; ``resources=()`` means none. Which shared kinds a resolved page
+actually gets is :func:`attachable_resources` (the rule ``build.py`` applies; the
+synthetic fixture and the caps matrix use it too).
 
 Default panes carry their data wiring (item 88): scatter and manifold panes built by the
 resolver list the isochrone tracks (slugs, :func:`overlay_slug`) and the ``<law>_vector`` of
 first attached isochrones / extinction dataset (or of the shared extinction resource, G23)
 in ``options.overlays`` when ``isochrones_or_tracks`` / ``extinction_vectors_on_ccd`` are on,
+followed (extinction) by the reddening-vector dim layers of the page's overlays document,
 and a manifold pane takes ``options.dims`` as an explicit key list: the catalog manifest's
 ``manifold.dims``, else the keys of its first all-numeric group of 3+ dims, else every
 numeric dim.
@@ -53,7 +57,9 @@ __all__ = [
     "caps_from_flags", "iter_panes", "pane_types", "missing_providers", "default_axes",
     "insert_panes", "default_layout", "manifold_group", "SPEC_KINDS", "SHARED_RESOURCES",
     "NEEDS", "spec_kind", "available_kinds", "unmet_needs", "overlay_slug", "default_overlays",
-    "DS_OPTIONS", "layout_datasets", "SHARED_EXTINCTION_VECTOR",
+    "DS_OPTIONS", "layout_datasets", "SHARED_EXTINCTION_VECTOR", "RESOURCE_CAPS",
+    "RESOURCE_REF_IDS", "attachable_resources", "resource_refs", "dim_vector_layers",
+    "REDDENING_LAYER_ARCHETYPES",
 ]
 
 #: The 39 capabilities of section 8.2, in table order.
@@ -222,7 +228,25 @@ NEEDS: dict[str, tuple[str, str]] = {
     "hips_layer_stacking": ("hips", "no HiPS document (hips dataset) is attached to this page"),
     "live_sed_viewer": ("filters", "no filters dataset is attached to this page"),
     "labeled_features_overlay": ("features", "no features dataset is attached to this page"),
+    "extinction_vectors_on_ccd": ("extinction", "no extinction dataset is attached to this page"),
 }
+
+#: Capabilities that use a shared ``{res}`` resource of each kind. A page that has no dataset
+#: of a kind gets the shared document attached by reference when one of these capabilities is
+#: enabled (:func:`attachable_resources`; ``build.py`` and the synthetic fixture both use it).
+#: Every :data:`NEEDS` capability whose kind is a shared resource is listed under that kind,
+#: so resolving with all shared resources and attaching on demand agree.
+RESOURCE_CAPS: dict[str, tuple[str, ...]] = {
+    "templates": ("model_template_overlay", "live_sed_viewer"),
+    "filters": ("model_template_overlay", "live_sed_viewer", "av_slider",
+                "extinction_vectors_on_ccd"),
+    "extinction": ("av_slider", "extinction_vectors_on_ccd", "model_template_overlay"),
+    "features": ("labeled_features_overlay",),
+}
+
+#: DatasetRef id of an attached shared resource (``_`` is prepended while the id is taken).
+RESOURCE_REF_IDS: dict[str, str] = {"templates": "tpl", "filters": "filters", "extinction": "ext",
+                                    "features": "feat"}
 
 
 @dataclass
@@ -478,6 +502,51 @@ def unmet_needs(caps: Iterable[str], kinds: Iterable[str]) -> dict[str, str]:
     return {c: NEEDS[c][1] for c in caps if c in NEEDS and NEEDS[c][0] not in kinds}
 
 
+def attachable_resources(page: PageSpec, datasets: Mapping[str, DatasetSpec], enabled: Any,
+                         manifests: Mapping[str, Any] | None = None) -> tuple[str, ...]:
+    """Shared resource kinds attached to ``page`` by reference (IMPLEMENTATION_NOTES 110).
+
+    A kind of :data:`RESOURCE_CAPS` is attached when one of its capabilities is in ``enabled``
+    (a list of capability names or a :class:`CapsResult`) and the page has no dataset of that
+    kind: neither among its datasets (with implied catalogs) nor among the datasets its
+    adapter layout names (which ``config.assemble`` attaches). The result is in
+    :data:`SHARED_RESOURCES` order.
+
+    This is the one attachment rule: ``build.py`` turns it into refs (:func:`resource_refs`)
+    after ``resolve(page, datasets, manifests)`` (``resources=None``), and the synthetic
+    fixture and the caps matrix do the same, so the caps a built page keeps equal the
+    resolver's."""
+    if isinstance(enabled, CapsResult):
+        enabled = enabled.enabled
+    on = set(enabled)
+    pd = page_data(page, datasets, manifests)
+    names = list(pd.ids) + [n for n in layout_datasets(page.layout) if n in datasets]
+    have = {spec_kind(datasets[k]) for k in names}
+    return tuple(kind for kind in SHARED_RESOURCES
+                 if kind not in have and on.intersection(RESOURCE_CAPS.get(kind, ())))
+
+
+def resource_refs(kinds: Iterable[str], urls: Mapping[str, str],
+                  taken: Iterable[str] = ()) -> dict[str, dict]:
+    """DatasetRefs ``{id: {kind, url}}`` for the attached shared resource ``kinds``.
+
+    ``urls`` maps a kind to its published URL (``{res}<path>``); ids come from
+    :data:`RESOURCE_REF_IDS`, with ``_`` prepended while the id is in ``taken`` (dataset ids
+    and refs of the build) or already used. A kind missing from ``urls`` raises KeyError."""
+    used = set(taken)
+    out: dict[str, dict] = {}
+    for kind in kinds:
+        if kind not in RESOURCE_REF_IDS:
+            raise ValueError(f"{kind!r} is not a shared resource kind ({', '.join(SHARED_RESOURCES)})")
+        url = urls[kind]
+        rid = RESOURCE_REF_IDS[kind]
+        while rid in used:
+            rid = "_" + rid
+        used.add(rid)
+        out[rid] = {"kind": kind, "url": url}
+    return out
+
+
 def overlay_slug(label: str) -> str:
     """Overlay id of an isochrone track label: lower case, runs of characters other than
     ``[a-z0-9]`` become ``_`` (``"MIST 1 Myr"`` -> ``mist_1_myr``; IMPLEMENTATION_NOTES
@@ -490,14 +559,21 @@ def overlay_slug(label: str) -> str:
 SHARED_EXTINCTION_VECTOR: str = f"{overlay_slug(ExtinctionSpec().law)}_vector"
 
 
+#: archetypes whose resolver-built panes list the overlays document's reddening-vector layers
+#: by default (IMPLEMENTATION_NOTES 110: "wavelength/narrative overlay documents")
+REDDENING_LAYER_ARCHETYPES = frozenset({"wavelength", "narrative"})
+
+
 def default_overlays(pd: PageData, enabled: Iterable[str]) -> list[str]:
     """Dim overlay ids for a resolver-built scatter / manifold pane (item 88): the track
     slugs of the page's first isochrones dataset when ``isochrones_or_tracks`` is on, then
     the ``<law>_vector`` of its first extinction dataset when ``extinction_vectors_on_ccd``
-    is on. The panes read one document per kind (the first in page order, ``docOf`` in
-    ``scatter.js``), so later datasets of a kind add nothing. A page without an extinction
-    dataset whose available kinds include the shared extinction resource gets
-    :data:`SHARED_EXTINCTION_VECTOR`."""
+    is on, followed, on wavelength/narrative pages only (:data:`REDDENING_LAYER_ARCHETYPES`),
+    by the reddening-vector layers of its overlays document (:func:`dim_vector_layers`,
+    IMPLEMENTATION_NOTES 110). The panes read one document per
+    kind (the first in page order, ``docOf`` in ``scatter.js``), so later datasets of a kind
+    add nothing. A page without an extinction dataset whose available kinds include the shared
+    extinction resource gets :data:`SHARED_EXTINCTION_VECTOR`."""
     enabled = set(enabled)
     out: list[str] = []
     if "isochrones_or_tracks" in enabled:
@@ -521,6 +597,30 @@ def default_overlays(pd: PageData, enabled: Iterable[str]) -> list[str]:
             vid = SHARED_EXTINCTION_VECTOR
         if vid and vid not in out:
             out.append(vid)
+        if pd.page.archetype in REDDENING_LAYER_ARCHETYPES:
+            for lid in dim_vector_layers(pd):
+                if lid not in out:
+                    out.append(lid)
+    return out
+
+
+def dim_vector_layers(pd: PageData) -> list[str]:
+    """Ids of the reddening-vector layers (``space:"dim"``, ``kind:"vector"``, ``default`` not
+    false) of the page's first overlays dataset (the document the panes read; the written
+    document in ``pd.manifests`` wins over the spec). :func:`default_overlays` lists them
+    after the ``<law>_vector`` on wavelength/narrative pages when ``extinction_vectors_on_ccd``
+    is on (IMPLEMENTATION_NOTES 110)."""
+    k = pd.first(OverlaySpec)
+    if k is None:
+        return []
+    doc = pd.manifests.get(k)
+    layers = doc.get("layers") if isinstance(doc, Mapping) else pd.specs[k].layers
+    out: list[str] = []
+    for lay in layers or []:
+        if (isinstance(lay, Mapping) and lay.get("space") == "dim" and lay.get("kind") == "vector"
+                and lay.get("default", True) is not False and isinstance(lay.get("id"), str)
+                and lay["id"] and lay["id"] not in out):
+            out.append(lay["id"])
     return out
 
 

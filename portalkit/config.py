@@ -841,11 +841,16 @@ def assemble(page: PageSpec, datasets: Mapping[str, DatasetSpec], manifests: Map
     before = set(capsmod.missing_providers(layout, enabled))
     layout = _prune_added(layout, caps.added_panes, enabled, unmet, kinds)
     if "extinction" not in kinds:
-        # the resolver's shared-resource vector (caps.default_overlays) has no document here;
-        # only resolver-built panes lose it (an adapter's overlay list is validated as given)
+        # the resolver's shared-resource vector (caps.default_overlays) has no document here,
+        # and extinction_vectors_on_ccd is off (IMPLEMENTATION_NOTES 110), so the overlays
+        # document's reddening layers it listed go too; only resolver-built panes lose them
+        # (an adapter's overlay list is validated as given)
         built = None if page.layout is None else {
             p.get("id", p.get("pane")) for p in caps.added_panes}
-        layout = _drop_overlay(layout, capsmod.SHARED_EXTINCTION_VECTOR, built)
+        listed = (capsmod.dim_vector_layers(pd)
+                  if page.archetype in capsmod.REDDENING_LAYER_ARCHETYPES else [])
+        for oid in [capsmod.SHARED_EXTINCTION_VECTOR] + listed:
+            layout = _drop_overlay(layout, oid, built)
     for cap in capsmod.missing_providers(layout, enabled):
         if cap in before:
             continue

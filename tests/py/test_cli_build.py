@@ -192,6 +192,35 @@ def test_page_json_refs_and_legacy(built):
     assert [p["id"] for p in portal["pages"]] == ["index", "explorer", "spectra"]
 
 
+def test_shared_resources_attached_by_the_caps_rule(built):
+    """IMPLEMENTATION_NOTES 110: build attaches the shared resources that
+    ``caps.attachable_resources`` names (refs named by ``caps.resource_refs``), so
+    extinction_vectors_on_ccd stays on with the shared G23 vector on a page that has no
+    extinction dataset, and every NEEDS capability a page keeps has its document."""
+    from portalkit import caps
+    page = script_json(built["portal"] / "explorer.html", "pk-page")
+    enabled = page["caps"]["enabled"]
+    assert "extinction_vectors_on_ccd" in enabled
+    kinds = {r["kind"] for r in page["datasets"].values()}
+    assert "extinction" in kinds
+    ext = [k for k, r in page["datasets"].items() if r["kind"] == "extinction"]
+    assert ext == ["ext"] and page["datasets"]["ext"]["url"].startswith("{res}")
+    # "tpl" is an adapter dataset id, so the attached templates ref (when any) is "_tpl"
+    if "templates" in kinds and "tpl" not in page["datasets"]:
+        assert page["datasets"]["_tpl"]["kind"] == "templates"
+    ov = [p.get("options", {}).get("overlays") for p in caps.iter_panes(page["layout"])
+          if p["pane"] in ("scatter", "manifold")]
+    assert ov and all(o and "g23_vector" in o for o in ov), ov
+    for p in ("index", "explorer", "spectra"):
+        doc = script_json(built["portal"] / f"{p}.html", "pk-page")
+        have = {r["kind"] for r in doc["datasets"].values()}
+        assert caps.unmet_needs(doc["caps"]["enabled"], have) == {}, p
+        for cap, (kind, reason) in caps.NEEDS.items():
+            if kind not in have and cap in doc["caps"]["disabled"]:
+                why = doc["caps"]["disabled"][cap]
+                assert why == reason or why.startswith("no pane"), (p, cap, why)
+
+
 def test_check_cli(built, capsys):
     code, out, _ = run(capsys, "check", str(built["dir"]))
     assert code == 0 and "check" in out

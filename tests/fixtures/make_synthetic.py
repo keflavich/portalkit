@@ -666,19 +666,26 @@ def _write_hips_stubs(proot: Path, hips: HipsSpec) -> None:
     f.write_bytes(b"SIMPLE  =                    T" + b" " * 50 + b"END" + b" " * 77 + b" " * (2880 - 160))
 
 
-#: shared resource kinds the fixture attaches by reference beyond a page's own dataset specs:
-#: only the features document (``feat``); templates, filters and extinction come from the
-#: page's ``tpl`` / ``flt`` / ``ext`` datasets
-ATTACHED_RESOURCES: tuple[str, ...] = ("features",)
-
-
 def resolve_page(page: PageSpec, ds: dict[str, Any], manifests: dict[str, Any] | None = None):
-    """``caps.resolve`` with the resources this fixture attaches (:data:`ATTACHED_RESOURCES`),
-    so the result equals the caps ``config.assemble`` keeps on the built page
-    (IMPLEMENTATION_NOTES item 89)."""
-    import inspect
-    kw = {"resources": ATTACHED_RESOURCES} if "resources" in inspect.signature(capsmod.resolve).parameters else {}
-    return capsmod.resolve(page, ds, manifests or {}, **kw)
+    """``caps.resolve`` as ``build.py`` calls it (every shared resource attachable,
+    ``resources=None``). The shared resources the page then gets by reference are
+    :func:`page_resources` (``caps.attachable_resources``, the rule ``build.py _page_refs``
+    applies; IMPLEMENTATION_NOTES 110), so the result equals the caps ``config.assemble``
+    keeps on the built page."""
+    return capsmod.resolve(page, ds, manifests or {})
+
+
+def page_resources(page: PageSpec, ds: dict[str, Any], result: Any,
+                   manifests: dict[str, Any] | None = None) -> tuple[str, ...]:
+    """Shared resource kinds attached to ``page`` by reference given its resolved caps."""
+    return capsmod.attachable_resources(page, ds, result, manifests)
+
+
+def page_refs(page: PageSpec, ds: dict[str, Any], result: Any, res_urls: dict[str, str],
+              manifests: dict[str, Any] | None = None) -> dict[str, dict]:
+    """DatasetRefs of the shared resources attached to ``page`` (``res_urls``: kind ->
+    ``{res}<path>``), named as ``build.py`` names them (``caps.resource_refs``)."""
+    return capsmod.resource_refs(page_resources(page, ds, result, manifests), res_urls, taken=ds)
 
 
 def pane_list(layout: dict) -> list[dict]:
@@ -772,17 +779,16 @@ def build_portal(root: str | Path, n: int, *, seed: int = SEED, force: bool = Fa
     atomic_write(proot / "data" / "narrative.json", dumps_json(config.narrative_document(ds["nar"])))
     _write_hips_stubs(proot, ds["hips"])
 
-    res_refs = {k: "{res}" + v for k, v in res_refs_raw.items() if k != "features"}
-    feat_ref = {"feat": {"kind": "features", "url": "{res}" + res_refs_raw["features"]}}
+    res_refs = {k: "{res}" + v for k, v in res_refs_raw.items()}
     pages: dict[str, PageInfo] = {}
     portal_pages = []
     budget = {"first_paint_bytes": int(ledger.first_paint())}
     for page in page_specs():
         result = resolve_page(page, ds, manifests)
-        # the features document is attached by reference where labeled_features_overlay is
-        # on (build.py _page_refs does the same; IMPLEMENTATION_NOTES item 89)
-        page_refs = feat_ref if "labeled_features_overlay" in result.enabled else {}
-        doc = config.assemble(page, ds, manifests, result, portal=PORTAL, refs=page_refs,
+        # shared resources the page's caps use are attached by reference, as build.py
+        # _page_refs does (one helper, IMPLEMENTATION_NOTES 110)
+        refs = page_refs(page, ds, result, res_refs, manifests)
+        doc = config.assemble(page, ds, manifests, result, portal=PORTAL, refs=refs,
                               res_refs=res_refs, vendor_assets=True, budget=budget)
         fname = f"{page.id}.html"
         nbytes = shell.write(proot / fname, doc)
@@ -850,8 +856,8 @@ def specs_for_flags(flags: list[str] | set[str], archetype: str, *, n: int = 8
         if archetype != "landing":
             page_ds.insert(0, "src")
     # a HiPS document wherever the legacy page drew a sky map: hips_layer_stacking needs one
-    # (IMPLEMENTATION_NOTES item 89). Filters, templates, extinction and features are shared
-    # resources that caps.resolve counts as attached by default.
+    # (IMPLEMENTATION_NOTES items 89 and 111). Filters, templates, extinction and features are
+    # shared resources that caps.resolve counts as attachable by default (item 110).
     if "sky" in flags or archetype == "wavelength" or "fits" in flags:
         h = hips_spec()
         if "fits" not in flags:

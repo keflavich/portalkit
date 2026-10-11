@@ -86,14 +86,6 @@ GATES = ("G1", "G2")
 _PAGE_ID_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*$")
 _RES_SPEC_KIND = ((TemplateSpec, "templates"), (FilterSetSpec, "filters"),
                   (ExtinctionSpec, "extinction"))
-#: capabilities that use a shared resource of each kind (refs added when none is attached)
-_CAP_RES = {
-    "templates": ("model_template_overlay", "live_sed_viewer"),
-    "filters": ("model_template_overlay", "live_sed_viewer", "av_slider",
-                "extinction_vectors_on_ccd"),
-    "extinction": ("av_slider", "extinction_vectors_on_ccd", "model_template_overlay"),
-    "features": ("labeled_features_overlay",),
-}
 _PROV_INPUTS_MAX = 50
 
 
@@ -579,20 +571,14 @@ class _PortalBuild:
 
     # -- pages -----------------------------------------------------------
     def _page_refs(self, page: PageSpec, enabled: Iterable[str]) -> dict[str, dict]:
-        """Global refs plus shared-resource refs the page's capabilities use."""
+        """Global refs plus refs to the shared resources the page's capabilities use
+        (:func:`portalkit.caps.attachable_resources`, the rule the synthetic fixture shares;
+        IMPLEMENTATION_NOTES 110)."""
         refs = dict(self.refs)
-        enabled = set(enabled)
-        ds = self.ds
-        page_ids = set(capsmod.page_data(page, ds, self.manifests).ids)
-        have = {_res_kind(ds[k]) for k in page_ids if _res_kind(ds[k])}
-        for kind, capl in _CAP_RES.items():
-            if kind in have or not enabled.intersection(capl):
-                continue
-            rid = {"templates": "tpl", "filters": "filters", "extinction": "ext",
-                   "features": "feat"}[kind]
-            while rid in self.fb.ds or rid in refs:
-                rid = "_" + rid
-            refs[rid] = {"kind": kind, "url": self.shared_res()[kind]}
+        kinds = capsmod.attachable_resources(page, self.ds, list(enabled), self.manifests)
+        if kinds:
+            refs.update(capsmod.resource_refs(kinds, self.shared_res(),
+                                              taken=set(self.fb.ds) | set(refs)))
         return refs
 
     def build_page(self, page: PageSpec) -> tuple[PageSpec, dict, dict[str, bytes] | None, list[str]]:

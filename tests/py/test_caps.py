@@ -428,14 +428,23 @@ _HIPS = HipsSpec(base=[{"id": "b", "name": "B", "url": "https://alasky.cds.unist
 
 
 def test_needs_table():
-    assert set(caps.NEEDS) == {"hips_layer_stacking", "live_sed_viewer", "labeled_features_overlay"}
-    assert {k for k, _ in caps.NEEDS.values()} == {"hips", "filters", "features"}
+    assert set(caps.NEEDS) == {"hips_layer_stacking", "live_sed_viewer", "labeled_features_overlay",
+                               "extinction_vectors_on_ccd"}
+    assert {k for k, _ in caps.NEEDS.values()} == {"hips", "filters", "features", "extinction"}
     for cap, (kind, reason) in caps.NEEDS.items():
         assert cap in caps.CAPS and reason
+        # a need served by a shared resource is attached on demand by the same cap (item 110)
+        if kind in caps.SHARED_RESOURCES:
+            assert cap in caps.RESOURCE_CAPS[kind], (cap, kind)
     assert caps.unmet_needs(["live_sed_viewer", "av_slider"], ["catalog"]) == \
         {"live_sed_viewer": caps.NEEDS["live_sed_viewer"][1]}
     assert caps.unmet_needs([], []) == {}
-    assert caps.unmet_needs(caps.NEEDS, ["hips", "filters", "features"]) == {}
+    assert caps.unmet_needs(caps.NEEDS, ["hips", "filters", "features"]) == \
+        {"extinction_vectors_on_ccd": "no extinction dataset is attached to this page"}
+    assert caps.unmet_needs(caps.NEEDS, ["hips", "filters", "features", "extinction"]) == {}
+    assert set(caps.RESOURCE_CAPS) == set(caps.SHARED_RESOURCES) == set(caps.RESOURCE_REF_IDS)
+    for kind, cs in caps.RESOURCE_CAPS.items():
+        assert set(cs) <= set(caps.CAPS), kind
 
 
 def test_hips_layer_stacking_needs_hips_document():
@@ -663,3 +672,143 @@ def test_manifold_dims_from_manifest():
     # the build's resolve_manifold_dims leaves an explicit list as it is
     from portalkit.build import resolve_manifold_dims
     assert resolve_manifold_dims(res.layout, {"gc": manifest}, "gc") == res.layout
+
+
+# ---------------------------------------------------------------------------
+# IMPLEMENTATION_NOTES 110: extinction-vector need and the shared attachment rule
+# ---------------------------------------------------------------------------
+
+def _ovl(*layers):
+    from portalkit.spec import OverlaySpec
+    return OverlaySpec(layers=list(layers))
+
+
+_RED = {"id": "reddening", "name": "Reddening", "space": "dim", "kind": "vector", "default": True,
+        "items": [{"x": "f182m-f410m", "y": "f410m", "pts": [[0.5, 12.0], [1.5, 12.2]]}]}
+
+
+def test_extinction_vector_needs_extinction_dataset():
+    ds = {"src": _cat(), "ext": ExtinctionSpec(law="F99")}
+    page = _page("explorer", ["src"])
+    # nothing attachable: the cap is off with the item-110 reason, the scatter stays (CMD)
+    none = caps.resolve(page, ds, {}, resources=())
+    assert "extinction_vectors_on_ccd" not in none.enabled
+    assert none.disabled["extinction_vectors_on_ccd"] == caps.NEEDS["extinction_vectors_on_ccd"][1]
+    assert "scatter" in caps.pane_types(none.layout)
+    _check_providers(none)
+    # the page's own extinction dataset satisfies it, so does the shared resource
+    own = caps.resolve(_page("explorer", ["src", "ext"]), ds, {}, resources=())
+    assert "extinction_vectors_on_ccd" in own.enabled
+    assert _leaves(own, "scatter")[0]["options"]["overlays"] == ["f99_vector"]
+    shared = caps.resolve(page, ds, {}, resources=["extinction"])
+    assert "extinction_vectors_on_ccd" in shared.enabled
+    assert _leaves(shared, "scatter")[0]["options"]["overlays"] == ["g23_vector"]
+    # an adapter opt-out keeps its own reason
+    opt = caps.resolve(_page("explorer", ["src"], caps_disable={"extinction_vectors_on_ccd": "no"}), ds, {})
+    assert opt.disabled["extinction_vectors_on_ccd"] == "no"
+
+
+def test_attachable_resources_rule():
+    ds = {"src": _cat(), "spec": _rec("spec", "pks1"), "ext": ExtinctionSpec(),
+          "flt": FilterSetSpec(keys=["JWST/NIRCam.F182M"])}
+    page = _page("explorer", ["src", "spec"])
+    res = caps.resolve(page, ds, {})
+    assert caps.attachable_resources(page, ds, res) == caps.SHARED_RESOURCES
+    assert caps.attachable_resources(page, ds, res.enabled) == caps.SHARED_RESOURCES
+    # kinds the page already carries are not attached again (also through implied ids)
+    own = _page("explorer", ["spec", "ext", "flt"])
+    assert caps.attachable_resources(own, ds, caps.resolve(own, ds, {})) == ("templates", "features")
+    # only kinds some enabled cap uses
+    assert caps.attachable_resources(page, ds, ["labeled_features_overlay"]) == ("features",)
+    assert caps.attachable_resources(page, ds, ["extinction_vectors_on_ccd"]) == ("filters", "extinction")
+    assert caps.attachable_resources(page, ds, []) == ()
+    assert caps.attachable_resources(page, ds, ["keyboard_nav", "brush_rect"]) == ()
+    # a page without magnitudes in 3+ filters and no spectra needs none
+    bare = {"src": _cat(mags=("f182m",))}
+    bp = _page("explorer", ["src"])
+    assert caps.attachable_resources(bp, bare, caps.resolve(bp, bare, {})) == ()
+    # an adapter layout that names a dataset counts as carrying its kind
+    from portalkit.spec import TemplateSpec
+    ds["mytpl"] = TemplateSpec()
+    lay = {"row": [{"pane": "list", "dataset": "src"},
+                   {"pane": "spectrum1d", "dataset": "spec", "options": {"records": "spec", "templates": "mytpl"}}]}
+    lp = _page("spectra", ["src", "spec"], layout=lay)
+    assert "templates" not in caps.attachable_resources(lp, ds, ["model_template_overlay"])
+
+
+def test_resource_refs_names_and_collisions():
+    urls = {k: "{res}" + k + ".json" for k in caps.SHARED_RESOURCES}
+    refs = caps.resource_refs(caps.SHARED_RESOURCES, urls)
+    assert refs == {"tpl": {"kind": "templates", "url": "{res}templates.json"},
+                    "filters": {"kind": "filters", "url": "{res}filters.json"},
+                    "ext": {"kind": "extinction", "url": "{res}extinction.json"},
+                    "feat": {"kind": "features", "url": "{res}features.json"}}
+    got = caps.resource_refs(["extinction", "templates"], urls, taken={"ext", "_ext", "tpl"})
+    assert got == {"__ext": {"kind": "extinction", "url": "{res}extinction.json"},
+                   "_tpl": {"kind": "templates", "url": "{res}templates.json"}}
+    assert caps.resource_refs([], urls) == {}
+    with pytest.raises(KeyError):
+        caps.resource_refs(["features"], {})
+    with pytest.raises(ValueError, match="shared resource"):
+        caps.resource_refs(["hips"], urls)
+
+
+def test_overlay_document_reddening_layers_in_default_overlays():
+    locus = {"id": "locus", "space": "dim", "kind": "track", "items": []}
+    hidden = {"id": "hidden_vec", "space": "dim", "kind": "vector", "default": False, "items": []}
+    sky = {"id": "fields", "space": "sky", "kind": "polygons", "items": []}
+    ds = {"src": _cat(), "ovl": _ovl(sky, locus, _RED, hidden, dict(_RED)), "hips": _HIPS,
+          "nar": NarrativeSpec(beats=[{"id": "b1", "title": "B", "markdown": "x"}])}
+    pd = caps.page_data(_page("wavelength", ["hips", "src", "ovl"]), ds, {})
+    assert caps.dim_vector_layers(pd) == ["reddening"]
+    # the written document wins over the spec
+    pdm = caps.page_data(_page("wavelength", ["hips", "src", "ovl"]), ds,
+                         {"ovl": {"layers": [{"id": "rv", "space": "dim", "kind": "vector"}]}})
+    assert caps.dim_vector_layers(pdm) == ["rv"]
+    assert caps.dim_vector_layers(caps.page_data(_page("explorer", ["src"]), ds, {})) == []
+    for arche, dss in (("wavelength", ["hips", "src", "ovl"]), ("narrative", ["nar", "hips", "ovl", "src"])):
+        res = caps.resolve(_page(arche, dss), ds, {})
+        assert "extinction_vectors_on_ccd" in res.enabled, arche
+        (sc,) = _leaves(res, "scatter")
+        assert sc["options"]["overlays"] == ["g23_vector", "reddening"], arche
+        _check_providers(res)
+        # cap off (opt-out or nothing attachable): neither is listed
+        off = caps.resolve(_page(arche, dss, caps_disable={"extinction_vectors_on_ccd": "x"}), ds, {})
+        assert "overlays" not in (_leaves(off, "scatter")[0].get("options") or {})
+        none = caps.resolve(_page(arche, dss), ds, {}, resources=())
+        assert "extinction_vectors_on_ccd" in none.disabled
+        sc = _leaves(none, "scatter")
+        assert not sc or "overlays" not in (sc[0].get("options") or {})
+    # other archetypes keep only the <law>_vector (note 110 scopes the layers to
+    # wavelength/narrative documents), so they draw one reddening vector, not two
+    for arche in ("explorer", "manifold"):
+        res = caps.resolve(_page(arche, ["src", "ovl"]), ds, {})
+        assert "extinction_vectors_on_ccd" in res.enabled, arche
+        leaves = _leaves(res, "scatter") + _leaves(res, "manifold")
+        assert leaves, arche
+        for leaf in leaves:
+            ov = (leaf.get("options") or {}).get("overlays") or []
+            assert "reddening" not in ov and "g23_vector" in ov, (arche, leaf)
+
+
+def test_reddening_layers_validate_and_drop_without_extinction():
+    from portalkit import config
+    ds = {"src": _cat(), "ovl": _ovl(_RED), "hips": _HIPS}
+    page = _page("wavelength", ["hips", "src", "ovl"])
+    res = caps.resolve(page, ds, {})
+    portal = {"id": "t", "title": "T", "visibility": "public"}
+    urls = {k: "{res}" + k + ".json" for k in caps.SHARED_RESOURCES}
+    refs = caps.resource_refs(caps.attachable_resources(page, ds, res), urls, taken=ds)
+    assert {r["kind"] for r in refs.values()} == set(caps.SHARED_RESOURCES)
+    doc = config.assemble(page, ds, {}, res, portal=portal, refs=refs)
+    assert doc["caps"]["enabled"] == res.enabled
+    sc = next(p for p in caps.iter_panes(doc["layout"]) if p["pane"] == "scatter")
+    assert sc["options"]["overlays"] == ["g23_vector", "reddening"]
+    # the same caps without the extinction ref: the cap goes off with the reason and the
+    # resolver-listed vectors go with it
+    no_ext = {k: v for k, v in refs.items() if v["kind"] != "extinction"}
+    doc = config.assemble(page, ds, {}, res, portal=portal, refs=no_ext)
+    assert "extinction_vectors_on_ccd" not in doc["caps"]["enabled"]
+    assert doc["caps"]["disabled"]["extinction_vectors_on_ccd"] == caps.NEEDS["extinction_vectors_on_ccd"][1]
+    sc = next(p for p in caps.iter_panes(doc["layout"]) if p["pane"] == "scatter")
+    assert "overlays" not in (sc.get("options") or {})
