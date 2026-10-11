@@ -258,11 +258,13 @@ starting.
     worker pass; `app.resolveIds` and `app.importCsv` use it.
 103. **Canvas 2D density images.** Scratch canvases are created with `getContext('2d', {willReadFrequently: true})`
     (CPU-backed; a GPU-backed `putImageData` stalls SwiftShader for seconds). The colourised image is cached per
-    `(grid.counts, cmap, lo, hi, log)` so redraws only call `drawImage`. Applies to canvas2d.js and spectrum2d.js.
+    `(grid.counts, cmap, lo, hi, log)` so redraws only call `drawImage`. Applies to canvas2d.js and spectrum2d.js;
+    spectrum2d draws natively with `drawImage` and resamples per view only for non-uniform wavelength grids, log axes
+    or reversed views.
 104. **default_off round trip.** `ui/legend.js toggleLevel` keeps `cats[key] = []` (explicit "all levels on") for
     columns with `default_off`; `core/hash.js` keeps `cats` entries whose value is `[]`, so `f=` carries them.
 105. **Record channels** (replaces the wording of 73): `record(i, {channel})` is canonical (`record(ds, i, opts)` is
-    accepted); channels are per pane, named `<pane type>:<pane id>`.
+    accepted); channels are per pane, named `<pane type>:<pane id>`; the app-level hover card uses `hover:card`.
 106. **Pane titles** (replaces 77): `options.title` seeds every pane title; `ctx.setTitle` is used by panes whose title
     follows the focused record (detail). Other panes keep the seeded title.
 107. **Selection hash form** (refines 92): when a `bits:` form exists, the recipe form (`ids:` or `r:`) competes with it

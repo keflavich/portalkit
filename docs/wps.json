@@ -837,5 +837,25 @@
    "tests/js/plotpanes.test.mjs"
   ],
   "description": "Implement IMPLEMENTATION_NOTES 104 (legend toggleLevel keeps cats[key]=[] for default_off columns; hash.js keeps cats entries equal to []; round-trip tests through stateToHash/hashToState and hub default_off), 108 (move the shared widget rules into ui.css and remove the copies from sed.css, spectrum.css and controls.css; registry PANE_CSS stays consistent), 109 (a failed Aladin prefetch is retried once by the first sky pane that mounts)."
+ },
+ {
+  "id": "WPC1",
+  "title": "Wave C: quantized record cells, deferred-pos consumers, Aladin retry in wavelength, chips default_off, ui.css order, JS docs",
+  "depends_on": [],
+  "files": [
+   "web/js/workers/data.worker.js",
+   "web/js/panes/sky.js",
+   "web/js/panes/wavelength.js",
+   "web/js/panes/table.js",
+   "web/js/panes/detail.js",
+   "web/js/ui/chips.js",
+   "web/js/core/boot.js",
+   "docs/js.md",
+   "docs/ARCHITECTURE.md",
+   "tests/js/chunks.test.mjs",
+   "tests/js/plotpanes.test.mjs",
+   "tests/js/listpanes.test.mjs"
+  ],
+  "description": "(1) data.worker.js record(i) on catalogs with row chunks merges quantized cell values (cellSource) for stored columns the row chunk omits (exact:false) and lists them in `_qkeys` (hover.js already reads `_qkeys`). (2) sky.js and wavelength.js do not await markers.refresh({force:true}) inside setup: call it without awaiting (then drawRings) and register positionChanged/zoomChanged/resizeChanged listeners and the narrative:sync emit right away; wavelength.js mounts through retryAladinOnce(app.page) like sky.js (note 109). (3) table.js: blocks read before first paint on a quantized catalog with positions are re-read after app.afterFirstPaint() (or read with {pos:true} after it). (4) sky.js highlight and detail.js focus reads pass {pos:true} so a highlight/focus set from the URL before first paint still gets coordinates. (5) chips.js calls legend.toggleLevel with {defaultOff: hasDefaultOff(meta)} (note 104). (6) boot.js loads css/panes/ui.css before mountLayout. (7) docs/js.md documents app.afterFirstPaint, DataClient.resolveIds and the worker resolveIds op, workerUrl(manifestUrl), rows/record opts.pos, allowPositions(), _posDeferred, `_qkeys`, the app-level hover record channel 'hover:card', and the current app.resolveIds path; ARCHITECTURE.md section 6.3 sel= rules match note 107, and the hover-card text (about line 673, 'never fetch row chunks') matches note 99."
  }
 ]
