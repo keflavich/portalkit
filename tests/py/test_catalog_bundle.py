@@ -543,6 +543,35 @@ def test_first_paint_files_rules():
                                               "cols/a.c001.x.bin", "rows/r0000.x.bin"]
     # n = 0: nothing for the list
     assert catalog.first_paint_files({**base, "n": 0, "density": [{"key": "d", "file": "d.bin"}]}) == ["d.bin"]
+    # a context catalog: every density grid (one backdrop per axes preset), no list part
+    man = {**base, "density": [{"key": "s", "file": "density/s.bin", "stat": "median"},
+                               {"key": "d", "file": "density/d.bin"}],
+           "rows": {"chunk": 4096, "files": ["rows/r0000.x.bin"]}}
+    assert catalog.first_paint_files(man, context=True) == ["density/s.bin", "density/d.bin"]
+    # ... without grids: the axis columns only
+    assert catalog.first_paint_files(base, context=True) == [
+        "cols/a.c000.x.bin", "cols/a.c001.x.bin", "cols/b.c000.x.bin", "cols/b.c001.x.bin"]
+
+
+def test_context_first_paint_counts_density_only(tmp_path):
+    """A context catalog without exact rows: the ledger marks only the density grids (and the
+    manifest) as first paint; the budget agrees."""
+    from portalkit.bundle.writer import BundleWriter, Ledger
+    rng = np.random.default_rng(3)
+    n = 20000
+    t = Table({"id": [f"b{i}" for i in range(n)], "f1": rng.normal(15, 1, n),
+               "f2": rng.normal(14, 1, n), "f3": rng.normal(13, 1, n)})
+    dens = [DensitySpec("d12", "f1-f2", "f2"), DensitySpec("d23", "f2-f3", "f3")]
+    spec = CatalogSpec(key="bg", table=t, id="id", context=True, density=dens, exact_rows=False,
+                       columns=[ColumnSpec(f, "mag") for f in ("f1", "f2", "f3")])
+    led = Ledger()
+    res = catalog.write(spec, BundleWriter(tmp_path, "data/bg", led, "bg"), build="b", ledger=led)
+    fp = [e for e in led.entries if e.dataset == "bg" and e.first_paint]
+    kinds = sorted({e.kind for e in fp})
+    assert kinds == ["density", "manifest"], kinds
+    assert len([e for e in fp if e.kind == "density"]) == 2
+    man = res.manifest
+    assert man["budget"]["first_paint_bytes"] == sum(e.bytes for e in fp)
 
 
 def test_chunk_reader_errors():

@@ -294,3 +294,37 @@ starting.
     The Level 3 byte budget counts responses finished before `firstPaintAt`; bytes up to the quiet settle are reported.
     A pane hidden (folded, inactive tab) while its first paint is pending has `data-state="paused"` and does not
     hold `afterFirstPaint`; it returns to `loading` when shown, and the state is left alone once the latch settles.
+113. **Legacy items, landing counts, served paths (WPE1).** `[[portal.page]] legacy` items are strings or
+    `{file, preset?, replace?}` tables (ARCHITECTURE 4.1). `page.json page.legacy.files` stays a string list, and
+    per-file stub presets go to `page.legacy.presets` (`{file: preset}`). `portal.json counts[]`
+    (`{page, ds, kind: catalog|images|records, n, unit, units}`) gives every non-landing page a count of its
+    primary dataset. `search[]` is unchanged, and the landing pane reads `counts` once it supports the field.
+    Served provenance uses `<label>:<relpath>` labels (`portalkit.build.PathLabeler`). `check` flags absolute
+    `/orange|/blue|/home` paths in staged html/json (G1 warning, G2 error). `build_report.json` keeps full paths and
+    is never deployed.
+114. **Context first paint (WPE1).** `first_paint_files(man, context=True)` returns every density grid of a context
+    catalog (or both axis columns when it has none), with no row or head chunk. `catalog.write` passes
+    `spec.context`. The scatter pane currently worker-bins context columns (`bg.bin2d`) for its backdrop instead of
+    drawing the context catalog's pre-binned grid (ARCHITECTURE 5.9 lists background layers as a grid use). Until
+    it draws the grid for matching axes, the browser also fetches the context axis columns for the backdrop, and
+    this estimate leaves those bytes out.
+115. **Input stamps (WPE1).** Directory inputs are stamped `(names sha256, dir mtime_ns, entry count)` without a
+    walk, in both `InputRegistry.add` and `Cache.key_hash`. On a miss, `Cache.memo` looks for a value under the
+    pre-WPE1 tree-digest key (`Cache.legacy_key_hash`) only when the cache directory holds a candidate entry of the
+    same key (a `.meta.json` without `v` and `alias_of`) that has not already failed to match for the same scope and
+    input paths (`<key>.legacy-checked.json`). A cold cache or a new key costs no walk. When it finds a value, it
+    writes an alias `.meta.json` with `alias_of`, so existing memos (robitaille `robitaille_rr_v2_*`) stay valid. Robitaille adapter tests with
+    `-m adapters -x`, same seeded cache, measured 2026-10-11: 715 s before, 65 s on the first run after (one
+    adoption walk), 35 s warm.
+
+116. WPE1: the local-path check also scans shared resources (a vendored `res/` inside the portal and `<build>/_res/`),
+    with the same G1 warning / G2 error rule. The build writes those documents, and non-default physics datasets,
+    through `build.LabellingWriter`, which labels local paths in every JSON document (the templates index
+    `meta.source` becomes `file:jwst_template_spectra.json`). `physics/templates.py` `load_source` still returns the
+    absolute path; a direct `physics.write_shared` call outside the build writes it unlabelled.
+117. WPE1: `CatalogSpec`, `ImageSetSpec` and `RecordSetSpec` take `noun=(singular, plural)` for the landing count
+    nouns (`portal.json counts[].unit/units`). Robitaille's `mod` catalog needs `noun=("model", "models")` (adapter
+    owner) to match its card text.
+118. WPE1: deploy's ownership manifest `<target>/.portalkit-deploy.json` is served with the target and keeps the
+    absolute `target` and the full `legacy_modules` paths that `status` uses. `deploy --htaccess` does not deny it
+    yet (owner of `deploy/htaccess.py`).

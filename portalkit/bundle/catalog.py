@@ -678,7 +678,7 @@ def write(spec: Any, dest: str | Path | BundleWriter, *, build: str | None = Non
         man["caveats"] = list(spec.caveats)
 
     # ---- first paint (section 5.11, IMPLEMENTATION_NOTES 98/99): see first_paint_files
-    fp_files = first_paint_files(man)
+    fp_files = first_paint_files(man, context=bool(_get(spec, "context", False)))
     for e in w.ledger.entries:
         if e.dataset == w.dataset and e.path in {w.root_rel(f) for f in fp_files}:
             e.first_paint = True
@@ -725,10 +725,13 @@ def _head_file(meta: dict) -> str | None:
     return meta.get("file")
 
 
-def first_paint_files(man: dict) -> list[str]:
+def first_paint_files(man: dict, context: bool = False) -> list[str]:
     """Data files a page reads before first paint (paths relative to the dataset directory).
 
-    The manifest itself is not listed (the caller adds its size). The set is:
+    The manifest itself is not listed (the caller adds its size). For a context catalog
+    (``context=True``: drawn as a density backdrop, never listed) the set is every density
+    grid (the backdrop of each axes preset), or the two axis columns when it has no grid; no
+    row chunk and no head chunk. Otherwise the set is:
 
     * the plot: the first count density grid (``density[]`` without ``stat``; the first grid
       when all are binned statistics), else every file (all chunks) of the two axis columns of
@@ -752,6 +755,10 @@ def first_paint_files(man: dict) -> list[str]:
     cols = [c for c in man.get("cols") or [] if isinstance(c, dict)]
     by_key = {c.get("key"): c for c in cols}
     dens = [d for d in man.get("density") or [] if isinstance(d, dict) and d.get("file")]
+    if context and dens:
+        for d in dens:
+            add(d["file"])
+        return out
     if dens:
         count = [d for d in dens if not d.get("stat") or d.get("stat") == "count"]
         add((count or dens)[0]["file"])
@@ -760,6 +767,8 @@ def first_paint_files(man: dict) -> list[str]:
         for k in _axis_keys(list(man.get("presets") or []), cols):
             for f in codec.column_files(by_key[k]):
                 add(f)
+    if context:
+        return out
     n = man.get("n") or 0
     rows = man.get("rows") or {}
     if rows.get("files"):

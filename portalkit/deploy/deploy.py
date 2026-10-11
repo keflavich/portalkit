@@ -49,8 +49,15 @@ GC_MIN_AGE_S = 7 * 86400
 #: Stable-name documents (section 5.1); never garbage-collected, written after hashed data.
 STABLE_NAMES = frozenset({"manifest.json", "index.json", "images.json", "hips.json",
                           "overlays.json", "narrative.json", "portal.json"})
-#: Staged files that are never deployed (build bookkeeping with local paths).
+#: Staged file names that are never deployed at any depth (build bookkeeping that keeps
+#: full local paths; rendered pages and served data carry relative labels only).
 NOT_DEPLOYED = frozenset({"build_report.json"})
+
+
+def not_deployed(rel: str) -> bool:
+    """True for a staged path deploy skips (:data:`NOT_DEPLOYED` names, tmp files)."""
+    base = posixpath.basename(rel)
+    return rel in NOT_DEPLOYED or base in NOT_DEPLOYED or base.endswith(TMP_SUFFIX)
 #: Names a staged tree may not contain (they belong to deploy itself).
 RESERVED_TOP = (".htaccess", ".portalkit_backup")
 
@@ -246,6 +253,28 @@ def _get(obj: Any, key: str, default: Any = None) -> Any:
     if isinstance(obj, Mapping):
         return obj.get(key, default)
     return getattr(obj, key, default)
+
+
+def legacy_entries(page: Any) -> list[tuple[str, str | None, bool]]:
+    """``(file, preset, replace)`` for each legacy item of a ``[[portal.page]]`` entry.
+
+    An item is a string or a ``{file, preset?, replace?}`` table (section 4.1); a
+    :class:`~portalkit.context.PageConfig` contributes its ``files``. ``preset`` is ``None``
+    when the item does not set one (the page preset then applies)."""
+    items = _get(page, "files", None) if not isinstance(page, Mapping) else None
+    if not items:
+        items = _get(page, "legacy", []) or []
+    out = []
+    for it in items:
+        if isinstance(it, str):
+            out.append((it, None, True))
+            continue
+        f = _get(it, "file")
+        if not isinstance(f, str) or not f:
+            continue
+        pre = _get(it, "preset")
+        out.append((f, None if pre is None else str(pre), bool(_get(it, "replace", True))))
+    return out
 
 
 def select_portal(site: Any, portal_id: str | None = None) -> Mapping:
@@ -733,7 +762,7 @@ def plan_deploy(family: str, build_id: str, portal: Any, *, portal_id: str | Non
     for rel in files:
         base = posixpath.basename(rel)
         top = rel.split("/", 1)[0]
-        if rel in NOT_DEPLOYED or base.endswith(TMP_SUFFIX):
+        if not_deployed(rel):
             continue
         if base.startswith(MANIFEST_GLOB_PREFIX) or top in RESERVED_TOP:
             conflicts.append(f"staged file uses a reserved name: {rel}")
@@ -822,14 +851,19 @@ def _plan_replace(plan: DeployPlan, entry: Any, tgt: Path, source: Path) -> None
     staged_files = {f.rel for f in plan.files}
     for pg in _get(entry, "page", []) or []:
         pid = _get(pg, "id")
-        legacy = _get(pg, "legacy", []) or []
+        legacy = legacy_entries(pg)
+        kept = [lf for lf, _, rep in legacy if not rep]
+        if kept:
+            plan.warnings.append(f"page {pid!r}: replace=false keeps {', '.join(kept)} in place")
+        legacy = [(lf, pre) for lf, pre, rep in legacy if rep]
         if not legacy:
             continue
         unified = staged_pages.get(pid)
         if unified is None or unified not in staged_files:
             plan.warnings.append(f"page {pid!r} was not built; its legacy files stay in place")
             continue
-        for lf in legacy:
+        page_preset = _get(pg, "preset", "") or ""
+        for lf, file_preset in legacy:
             lrel = posixpath.normpath(lf)
             if lrel.startswith("../") or lrel.startswith("/") or lrel == "..":
                 plan.conflicts.append(f"legacy path escapes legacy_dir: {lf}")
@@ -853,7 +887,8 @@ def _plan_replace(plan: DeployPlan, entry: Any, tgt: Path, source: Path) -> None
                 page_id=pid, legacy=lpath,
                 legacy_rel=os.path.relpath(lpath, tgt).replace(os.sep, "/"),
                 legacy_file=lrel, unified=unified, url=stub_url(lpath, tgt / unified),
-                mode=plan.replace_mode or "stub", preset=_get(pg, "preset", "") or ""))
+                mode=plan.replace_mode or "stub",
+                preset=page_preset if file_preset is None else file_preset))
 
 
 def raise_for_plan(plan: DeployPlan) -> None:

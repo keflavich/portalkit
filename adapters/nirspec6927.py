@@ -335,9 +335,9 @@ class NIRSpec6927Adapter:
         dens = [DensitySpec(k, f"{a_}-{b}", y, xr=lim(col[a_] - col[b]), yr=lim(col[y])) for k, (a_, b), y in CMDS]
         dens += [DensitySpec(k, f"{a_}-{b}", f"{c}-{e}", xr=lim(col[a_] - col[b]), yr=lim(col[c] - col[e]))
                  for k, (a_, b), (c, e) in CCDS]
-        # exact rows stay on: without them first_paint_files() counts the head chunk of all ten
-        # columns (colorcolor first paint 0.76 -> 2.05 MB); the row files cost disk only
-        return CatalogSpec(key="bg", table=t, id="id", context=True, density=dens,
+        # context catalogue: never listed, so no exact row chunks (6.5 MB of row files at
+        # 121,068 rows); first_paint_files(context=True) counts only its density grids
+        return CatalogSpec(key="bg", table=t, id="id", context=True, density=dens, exact_rows=False,
                            columns=[ColumnSpec(f, "mag", label=f.upper(), unit="mag", step=0.001) for f in FILTERS],
                            presets=[Preset(d.key, d.key, "axes", {"x": d.x, "y": d.y}) for d in dens],
                            title=f"Brick NIRCam catalogue ({n:,} sources, good-flag photometry)",

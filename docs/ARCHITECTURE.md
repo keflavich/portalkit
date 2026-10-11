@@ -330,6 +330,8 @@ portalkit/                                   repo root
     py/test_dirgallery.py           WP13
     py/test_importshim.py           WP13
     py/test_cli_build.py            WP13
+    py/test_context.py              WPE1   input registry / cache key cost, pre-WPE1 memo adoption, PageConfig legacy items
+    py/test_provenance.py           WPE1   PathLabeler (served provenance labels) and the local-path pattern of `check`
     adapters/test_<family>.py       WP2x   fixture-mode contract tests (§9.6)
     e2e/test_port_<family>.py       WP2x   per-port acceptance (§13 level 4)
   tools/
@@ -400,7 +402,18 @@ id      = "map"
 legacy  = ["nirspec_6927_map.html"]       # >1 entry when several legacy files collapse into one page
 preset  = ""                              # hash appended by the redirect stub, e.g. "role=nb"
 grammar = ["bare-name"]                   # legacy hash/query grammars (§6.4)
+
+[[portal.page]]                           # legacy items may also be tables {file, preset?, replace?}
+id      = "gallery_6927"
+legacy  = ["pngs/gallery_6927.html",
+           {file = "pngs/gallery_6927_2221.html", preset = "role=c2221"},   # stub preset of this file
+           {file = "imaging/index.html", replace = false}]                  # never stubbed by --replace
 ```
+
+Legacy items (WPE1). Each `legacy` item is a string (a path relative to `legacy_dir`) or a table `{file, preset?, replace?}`:
+- `preset` is the hash fragment the `--replace` redirect stub of that file appends (§11.4). It overrides the page `preset` for that file only; `preset = ""` means no fragment. Without it the page `preset` applies.
+- `replace = false` keeps the file out of `--replace` stubbing and backups (default `true`). Use it for a legacy file reached through a served symlink (for example robitaille `imaging/ -> modelgrids/imaging_run/png`), which §11.3 would otherwise refuse. `deploy` lists such files as a plan warning; `status` still reports them.
+- A file is listed at most once per page and must be relative without `..` components. Python: `portalkit.spec.LegacyFile`; `PageConfig.legacy` stays the list of file names and `PageConfig.files` holds the `LegacyFile` items.
 
 Rules:
 - `target_dir` defaults to `<legacy_dir>/unified/`. When two families share a `legacy_dir`, each family uses `<legacy_dir>/unified/<family>/`. This applies to WD2 and NIRSpec 2640 in `web/public/jwst/wd2/nirspec_2640`.
@@ -415,10 +428,18 @@ Rules:
  "pages":[{"id":"index","title":"Overview","file":"index.html","archetype":"landing"},
           {"id":"map","title":"Sky map","file":"map.html","archetype":"explorer"}],
  "related":[{"title":"WD2 portal","url":"https://data.rc.ufl.edu/pub/adamginsburg/jwst/wd2/nirspec_2640/unified/wd2/","auth":"public"}],
- "search":[{"ds":"src","page":"map","manifest":"data/src/manifest.json"}]}
+ "search":[{"ds":"src","page":"map","manifest":"data/src/manifest.json"}],
+ "counts":[{"page":"map","ds":"src","kind":"catalog","n":165,"unit":"source","units":"sources"}]}
 ```
 
 Only built pages are listed, so nav never shows a missing page. `related[].auth = "secure"` renders a "login required" badge.
+
+`search` lists the catalogs of explorer and manifold pages (the landing search box opens their manifests). `counts` (optional, additive; WPE1) holds one entry per built non-landing page with the size of that page's primary dataset, so every landing card can show a count without fetching a manifest:
+- `kind = "catalog"`: the manifest row count `n` of a non-context catalog;
+- `kind = "images"`: the item count of an image set;
+- `kind = "records"`: the id count `n` of a record set's `index.json`.
+
+The primary dataset is chosen per archetype: `gallery` prefers images, then catalog, then records; `spectra` prefers records, then catalog, then images; every other archetype prefers catalog, then images, then records. A page with none of these has no entry. `unit`/`units` are the singular/plural nouns for the card text: the dataset's `noun` when its spec declares one (`CatalogSpec`/`ImageSetSpec`/`RecordSetSpec.noun`, e.g. `("model", "models")` for a model grid), else `source(s)`, `image(s)` or `spectrum/spectra` by kind. Validation: `page` is listed in `pages` and appears at most once; `kind` is one of the three; `n` is an integer ≥ 0.
 
 ### 4.3 `page.json` (embedded as `<script type="application/json" id="pk-page">`, ≤ 64 kB, `</` escaped as `<\/`)
 
@@ -431,7 +452,7 @@ Top-level keys (all required unless marked optional):
 | `assets` | URL ending in `/` | asset base (default `https://data.rc.ufl.edu/pub/adamginsburg/portalkit/v<pk>/`; with `--vendor-assets`: `./_pk/v<pk>/`) |
 | `res` | URL ending in `/` | shared resource base (`https://data.rc.ufl.edu/pub/adamginsburg/portalkit-res/` or `./res/`) |
 | `portal` | `{id,title,visibility,nav:"portal.json"}` | |
-| `page` | `{id,archetype,title,subtitle?,legacy?:{files:[..],grammar:[..]}}` | |
+| `page` | `{id,archetype,title,subtitle?,legacy?:{files:[..],grammar:[..],preset?,presets?:{file:preset}}}` | `files` are the legacy file names (strings); `presets` holds the per-file stub presets of §4.1 legacy tables (keys ⊆ `files`) |
 | `datasets` | `{dsId: DatasetRef}` | see below |
 | `layout` | LayoutNode | pane tree |
 | `state` | object | initial store values (§6.2 keys); validated against dataset columns |
@@ -772,7 +793,7 @@ Shared resources (`templates`, `filters`, `extinction`, `features`) are publishe
 | page HTML | ≤ 200,000 B (target ≤ 80 kB) |
 | embedded page.json | ≤ 65,536 B |
 | manifest.json | ≤ 262,144 B |
-| first-paint bytes (manifest + first count density grid, or both axis columns in full without a grid, + the list's first screen: `rows/r0000`, or the head chunk of every stored column plus the head ids chunk; positions excluded; rule in docs/bundle.md section 8) | ≤ 2 MB for N ≤ 1M; ≤ 6 MB for N ≤ 5M |
+| first-paint bytes (manifest + first count density grid, or both axis columns in full without a grid, + the list's first screen: `rows/r0000`, or the head chunk of every stored column plus the head ids chunk; positions excluded; rule in docs/bundle.md section 8). A context catalog (`context: true`, §7.6) is never listed, so it counts its manifest plus every density grid (one backdrop per axes preset), or both axis columns in full when it has no grid; no row chunk and no head chunk (`first_paint_files(man, context=True)`, WPE1) | ≤ 2 MB for N ≤ 1M; ≤ 6 MB for N ≤ 5M |
 | single column/chunk file | ≤ 16 MiB |
 | shard | ≤ 524,288 B (single oversized record → layout file, soft warning above 2 MiB) |
 | row chunk | ≤ 524,288 B (soft) |
@@ -1409,6 +1430,7 @@ class CatalogSpec:
     caveats: list[str] = field(default_factory=list)
     catalogs_provenance: list[dict] = field(default_factory=list)
     foreign: ForeignRef | None = None
+    noun: tuple[str, str] | None = None   # landing-card nouns, e.g. ("model", "models") (§4.2)
 
 @dataclass
 class Spectrum:
@@ -1436,6 +1458,7 @@ class RecordSetSpec:
     png: Callable[[str], tuple[str, dict] | None] | None = None   # pki1 PNG mode: id -> (url, extent)
     layout: Literal["shard","file"] = "shard"
     legacy_json: tuple[str, str] | None = None         # (dir_url, pattern) Tier A/B only
+    noun: tuple[str, str] | None = None   # landing-card nouns (§4.2)
 
 @dataclass
 class ImageItem:    id: str; roles: dict[str, str]; caption: str = ""; tags: dict[str, str] = field(default_factory=dict); w: int | None = None; h: int | None = None
@@ -1445,6 +1468,7 @@ class ImageSetSpec:
     facets: list[tuple[str, str]] = field(default_factory=list)
     presets: list[Preset] = field(default_factory=list)
     catalog: str | None = None; join: str | None = None   # join item.id to catalog id or alias
+    noun: tuple[str, str] | None = None   # landing-card nouns (§4.2)
 
 @dataclass
 class TemplateSpec:   source: Path | None = None; extend_to_um: float | None = None   # default jwst_template_spectra.json
@@ -1531,6 +1555,13 @@ class LegacyImporter:
 ```
 
 The cache key is `(key, [(path, mtime_ns, size) for inputs])`. Values are numpy arrays (`.npz`), astropy Tables (`.ecsv`) or JSON. Nothing is pickled.
+
+Input registry and cache cost (WPE1). Neither the registry nor the cache key walks, hashes or stats a directory tree; the one exception is the bounded adoption of pre-WPE1 values in the last bullet:
+- A file input is recorded with its sha256, which is cached in `<cache>/<family>/input_sha256.json` keyed by `(path, mtime_ns, size)`. An unchanged multi-GB file is hashed once.
+- A directory input is recorded by its stamp: one `stat` of the directory and one top-level `scandir`. The record is `{kind:"dir", sha256: sha256 of the sorted entry names, mtime: directory mtime, size: 0, entries: entry count}`, and its cache-key entry is `[path, dir mtime_ns, entry count, names sha256]`. Adding, removing or renaming a top-level entry changes the stamp. A file rewritten in place, or a change inside a sub-directory, does not. An adapter whose value depends on such content registers those files (or the sub-directory) itself.
+- Values memoised before this change used a full tree digest for directory inputs. `.meta.json` files written now carry `"v": 2`; pre-WPE1 ones have no `v`. After a miss of the current key with a directory input, `Cache.memo` lists the cache directory once (one `scandir` per `Cache`) and looks for adoption candidates: `.meta.json` entries of the same key that have neither `v` nor `alias_of`. Only when a candidate exists that has not already failed to match for the same scope and input paths does it compute the older key (`Cache.legacy_key_hash`, a full walk). If a value is stored under that key, the cache returns it and writes an alias `.meta.json` (with `alias_of`) under the current key that points at the old value file, so later runs hit the alias without a walk. If none matches, the candidates are recorded in `<key>.legacy-checked.json` under a digest of the scope and the input paths, and later misses in that context skip the walk. A cold cache, a new key, and a key whose entries were all written by this version cost no walk. Old files are never modified or deleted, so an existing multi-hour memo stays valid without recomputation. A tree that returns to the exact state of a candidate that already failed to match in the same context is recomputed, not adopted.
+
+Served paths (WPE1). Rendered pages and every JSON document the build stages carry no absolute local path. One served file is outside this rule: deploy's ownership manifest `<target>/.portalkit-deploy.json` (§11.3) records the absolute `target` and the build's full `legacy_modules` paths, because `status` needs real paths for LEGACY-CHANGED; `check` scans only the staged tree and does not see it. Provenance input and legacy-module paths, and `CatalogSpec.catalogs_provenance`, are written as `<label>:<path relative to a declared root>` (`portalkit.build.PathLabeler`). The roots are each portal's `legacy_dir` (label `legacy_dir`), each `legacy_paths` entry (`legacy`), and the parent of the static prefix of every `inputs` pattern (`input`). The longest matching root wins. A path under no root becomes `file:<basename>`. `build_report.json` keeps the full paths and is never deployed (`deploy.NOT_DEPLOYED`, at any depth of the staged tree). `portalkit check` reports every staged `.html`/`.json` file other than `build_report.json` that contains `/orange/`, `/blue/` or `/home/` as an absolute path, or as a `file://` URL. This is a warning without a gate and at G1, and an error at G2. The build writes the shared-resource documents (a vendored `res/` inside the portal and the build's `_res/` tree) and non-default physics datasets (`data/res/<key>/`) through `portalkit.build.LabellingWriter`, which applies the same labels to every JSON document before it is hashed; `physics/templates.py` `load_source` puts the absolute template path in `meta.source`, and it is staged as `file:jwst_template_spectra.json` (or a root label). Hits there follow the same gate rule. `PathLabeler.scrub` labels a string that is a local path, every local path embedded in a longer string (`LOCAL_PATH_RE`, trailing `.,;:)]}` kept outside the label), and mapping keys. `LOCAL_PATH_RE` matches `/orange/`, `/blue/` or `/home/` after a start, space, quote, `=`, `:` or `-`, and as `file://`; it does not match after a letter, digit, `_`, `.`, `~`, `%` or `/` (a URL path segment or a relative path).
 
 Coupling mitigation:
 - The sha of every imported module goes into the manifest provenance. `portalkit status` flags a changed sha as `LEGACY-CHANGED`.
@@ -1623,6 +1654,7 @@ Exit codes:
 Defaults:
 - Stage root is `/blue/adamginsburg/adamginsburg/portalkit_stage` (or `$PK_STAGE_ROOT`). `build` refuses a stage root that `exposure.classify` reports as served. Every path under `/orange/adamginsburg` is served (secure) through `web/secure/abulatek/brick -> /blue/adamginsburg/abulatek/brick/` whose `symlinks/orange -> /orange/adamginsburg`, so the stage root lives on /blue.
 - `--yes` is required for a non-dry-run deploy when stdin is not a TTY.
+- `check` also scans every staged `.html`/`.json` file of the portal tree except `build_report.json` for absolute local paths (`/orange/`, `/blue/`, `/home/`, also as `file://`). Hits are warnings without a gate and at G1, and errors at G2 (§9.3 "Served paths"). Hits in shared resources (`res/`, `../_res/`) follow the same rule.
 
 ---
 
@@ -1692,7 +1724,7 @@ Write rules:
 
 ### 11.4 `--replace` and rollback (`deploy/backup.py`)
 
-For each `[[portal.page]]` with `legacy` files:
+For each `[[portal.page]]` with `legacy` files (§4.1). Items with `replace = false` are skipped; they stay in place and the plan lists them as a warning. `<#preset>` below is the item's own `preset` when its table sets one (`""` = none), else the page `preset`. One page can therefore serve several legacy files that each open on their own view, for example `pngs/gallery_6927_2221.html` → `gallery_6927.html#role=c2221`.
 1. Copy the legacy file to `<legacy_dir>/.portalkit_backup/<build_id>/<file>`. Record its md5 and size in `<legacy_dir>/.portalkit_backup/<build_id>/backup.json`.
 2. In `stub` mode (the default), atomically write a redirect stub of about 1 kB at the legacy filename:
 
@@ -1890,6 +1922,8 @@ This table is generated by `port_table.py` and stored as `tests/data/port_table.
 
 Totals: 93 rows (87 inventoried pages + 6 extras rows), 11 families, 1517 capability fills.
 
+Family keys (WPE1). The `family` of every row in `tests/data/port_table.json` and `docs/port_table.json`, the family prefix of every `tests/data/inventory_caps.json` key, and `reports[].family` in `docs/inventory.json` equal the site id (`sites/<family>.toml` stem): `gc_manifold`, `jwst_archive`, `nirspec2640`, `nirspec6927`, `robitaille`, `sgrb2`, `sickle_brick`, `spherex`, `w51`, `wd2`. Adapter tests look rows up with their `FAMILY` constant directly. `extras` stays a grouping key: its six rows belong to several sites (`hips_tours`, `spitzer_spectra` and `dirgallery_sites`, plus the jwst_gc_aladin and cmd_explorer pages of WP31). The nirspec6927 narrative rows (msata, h2, refstar) keep `nirspec6927` because they are pages of the same legacy family that `sites/nirspec6927_narrative.toml` deploys into the same target.
+
 
 ### 14.1 extras (6 rows)
 
@@ -1902,7 +1936,7 @@ Totals: 93 rows (87 inventoried pages + 6 extras rows), 11 families, 1517 capabi
 | `~30 jQuery autoindex galleries in w51/brick/sgrb2/wd2/wd1/cloudc (critic)` | gallery (dirgallery) | items img | 12 | collapsible_panels, cross_page_nav, dark_light_theme, deep_link_hash, filter_toggles, hover_preview, keyboard_nav, lazy_data_loading, lightbox, readme_provenance, responsive_mobile, source_list_search | One dirgallery_sites.py registry; fixes mislabeled headers; legacy files untouched. |
 | `robitaille imaging_run/png_b and modelgrids/ccds/gallery.html (critic)` | gallery (dirgallery) | items img | 12 | collapsible_panels, cross_page_nav, dark_light_theme, deep_link_hash, filter_toggles, hover_preview, keyboard_nav, lazy_data_loading, lightbox, readme_provenance, responsive_mobile, source_list_search | png_b reachable only via web/secure/robitaille_models: visibility declared per page (secure). |
 
-### 14.2 gc-manifold (3 rows)
+### 14.2 gc_manifold (3 rows)
 
 | legacy page | archetype | flags | caps to fill (n) | capabilities to fill | special handling |
 |---|---|---|---|---|---|
@@ -1910,7 +1944,7 @@ Totals: 93 rows (87 inventoried pages + 6 extras rows), 11 families, 1517 capabi
 | `GC per-field catalog manifold viewers (<field>_manifold; 11 instances of one template)` | manifold tier T2 (11 field pages) | multi cat cats num2 mags2 num3 mani mags3f sky skycat dens | 16 | av_slider, brush_circle, catalog_markers_on_sky, cdn_fallback, class_coloring, cross_page_nav, dark_light_theme, filter_toggles, hips_layer_stacking, labeled_features_overlay, linked_selection, model_template_overlay, resizable_panels, responsive_mobile, selection_export, source_list_search | Full query state a,b,m,p,x1,x2,y1,y2,cb,cd,cm,cl,ch,g,rv,fa,sel mapped 1:1 by legacyhash; FEATURE_CAVEATS -> caveats; red-clump button kept as preset action; renderer vendored verbatim from gc_fields_manifold_assets. |
 | `jwst-gc pipeline monitor (monitor.html, fields/<target>.html, *_monitor5as.html)` | excluded |  | 0 |  | QA dashboard of the pipeline (409 kB index + 195 MB field docs); out of portal scope; registry lists it as excluded so status reports it. |
 
-### 14.3 jwst-archive (16 rows)
+### 14.3 jwst_archive (16 rows)
 
 | legacy page | archetype | flags | caps to fill (n) | capabilities to fill | special handling |
 |---|---|---|---|---|---|
@@ -1931,7 +1965,7 @@ Totals: 93 rows (87 inventoried pages + 6 extras rows), 11 families, 1517 capabi
 | `Gallery: 3222 broad` | gallery (facet preset of archive gallery) | items img sedimg cat cats sky skycat spec | 21 | av_slider, catalog_markers_on_sky, cdn_fallback, class_coloring, collapsible_panels, cross_page_nav, dark_light_theme, deep_link_hash, detail_panel, filter_toggles, hips_layer_stacking, hover_preview, labeled_features_overlay, lazy_data_loading, model_template_overlay, readme_provenance, responsive_mobile, selection_export, sky_map_aladin, source_list_search, spectrum_viewer_1d | Facet preset '3222 broad' of the single archive gallery; redirect stub only under --replace. |
 | `Gallery: 3222 narrow` | gallery (facet preset of archive gallery) | items img sedimg cat cats sky skycat spec | 21 | av_slider, catalog_markers_on_sky, cdn_fallback, class_coloring, collapsible_panels, cross_page_nav, dark_light_theme, deep_link_hash, detail_panel, filter_toggles, hips_layer_stacking, hover_preview, labeled_features_overlay, lazy_data_loading, model_template_overlay, readme_provenance, responsive_mobile, selection_export, sky_map_aladin, source_list_search, spectrum_viewer_1d | Facet preset '3222 narrow' of the single archive gallery; redirect stub only under --replace. |
 
-### 14.4 nirspec-2640 (11 rows)
+### 14.4 nirspec2640 (11 rows)
 
 | legacy page | archetype | flags | caps to fill (n) | capabilities to fill | special handling |
 |---|---|---|---|---|---|
@@ -1947,7 +1981,7 @@ Totals: 93 rows (87 inventoried pages + 6 extras rows), 11 families, 1517 capabi
 | `pngs/gallery_2640_nb.html` | gallery (role preset nb) | items img sedimg cat sky skycat | 16 | catalog_markers_on_sky, cdn_fallback, collapsible_panels, cross_page_nav, dark_light_theme, deep_link_hash, detail_panel, filter_toggles, hips_layer_stacking, hover_preview, lazy_data_loading, readme_provenance, selection_export, sky_map_aladin, source_list_search, static_sed_png | Same unified page as gallery_2640 with #role=nb; under --replace the legacy file becomes a redirect stub carrying the role. |
 | `pngs/gallery_2640_bb.html` | gallery (role preset bb) | items img sedimg cat sky skycat | 16 | catalog_markers_on_sky, cdn_fallback, collapsible_panels, cross_page_nav, dark_light_theme, deep_link_hash, detail_panel, filter_toggles, hips_layer_stacking, hover_preview, lazy_data_loading, readme_provenance, selection_export, sky_map_aladin, source_list_search, static_sed_png | Same unified page as gallery_2640 with #role=bb; redirect stub under --replace. |
 
-### 14.5 nirspec-6927 (15 rows)
+### 14.5 nirspec6927 (15 rows)
 
 | legacy page | archetype | flags | caps to fill (n) | capabilities to fill | special handling |
 |---|---|---|---|---|---|
@@ -1985,7 +2019,7 @@ Totals: 93 rows (87 inventoried pages + 6 extras rows), 11 families, 1517 capabi
 | `sgrb2_map_ccd.html` | explorer [sky | scatter CMD | scatter CCD | list | detail] tier T2 | multi cat cats num2 mags2 num3 mags3f sky skycat dens iso | 21 | av_slider, class_coloring, collapsible_panels, dark_light_theme, deep_link_hash, density_rendering, detail_panel, extinction_vectors_on_ccd, filter_toggles, hips_layer_stacking, hover_preview, isochrones_or_tracks, keyboard_nav, labeled_features_overlay, lazy_data_loading, live_sed_viewer, model_template_overlay, readme_provenance, resizable_panels, selection_export, source_list_search | Tier A references existing data/mapccd/*.f32.gz in place (enc f32, linear order); Tier B re-encodes u16q with LOD order + pre-binned density; 0.2-99.8 percentile axis limits default; GPU projection (support <= 28). |
 | `sgrb2_seds/index.html` | gallery (+live SED, +mini sky) | items img sedimg multi cat cats num2 mags2 num3 mags3f sky skycat | 29 | av_slider, brush_circle, brush_lasso, brush_rect, brush_set_ops, catalog_markers_on_sky, cdn_fallback, class_coloring, cmd_ccd_scatter, collapsible_panels, dark_light_theme, deep_link_hash, detail_panel, extinction_vectors_on_ccd, filter_toggles, hips_layer_stacking, hover_preview, keyboard_nav, labeled_features_overlay, lightbox, linked_selection, live_sed_viewer, model_template_overlay, readme_provenance, resizable_panels, selectable_axes, selection_export, sky_map_aladin, source_list_search | PNGs exist for 500 of 2105; items without PNG show live SED only; flux <= 0 drawn as upper limits. |
 
-### 14.8 sickle-brick-miri (11 rows)
+### 14.8 sickle_brick (11 rows)
 
 | legacy page | archetype | flags | caps to fill (n) | capabilities to fill | special handling |
 |---|---|---|---|---|---|
@@ -1994,7 +2028,7 @@ Totals: 93 rows (87 inventoried pages + 6 extras rows), 11 families, 1517 capabi
 | `brick_2221/sed_figures_f1500w_all/gallery.html` | explorer (near 1:1 with legacy) | multi cat cats num2 mags2 num3 mags3f sky skycat fits img sedimg | 7 | cross_page_nav, dark_light_theme, extinction_vectors_on_ccd, keyboard_nav, readme_provenance, selectable_axes, selection_export | Adapter calls build_extended_templates (to 26 um); k55 exposed; template normalization bands exclude MIRI excess; brush ignores hidden points; dragResize from Brick2221_F1500W_SEDPortal.py:704-767 -> layout splitters with pk layout keys. |
 | `brick_2221/sed_figures_f1500w_all/gallery_legacy.html` | gallery (dirgallery, joined to F1500W catalog) | items img sedimg cat sky skycat | 16 | catalog_markers_on_sky, cdn_fallback, collapsible_panels, cross_page_nav, dark_light_theme, deep_link_hash, detail_panel, filter_toggles, hips_layer_stacking, hover_preview, lazy_data_loading, readme_provenance, responsive_mobile, selection_export, sky_map_aladin, source_list_search | Same unified page as sed_figures_f1500w_all gallery role; legacy file untouched. |
 | `brick_2221/sed_figures_top100_f1500w/gallery.html` | gallery (dirgallery, top100 preset) | items img sedimg cat sky skycat | 16 | catalog_markers_on_sky, cdn_fallback, collapsible_panels, cross_page_nav, dark_light_theme, deep_link_hash, detail_panel, filter_toggles, hips_layer_stacking, hover_preview, lazy_data_loading, readme_provenance, responsive_mobile, selection_export, sky_map_aladin, source_list_search | Nested duplicate subdir excluded by pattern; top100 is a facet preset. |
-| `brick_2221/nirspec_6927/gallery.html` | gallery (dirgallery) | items img sedimg | 10 | collapsible_panels, cross_page_nav, dark_light_theme, deep_link_hash, filter_toggles, hover_preview, lazy_data_loading, readme_provenance, responsive_mobile, source_list_search | Same physical file as nirspec-6927 #14; one unified page serves both inventory rows. |
+| `brick_2221/nirspec_6927/gallery.html` | gallery (dirgallery) | items img sedimg | 10 | collapsible_panels, cross_page_nav, dark_light_theme, deep_link_hash, filter_toggles, hover_preview, lazy_data_loading, readme_provenance, responsive_mobile, source_list_search | Same physical file as nirspec6927 #14; one unified page serves both inventory rows. |
 | `brick_2221/ccds_cmds/gallery.html` | gallery (one ccds_cmds page, facet preset) | items img | 10 | collapsible_panels, cross_page_nav, dark_light_theme, deep_link_hash, filter_toggles, hover_preview, lazy_data_loading, readme_provenance, responsive_mobile, source_list_search | Legacy regex /\.png$/ becomes a facet preset of one ccds_cmds gallery; redirect stub only under --replace. |
 | `brick_2221/ccds_cmds/gallery_cmd.html` | gallery (one ccds_cmds page, facet preset) | items img | 10 | collapsible_panels, cross_page_nav, dark_light_theme, deep_link_hash, filter_toggles, hover_preview, lazy_data_loading, readme_provenance, responsive_mobile, source_list_search | Legacy regex /cmd.*\.png$/ becomes a facet preset of one ccds_cmds gallery; redirect stub only under --replace. |
 | `brick_2221/ccds_cmds/gallery_cmd_iso.html` | gallery (one ccds_cmds page, facet preset) | items img | 10 | collapsible_panels, cross_page_nav, dark_light_theme, deep_link_hash, filter_toggles, hover_preview, lazy_data_loading, readme_provenance, responsive_mobile, source_list_search | Legacy regex /cmd.*iso\.png$/ becomes a facet preset of one ccds_cmds gallery; redirect stub only under --replace. |
@@ -2028,7 +2062,7 @@ Totals: 93 rows (87 inventoried pages + 6 extras rows), 11 families, 1517 capabi
 | `wavelength.html` | wavelength [sky with rung rail | rung notes] | sky cat skycat | 9 | catalog_markers_on_sky, collapsible_panels, dark_light_theme, deep_link_hash, detail_panel, hover_preview, readme_provenance, selection_export, source_list_search | Asymmetric cross-fade (lower rung opaque, upper ramps) from W51_Portal_Wavelength.py:239-264; opacity feature detection with step fallback; rungs ordered by red channel; hash #rung=&ra=&dec=&fov= mapped. |
 | `archive_colors/index.html` | explorer (jwst_archive adapter, context dataset = W51 photometry) | multi cat cats num2 mags2 num3 mags3f sky skycat spec dens | 28 | av_slider, brush_circle, brush_lasso, brush_rect, brush_set_ops, catalog_markers_on_sky, cdn_fallback, class_coloring, collapsible_panels, cross_page_nav, dark_light_theme, deep_link_hash, detail_panel, extinction_vectors_on_ccd, filter_toggles, hips_layer_stacking, hover_preview, keyboard_nav, labeled_features_overlay, linked_selection, live_sed_viewer, model_template_overlay, resizable_panels, responsive_mobile, selectable_axes, selection_export, sky_map_aladin, source_list_search | Built by WP28 from the 1902-row archive fluxes table; templates copied into data/ when ../templates is not reachable from the secure tree; references shared archive spectra shards instead of the 28 MB duplicate; verify checks cross-tree URL returns 401 without credentials. |
 
-### 14.11 wd2-nircam (6 rows)
+### 14.11 wd2 (6 rows)
 
 | legacy page | archetype | flags | caps to fill (n) | capabilities to fill | special handling |
 |---|---|---|---|---|---|
@@ -2490,6 +2524,17 @@ Waves:
   - `tests/e2e/test_port_nirspec6927_narrative.py`
   - `tests/e2e/test_port_extras.py`
 - description: MSATA scrollytelling (15 beats, acquisition boxes, highlight cleanup), H2 report (VERDICTS imported, rotation-diagram scatter when a line table exists), refstar map (rings tool; refstar_map_data.json has no writer, so it is rebuilt from NIRSpec_6927_RefStar inputs or extracted with Tier A), refstar_check contact sheets. Extras: hips_tours (RGB and ACES wavelength tours), spitzer_spectra (cmz), jwst_gc_aladin explorer, cmd_explorer pre-binned explorer. The narrative family deploys into the same nirspec_6927/unified target using a separate [[portal]] id, with page files prefixed n_ to keep ownership disjoint.
+
+### WPE1 — Wave E: Python framework fixes from wave-1 adapter reviews
+
+- depends_on: none (wave-1 adapters committed). Files: see `docs/wps.json`.
+- Changes, each with tests:
+  1. Per-legacy-file stub preset and `replace = false` (§4.1 legacy items, §4.3 `page.legacy.presets`, §11.4). `sites/nirspec6927.toml` maps the `_2221`/`_1182` PNG galleries to `role=c2221`/`role=c1182`.
+  2. `portal.json counts` (§4.2): one landing count per page from its primary dataset.
+  3. No absolute local paths in served files (§9.3 "Served paths"); `check` warns at G1 and fails at G2 (§10).
+  4. First paint of context catalogs counts their density grids only (§5.11). The nirspec6927 `bg` catalogue (121,068 rows) drops exact rows.
+  5. Directory inputs are stamped without a tree walk, and pre-WPE1 memos are adopted (§9.3 "Input registry and cache cost").
+  6. Family keys in the inventory and port-table data equal the site ids (§14).
 
 ## 16. Open questions and risks
 

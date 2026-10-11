@@ -448,7 +448,7 @@
   "archetype_base": "explorer"
  },
  {
-  "family": "wd2-nircam",
+  "family": "wd2",
   "legacy_page": "map_ccd.html",
   "archetype": "explorer [sky | scatter x2 | list | detail] tier T1",
   "capabilities_to_fill": [
@@ -490,11 +490,11 @@
   "n": 19453,
   "n_enabled": 33,
   "n_legacy": 13,
-  "key": "wd2-nircam/map_ccd.html",
+  "key": "wd2/map_ccd.html",
   "archetype_base": "explorer"
  },
  {
-  "family": "wd2-nircam",
+  "family": "wd2",
   "legacy_page": "wd2_colorcolor.html",
   "archetype": "explorer [curated scatter grid | list | detail]",
   "capabilities_to_fill": [
@@ -542,11 +542,11 @@
   "n": 13409,
   "n_enabled": 35,
   "n_legacy": 11,
-  "key": "wd2-nircam/wd2_colorcolor.html",
+  "key": "wd2/wd2_colorcolor.html",
   "archetype_base": "explorer"
  },
  {
-  "family": "wd2-nircam",
+  "family": "wd2",
   "legacy_page": "wd2_manifold.html",
   "archetype": "manifold tier T1, CPU projection (support > 28 base columns)",
   "capabilities_to_fill": [
@@ -581,11 +581,11 @@
   "n": 13409,
   "n_enabled": 37,
   "n_legacy": 28,
-  "key": "wd2-nircam/wd2_manifold.html",
+  "key": "wd2/wd2_manifold.html",
   "archetype_base": "manifold"
  },
  {
-  "family": "wd2-nircam",
+  "family": "wd2",
   "legacy_page": "sabbi.html",
   "archetype": "manifold",
   "capabilities_to_fill": [
@@ -624,11 +624,11 @@
   "n": 9267,
   "n_enabled": 33,
   "n_legacy": 16,
-  "key": "wd2-nircam/sabbi.html",
+  "key": "wd2/sabbi.html",
   "archetype_base": "manifold"
  },
  {
-  "family": "wd2-nircam",
+  "family": "wd2",
   "legacy_page": "wd2_sedgallery.html",
   "archetype": "gallery (+mini scatter, +sky, +live SED)",
   "capabilities_to_fill": [
@@ -677,11 +677,11 @@
   "n": 6711,
   "n_enabled": 34,
   "n_legacy": 9,
-  "key": "wd2-nircam/wd2_sedgallery.html",
+  "key": "wd2/wd2_sedgallery.html",
   "archetype_base": "gallery"
  },
  {
-  "family": "wd2-nircam",
+  "family": "wd2",
   "legacy_page": "wd2_wavelength_explorer.html",
   "archetype": "wavelength",
   "capabilities_to_fill": [
@@ -706,11 +706,11 @@
   "n": null,
   "n_enabled": 16,
   "n_legacy": 5,
-  "key": "wd2-nircam/wd2_wavelength_explorer.html",
+  "key": "wd2/wd2_wavelength_explorer.html",
   "archetype_base": "wavelength"
  },
  {
-  "family": "nirspec-2640",
+  "family": "nirspec2640",
   "legacy_page": "index.html",
   "archetype": "landing",
   "capabilities_to_fill": [
@@ -728,11 +728,11 @@
   "n": 0,
   "n_enabled": 9,
   "n_legacy": 3,
-  "key": "nirspec-2640/index.html",
+  "key": "nirspec2640/index.html",
   "archetype_base": "landing"
  },
  {
-  "family": "nirspec-2640",
+  "family": "nirspec2640",
   "legacy_page": "nirspec_2640_map.html",
   "archetype": "explorer [list | sky | detail]",
   "capabilities_to_fill": [
@@ -777,11 +777,11 @@
   "n": 131,
   "n_enabled": 34,
   "n_legacy": 12,
-  "key": "nirspec-2640/nirspec_2640_map.html",
+  "key": "nirspec2640/nirspec_2640_map.html",
   "archetype_base": "explorer"
  },
  {
-  "family": "nirspec-2640",
+  "family": "nirspec2640",
   "legacy_page": "nirspec_2640_colorcolor.html",
   "archetype": "explorer [scatter grid | list | detail]",
   "capabilities_to_fill": [
@@ -828,11 +828,11 @@
   "n": 131,
   "n_enabled": 34,
   "n_legacy": 10,
-  "key": "nirspec-2640/nirspec_2640_colorcolor.html",
+  "key": "nirspec2640/nirspec_2640_colorcolor.html",
   "archetype_base": "explorer"
  },
  {
-  "family": "nirspec-2640",
+  "family": "nirspec2640",
   "legacy_page": "nirspec_2640_specviewer.html",
   "archetype": "spectra [list | spectrum1d + spectrum2d | detail]",
   "capabilities_to_fill": [
@@ -869,11 +869,11 @@
   "n": 131,
   "n_enabled": 27,
   "n_legacy": 9,
-  "key": "nirspec-2640/nirspec_2640_specviewer.html",
+  "key": "nirspec2640/nirspec_2640_specviewer.html",
   "archetype_base": "spectra"
  },
  {
-  "family": "nirspec-2640",
+  "family": "nirspec2640",
   "legacy_page": "nirspec_2640_pvgallery.html",
   "archetype": "gallery (roles L3/L2/no-bgsub)",
   "capabilities_to_fill": [
@@ -902,11 +902,11 @@
   "n": 131,
   "n_enabled": 19,
   "n_legacy": 7,
-  "key": "nirspec-2640/nirspec_2640_pvgallery.html",
+  "key": "nirspec2640/nirspec_2640_pvgallery.html",
   "archetype_base": "gallery"
  },
  {
-  "family": "nirspec-2640",
+  "family": "nirspec2640",
   "legacy_page": "nirspec_2640_sedgallery.html",
   "archetype": "gallery (+live SED)",
   "capabilities_to_fill": [
@@ -954,11 +954,11 @@
   "n": 131,
   "n_enabled": 33,
   "n_legacy": 8,
-  "key": "nirspec-2640/nirspec_2640_sedgallery.html",
+  "key": "nirspec2640/nirspec_2640_sedgallery.html",
   "archetype_base": "gallery"
  },
  {
-  "family": "nirspec-2640",
+  "family": "nirspec2640",
   "legacy_page": "nirspec_2640_red_excess.html",
   "archetype": "explorer [scatter main | scatter offset vs r_wd2 | detail]",
   "capabilities_to_fill": [
@@ -1005,11 +1005,11 @@
   "n": 12131,
   "n_enabled": 33,
   "n_legacy": 8,
-  "key": "nirspec-2640/nirspec_2640_red_excess.html",
+  "key": "nirspec2640/nirspec_2640_red_excess.html",
   "archetype_base": "explorer"
  },
  {
-  "family": "nirspec-2640",
+  "family": "nirspec2640",
   "legacy_page": "nirspec_2640_manifold.html",
   "archetype": "manifold",
   "capabilities_to_fill": [
@@ -1047,11 +1047,11 @@
   "n": 131,
   "n_enabled": 36,
   "n_legacy": 23,
-  "key": "nirspec-2640/nirspec_2640_manifold.html",
+  "key": "nirspec2640/nirspec_2640_manifold.html",
   "archetype_base": "manifold"
  },
  {
-  "family": "nirspec-2640",
+  "family": "nirspec2640",
   "legacy_page": "pngs/gallery_2640.html",
   "archetype": "gallery (one gallery, 3 roles: all/nb/bb)",
   "capabilities_to_fill": [
@@ -1084,11 +1084,11 @@
   "n": 131,
   "n_enabled": 19,
   "n_legacy": 3,
-  "key": "nirspec-2640/pngs/gallery_2640.html",
+  "key": "nirspec2640/pngs/gallery_2640.html",
   "archetype_base": "gallery"
  },
  {
-  "family": "nirspec-2640",
+  "family": "nirspec2640",
   "legacy_page": "pngs/gallery_2640_nb.html",
   "archetype": "gallery (role preset nb)",
   "capabilities_to_fill": [
@@ -1121,11 +1121,11 @@
   "n": 131,
   "n_enabled": 19,
   "n_legacy": 3,
-  "key": "nirspec-2640/pngs/gallery_2640_nb.html",
+  "key": "nirspec2640/pngs/gallery_2640_nb.html",
   "archetype_base": "gallery"
  },
  {
-  "family": "nirspec-2640",
+  "family": "nirspec2640",
   "legacy_page": "pngs/gallery_2640_bb.html",
   "archetype": "gallery (role preset bb)",
   "capabilities_to_fill": [
@@ -1158,11 +1158,11 @@
   "n": 131,
   "n_enabled": 19,
   "n_legacy": 3,
-  "key": "nirspec-2640/pngs/gallery_2640_bb.html",
+  "key": "nirspec2640/pngs/gallery_2640_bb.html",
   "archetype_base": "gallery"
  },
  {
-  "family": "nirspec-6927",
+  "family": "nirspec6927",
   "legacy_page": "index.html",
   "archetype": "landing",
   "capabilities_to_fill": [
@@ -1181,11 +1181,11 @@
   "n": 0,
   "n_enabled": 9,
   "n_legacy": 2,
-  "key": "nirspec-6927/index.html",
+  "key": "nirspec6927/index.html",
   "archetype_base": "landing"
  },
  {
-  "family": "nirspec-6927",
+  "family": "nirspec6927",
   "legacy_page": "nirspec_6927_map.html",
   "archetype": "explorer [list | sky | detail]",
   "capabilities_to_fill": [
@@ -1233,11 +1233,11 @@
   "n": 165,
   "n_enabled": 35,
   "n_legacy": 11,
-  "key": "nirspec-6927/nirspec_6927_map.html",
+  "key": "nirspec6927/nirspec_6927_map.html",
   "archetype_base": "explorer"
  },
  {
-  "family": "nirspec-6927",
+  "family": "nirspec6927",
   "legacy_page": "nirspec_6927_manifold.html",
   "archetype": "manifold",
   "capabilities_to_fill": [
@@ -1280,11 +1280,11 @@
   "n": 165,
   "n_enabled": 36,
   "n_legacy": 18,
-  "key": "nirspec-6927/nirspec_6927_manifold.html",
+  "key": "nirspec6927/nirspec_6927_manifold.html",
   "archetype_base": "manifold"
  },
  {
-  "family": "nirspec-6927",
+  "family": "nirspec6927",
   "legacy_page": "nirspec_6927_specviewer.html",
   "archetype": "spectra [list | spectrum1d + spectrum2d | detail]",
   "capabilities_to_fill": [
@@ -1324,11 +1324,11 @@
   "n": 165,
   "n_enabled": 27,
   "n_legacy": 6,
-  "key": "nirspec-6927/nirspec_6927_specviewer.html",
+  "key": "nirspec6927/nirspec_6927_specviewer.html",
   "archetype_base": "spectra"
  },
  {
-  "family": "nirspec-6927",
+  "family": "nirspec6927",
   "legacy_page": "nirspec_6927_colorcolor.html",
   "archetype": "explorer [scatter grid | list | detail]",
   "capabilities_to_fill": [
@@ -1379,11 +1379,11 @@
   "n": 165,
   "n_enabled": 34,
   "n_legacy": 6,
-  "key": "nirspec-6927/nirspec_6927_colorcolor.html",
+  "key": "nirspec6927/nirspec_6927_colorcolor.html",
   "archetype_base": "explorer"
  },
  {
-  "family": "nirspec-6927",
+  "family": "nirspec6927",
   "legacy_page": "nirspec_6927_icecolumns.html",
   "archetype": "explorer [log-log scatter | list | detail]",
   "capabilities_to_fill": [
@@ -1428,11 +1428,11 @@
   "n": 165,
   "n_enabled": 32,
   "n_legacy": 8,
-  "key": "nirspec-6927/nirspec_6927_icecolumns.html",
+  "key": "nirspec6927/nirspec_6927_icecolumns.html",
   "archetype_base": "explorer"
  },
  {
-  "family": "nirspec-6927",
+  "family": "nirspec6927",
   "legacy_page": "nirspec_6927_cogas.html",
   "archetype": "explorer [list | detail | scatter T_ex vs log N]",
   "capabilities_to_fill": [
@@ -1474,11 +1474,11 @@
   "n": 165,
   "n_enabled": 30,
   "n_legacy": 8,
-  "key": "nirspec-6927/nirspec_6927_cogas.html",
+  "key": "nirspec6927/nirspec_6927_cogas.html",
   "archetype_base": "explorer"
  },
  {
-  "family": "nirspec-6927",
+  "family": "nirspec6927",
   "legacy_page": "nirspec_6927_h2.html",
   "archetype": "narrative (report) with embedded scatter/table panes",
   "capabilities_to_fill": [
@@ -1506,11 +1506,11 @@
   "n": 8,
   "n_enabled": 19,
   "n_legacy": 6,
-  "key": "nirspec-6927/nirspec_6927_h2.html",
+  "key": "nirspec6927/nirspec_6927_h2.html",
   "archetype_base": "narrative"
  },
  {
-  "family": "nirspec-6927",
+  "family": "nirspec6927",
   "legacy_page": "nirspec_6927_pvgallery.html",
   "archetype": "gallery (roles L3/L2/no-bgsub)",
   "capabilities_to_fill": [
@@ -1540,11 +1540,11 @@
   "n": 165,
   "n_enabled": 19,
   "n_legacy": 6,
-  "key": "nirspec-6927/nirspec_6927_pvgallery.html",
+  "key": "nirspec6927/nirspec_6927_pvgallery.html",
   "archetype_base": "gallery"
  },
  {
-  "family": "nirspec-6927",
+  "family": "nirspec6927",
   "legacy_page": "nirspec_6927_sedgallery.html",
   "archetype": "gallery (+live SED, multi-image items)",
   "capabilities_to_fill": [
@@ -1594,11 +1594,11 @@
   "n": 163,
   "n_enabled": 33,
   "n_legacy": 6,
-  "key": "nirspec-6927/nirspec_6927_sedgallery.html",
+  "key": "nirspec6927/nirspec_6927_sedgallery.html",
   "archetype_base": "gallery"
  },
  {
-  "family": "nirspec-6927",
+  "family": "nirspec6927",
   "legacy_page": "nirspec_6927_msata_finding.html",
   "archetype": "narrative [beats | sticky sky]",
   "capabilities_to_fill": [
@@ -1624,11 +1624,11 @@
   "n": 5972,
   "n_enabled": 19,
   "n_legacy": 9,
-  "key": "nirspec-6927/nirspec_6927_msata_finding.html",
+  "key": "nirspec6927/nirspec_6927_msata_finding.html",
   "archetype_base": "narrative"
  },
  {
-  "family": "nirspec-6927",
+  "family": "nirspec6927",
   "legacy_page": "nirspec_6927_refstar_map.html",
   "archetype": "explorer [sky | list | detail]",
   "capabilities_to_fill": [
@@ -1663,11 +1663,11 @@
   "n": 888,
   "n_enabled": 25,
   "n_legacy": 8,
-  "key": "nirspec-6927/nirspec_6927_refstar_map.html",
+  "key": "nirspec6927/nirspec_6927_refstar_map.html",
   "archetype_base": "explorer"
  },
  {
-  "family": "nirspec-6927",
+  "family": "nirspec6927",
   "legacy_page": "refstar_check/index.html",
   "archetype": "gallery (contact sheets) + readme",
   "capabilities_to_fill": [
@@ -1688,11 +1688,11 @@
   "n": 184,
   "n_enabled": 12,
   "n_legacy": 4,
-  "key": "nirspec-6927/refstar_check/index.html",
+  "key": "nirspec6927/refstar_check/index.html",
   "archetype_base": "gallery"
  },
  {
-  "family": "nirspec-6927",
+  "family": "nirspec6927",
   "legacy_page": "pngs/gallery_6927.html",
   "archetype": "gallery (one gallery, roles 6927/2221/1182)",
   "capabilities_to_fill": [
@@ -1725,11 +1725,11 @@
   "n": 166,
   "n_enabled": 19,
   "n_legacy": 3,
-  "key": "nirspec-6927/pngs/gallery_6927.html",
+  "key": "nirspec6927/pngs/gallery_6927.html",
   "archetype_base": "gallery"
  },
  {
-  "family": "nirspec-6927",
+  "family": "nirspec6927",
   "legacy_page": "public brick_2221/nirspec_6927/gallery.html",
   "archetype": "gallery (public dirgallery)",
   "capabilities_to_fill": [
@@ -1754,7 +1754,7 @@
   "n": 251,
   "n_enabled": 13,
   "n_legacy": 2,
-  "key": "nirspec-6927/public brick_2221/nirspec_6927/gallery.html",
+  "key": "nirspec6927/public brick_2221/nirspec_6927/gallery.html",
   "archetype_base": "gallery"
  },
  {
@@ -1918,7 +1918,7 @@
   "archetype_base": "gallery"
  },
  {
-  "family": "sickle-brick-miri",
+  "family": "sickle_brick",
   "legacy_page": "sickle_miri_sed_map.html",
   "archetype": "explorer [list | sky | detail + sed + scatter x2]",
   "capabilities_to_fill": [
@@ -1958,11 +1958,11 @@
   "n": 245,
   "n_enabled": 34,
   "n_legacy": 17,
-  "key": "sickle-brick-miri/sickle_miri_sed_map.html",
+  "key": "sickle_brick/sickle_miri_sed_map.html",
   "archetype_base": "explorer"
  },
  {
-  "family": "sickle-brick-miri",
+  "family": "sickle_brick",
   "legacy_page": "sickle_miri_sed_manifold.html",
   "archetype": "manifold",
   "capabilities_to_fill": [
@@ -2004,11 +2004,11 @@
   "n": 245,
   "n_enabled": 34,
   "n_legacy": 15,
-  "key": "sickle-brick-miri/sickle_miri_sed_manifold.html",
+  "key": "sickle_brick/sickle_miri_sed_manifold.html",
   "archetype_base": "manifold"
  },
  {
-  "family": "sickle-brick-miri",
+  "family": "sickle_brick",
   "legacy_page": "brick_2221/sed_figures_f1500w_all/gallery.html",
   "archetype": "explorer (near 1:1 with legacy)",
   "capabilities_to_fill": [
@@ -2038,11 +2038,11 @@
   "n": 241,
   "n_enabled": 34,
   "n_legacy": 27,
-  "key": "sickle-brick-miri/brick_2221/sed_figures_f1500w_all/gallery.html",
+  "key": "sickle_brick/brick_2221/sed_figures_f1500w_all/gallery.html",
   "archetype_base": "explorer"
  },
  {
-  "family": "sickle-brick-miri",
+  "family": "sickle_brick",
   "legacy_page": "brick_2221/sed_figures_f1500w_all/gallery_legacy.html",
   "archetype": "gallery (dirgallery, joined to F1500W catalog)",
   "capabilities_to_fill": [
@@ -2075,11 +2075,11 @@
   "n": 241,
   "n_enabled": 19,
   "n_legacy": 3,
-  "key": "sickle-brick-miri/brick_2221/sed_figures_f1500w_all/gallery_legacy.html",
+  "key": "sickle_brick/brick_2221/sed_figures_f1500w_all/gallery_legacy.html",
   "archetype_base": "gallery"
  },
  {
-  "family": "sickle-brick-miri",
+  "family": "sickle_brick",
   "legacy_page": "brick_2221/sed_figures_top100_f1500w/gallery.html",
   "archetype": "gallery (dirgallery, top100 preset)",
   "capabilities_to_fill": [
@@ -2112,11 +2112,11 @@
   "n": 100,
   "n_enabled": 19,
   "n_legacy": 3,
-  "key": "sickle-brick-miri/brick_2221/sed_figures_top100_f1500w/gallery.html",
+  "key": "sickle_brick/brick_2221/sed_figures_top100_f1500w/gallery.html",
   "archetype_base": "gallery"
  },
  {
-  "family": "sickle-brick-miri",
+  "family": "sickle_brick",
   "legacy_page": "brick_2221/nirspec_6927/gallery.html",
   "archetype": "gallery (dirgallery)",
   "capabilities_to_fill": [
@@ -2131,7 +2131,7 @@
    "responsive_mobile",
    "source_list_search"
   ],
-  "special_handling": "Same physical file as nirspec-6927 #14; one unified page serves both inventory rows.",
+  "special_handling": "Same physical file as nirspec6927 #14; one unified page serves both inventory rows.",
   "flags": [
    "items",
    "img",
@@ -2140,11 +2140,11 @@
   "n": 251,
   "n_enabled": 13,
   "n_legacy": 3,
-  "key": "sickle-brick-miri/brick_2221/nirspec_6927/gallery.html",
+  "key": "sickle_brick/brick_2221/nirspec_6927/gallery.html",
   "archetype_base": "gallery"
  },
  {
-  "family": "sickle-brick-miri",
+  "family": "sickle_brick",
   "legacy_page": "brick_2221/ccds_cmds/gallery.html",
   "archetype": "gallery (one ccds_cmds page, facet preset)",
   "capabilities_to_fill": [
@@ -2167,11 +2167,11 @@
   "n": 650,
   "n_enabled": 12,
   "n_legacy": 2,
-  "key": "sickle-brick-miri/brick_2221/ccds_cmds/gallery.html",
+  "key": "sickle_brick/brick_2221/ccds_cmds/gallery.html",
   "archetype_base": "gallery"
  },
  {
-  "family": "sickle-brick-miri",
+  "family": "sickle_brick",
   "legacy_page": "brick_2221/ccds_cmds/gallery_cmd.html",
   "archetype": "gallery (one ccds_cmds page, facet preset)",
   "capabilities_to_fill": [
@@ -2194,11 +2194,11 @@
   "n": 131,
   "n_enabled": 12,
   "n_legacy": 2,
-  "key": "sickle-brick-miri/brick_2221/ccds_cmds/gallery_cmd.html",
+  "key": "sickle_brick/brick_2221/ccds_cmds/gallery_cmd.html",
   "archetype_base": "gallery"
  },
  {
-  "family": "sickle-brick-miri",
+  "family": "sickle_brick",
   "legacy_page": "brick_2221/ccds_cmds/gallery_cmd_iso.html",
   "archetype": "gallery (one ccds_cmds page, facet preset)",
   "capabilities_to_fill": [
@@ -2221,11 +2221,11 @@
   "n": 19,
   "n_enabled": 12,
   "n_legacy": 2,
-  "key": "sickle-brick-miri/brick_2221/ccds_cmds/gallery_cmd_iso.html",
+  "key": "sickle_brick/brick_2221/ccds_cmds/gallery_cmd_iso.html",
   "archetype_base": "gallery"
  },
  {
-  "family": "sickle-brick-miri",
+  "family": "sickle_brick",
   "legacy_page": "brick_2221/ccds_cmds/gallery_cmd_lowext.html",
   "archetype": "gallery (one ccds_cmds page, facet preset)",
   "capabilities_to_fill": [
@@ -2248,11 +2248,11 @@
   "n": 22,
   "n_enabled": 12,
   "n_legacy": 2,
-  "key": "sickle-brick-miri/brick_2221/ccds_cmds/gallery_cmd_lowext.html",
+  "key": "sickle_brick/brick_2221/ccds_cmds/gallery_cmd_lowext.html",
   "archetype_base": "gallery"
  },
  {
-  "family": "sickle-brick-miri",
+  "family": "sickle_brick",
   "legacy_page": "brick_2221/ccds_cmds/gallery_blue405410.html",
   "archetype": "gallery (one ccds_cmds page, facet preset)",
   "capabilities_to_fill": [
@@ -2275,11 +2275,11 @@
   "n": 218,
   "n_enabled": 12,
   "n_legacy": 2,
-  "key": "sickle-brick-miri/brick_2221/ccds_cmds/gallery_blue405410.html",
+  "key": "sickle_brick/brick_2221/ccds_cmds/gallery_blue405410.html",
   "archetype_base": "gallery"
  },
  {
-  "family": "jwst-archive",
+  "family": "jwst_archive",
   "legacy_page": "JWST archive colour portal",
   "archetype": "explorer [scatter CCD + 2 marginal CMDs | list | detail + spectrum]",
   "capabilities_to_fill": [
@@ -2317,11 +2317,11 @@
   "n": 1902,
   "n_enabled": 33,
   "n_legacy": 17,
-  "key": "jwst-archive/JWST archive colour portal",
+  "key": "jwst_archive/JWST archive colour portal",
   "archetype_base": "explorer"
  },
  {
-  "family": "jwst-archive",
+  "family": "jwst_archive",
   "legacy_page": "JWST archive ice manifold",
   "archetype": "manifold",
   "capabilities_to_fill": [
@@ -2360,11 +2360,11 @@
   "n": 1539,
   "n_enabled": 34,
   "n_legacy": 18,
-  "key": "jwst-archive/JWST archive ice manifold",
+  "key": "jwst_archive/JWST archive ice manifold",
   "archetype_base": "manifold"
  },
  {
-  "family": "jwst-archive",
+  "family": "jwst_archive",
   "legacy_page": "JWST archive portal README",
   "archetype": "landing (readme section)",
   "capabilities_to_fill": [
@@ -2383,11 +2383,11 @@
   "n": 0,
   "n_enabled": 9,
   "n_legacy": 2,
-  "key": "jwst-archive/JWST archive portal README",
+  "key": "jwst_archive/JWST archive portal README",
   "archetype_base": "landing"
  },
  {
-  "family": "jwst-archive",
+  "family": "jwst_archive",
   "legacy_page": "W51 photometry vs JWST archive spectra",
   "archetype": "explorer (W51 build of archive portal)",
   "capabilities_to_fill": [
@@ -2426,11 +2426,11 @@
   "n": 1539,
   "n_enabled": 33,
   "n_legacy": 16,
-  "key": "jwst-archive/W51 photometry vs JWST archive spectra",
+  "key": "jwst_archive/W51 photometry vs JWST archive spectra",
   "archetype_base": "explorer"
  },
  {
-  "family": "jwst-archive",
+  "family": "jwst_archive",
   "legacy_page": "W51 archive_colors README",
   "archetype": "landing (readme section)",
   "capabilities_to_fill": [
@@ -2449,11 +2449,11 @@
   "n": 0,
   "n_enabled": 9,
   "n_legacy": 2,
-  "key": "jwst-archive/W51 archive_colors README",
+  "key": "jwst_archive/W51 archive_colors README",
   "archetype_base": "landing"
  },
  {
-  "family": "jwst-archive",
+  "family": "jwst_archive",
   "legacy_page": "Spectra PNG gallery",
   "archetype": "gallery with facets program/target/filterset/grating",
   "capabilities_to_fill": [
@@ -2492,11 +2492,11 @@
   "n": 8593,
   "n_enabled": 24,
   "n_legacy": 4,
-  "key": "jwst-archive/Spectra PNG gallery",
+  "key": "jwst_archive/Spectra PNG gallery",
   "archetype_base": "gallery"
  },
  {
-  "family": "jwst-archive",
+  "family": "jwst_archive",
   "legacy_page": "Spectra PNG gallery with classification checklist",
   "archetype": "gallery in annotate mode",
   "capabilities_to_fill": [
@@ -2534,11 +2534,11 @@
   "n": 8593,
   "n_enabled": 24,
   "n_legacy": 6,
-  "key": "jwst-archive/Spectra PNG gallery with classification checklist",
+  "key": "jwst_archive/Spectra PNG gallery with classification checklist",
   "archetype_base": "gallery"
  },
  {
-  "family": "jwst-archive",
+  "family": "jwst_archive",
   "legacy_page": "Gallery: PRISM",
   "archetype": "gallery (facet preset of archive gallery)",
   "capabilities_to_fill": [
@@ -2578,11 +2578,11 @@
   "n": 0,
   "n_enabled": 24,
   "n_legacy": 3,
-  "key": "jwst-archive/Gallery: PRISM",
+  "key": "jwst_archive/Gallery: PRISM",
   "archetype_base": "gallery"
  },
  {
-  "family": "jwst-archive",
+  "family": "jwst_archive",
   "legacy_page": "Gallery: PRISM 2221 filters",
   "archetype": "gallery (facet preset of archive gallery)",
   "capabilities_to_fill": [
@@ -2622,11 +2622,11 @@
   "n": 657,
   "n_enabled": 24,
   "n_legacy": 3,
-  "key": "jwst-archive/Gallery: PRISM 2221 filters",
+  "key": "jwst_archive/Gallery: PRISM 2221 filters",
   "archetype_base": "gallery"
  },
  {
-  "family": "jwst-archive",
+  "family": "jwst_archive",
   "legacy_page": "Gallery: 1611 Serpens",
   "archetype": "gallery (facet preset of archive gallery)",
   "capabilities_to_fill": [
@@ -2666,11 +2666,11 @@
   "n": 1161,
   "n_enabled": 24,
   "n_legacy": 3,
-  "key": "jwst-archive/Gallery: 1611 Serpens",
+  "key": "jwst_archive/Gallery: 1611 Serpens",
   "archetype_base": "gallery"
  },
  {
-  "family": "jwst-archive",
+  "family": "jwst_archive",
   "legacy_page": "Gallery: 1611 broad",
   "archetype": "gallery (facet preset of archive gallery)",
   "capabilities_to_fill": [
@@ -2710,11 +2710,11 @@
   "n": 387,
   "n_enabled": 24,
   "n_legacy": 3,
-  "key": "jwst-archive/Gallery: 1611 broad",
+  "key": "jwst_archive/Gallery: 1611 broad",
   "archetype_base": "gallery"
  },
  {
-  "family": "jwst-archive",
+  "family": "jwst_archive",
   "legacy_page": "Gallery: 1611 narrow",
   "archetype": "gallery (facet preset of archive gallery)",
   "capabilities_to_fill": [
@@ -2754,11 +2754,11 @@
   "n": 387,
   "n_enabled": 24,
   "n_legacy": 3,
-  "key": "jwst-archive/Gallery: 1611 narrow",
+  "key": "jwst_archive/Gallery: 1611 narrow",
   "archetype_base": "gallery"
  },
  {
-  "family": "jwst-archive",
+  "family": "jwst_archive",
   "legacy_page": "Gallery: 1611 two gratings",
   "archetype": "gallery (facet preset of archive gallery)",
   "capabilities_to_fill": [
@@ -2798,11 +2798,11 @@
   "n": 3,
   "n_enabled": 24,
   "n_legacy": 3,
-  "key": "jwst-archive/Gallery: 1611 two gratings",
+  "key": "jwst_archive/Gallery: 1611 two gratings",
   "archetype_base": "gallery"
  },
  {
-  "family": "jwst-archive",
+  "family": "jwst_archive",
   "legacy_page": "Gallery: 3222 IRAS16293",
   "archetype": "gallery (facet preset of archive gallery)",
   "capabilities_to_fill": [
@@ -2842,11 +2842,11 @@
   "n": 444,
   "n_enabled": 24,
   "n_legacy": 3,
-  "key": "jwst-archive/Gallery: 3222 IRAS16293",
+  "key": "jwst_archive/Gallery: 3222 IRAS16293",
   "archetype_base": "gallery"
  },
  {
-  "family": "jwst-archive",
+  "family": "jwst_archive",
   "legacy_page": "Gallery: 3222 broad",
   "archetype": "gallery (facet preset of archive gallery)",
   "capabilities_to_fill": [
@@ -2886,11 +2886,11 @@
   "n": 148,
   "n_enabled": 24,
   "n_legacy": 3,
-  "key": "jwst-archive/Gallery: 3222 broad",
+  "key": "jwst_archive/Gallery: 3222 broad",
   "archetype_base": "gallery"
  },
  {
-  "family": "jwst-archive",
+  "family": "jwst_archive",
   "legacy_page": "Gallery: 3222 narrow",
   "archetype": "gallery (facet preset of archive gallery)",
   "capabilities_to_fill": [
@@ -2930,11 +2930,11 @@
   "n": 148,
   "n_enabled": 24,
   "n_legacy": 3,
-  "key": "jwst-archive/Gallery: 3222 narrow",
+  "key": "jwst_archive/Gallery: 3222 narrow",
   "archetype_base": "gallery"
  },
  {
-  "family": "gc-manifold",
+  "family": "gc_manifold",
   "legacy_page": "GC Treasury catalog manifold viewer (treasury_manifold)",
   "archetype": "manifold tier T2 (D=2 projection, GPU)",
   "capabilities_to_fill": [
@@ -2974,11 +2974,11 @@
   "n": 3738350,
   "n_enabled": 33,
   "n_legacy": 15,
-  "key": "gc-manifold/GC Treasury catalog manifold viewer (treasury_manifold)",
+  "key": "gc_manifold/GC Treasury catalog manifold viewer (treasury_manifold)",
   "archetype_base": "manifold"
  },
  {
-  "family": "gc-manifold",
+  "family": "gc_manifold",
   "legacy_page": "GC per-field catalog manifold viewers (<field>_manifold; 11 instances of one template)",
   "archetype": "manifold tier T2 (11 field pages)",
   "capabilities_to_fill": [
@@ -3016,11 +3016,11 @@
   "n": 651903,
   "n_enabled": 33,
   "n_legacy": 17,
-  "key": "gc-manifold/GC per-field catalog manifold viewers (<field>_manifold; 11 instances of one template)",
+  "key": "gc_manifold/GC per-field catalog manifold viewers (<field>_manifold; 11 instances of one template)",
   "archetype_base": "manifold"
  },
  {
-  "family": "gc-manifold",
+  "family": "gc_manifold",
   "legacy_page": "jwst-gc pipeline monitor (monitor.html, fields/<target>.html, *_monitor5as.html)",
   "archetype": "excluded",
   "capabilities_to_fill": [],
@@ -3029,7 +3029,7 @@
   "n": null,
   "n_enabled": 0,
   "n_legacy": 5,
-  "key": "gc-manifold/jwst-gc pipeline monitor (monitor.html, fields/<target>.html, *_monitor5as.html)",
+  "key": "gc_manifold/jwst-gc pipeline monitor (monitor.html, fields/<target>.html, *_monitor5as.html)",
   "archetype_base": "excluded"
  },
  {

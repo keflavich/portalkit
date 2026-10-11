@@ -37,10 +37,16 @@ inputs = ["/orange/adamginsburg/myfield/catalogs/*.fits"]  # globs, recorded in 
 
 [[portal.page]]                         # optional, per page: legacy files and URL grammars
 id = "explorer"
-legacy = ["catalog_explorer.html"]
+legacy = ["catalog_explorer.html",      # a file relative to legacy_dir, or a table:
+          {file = "catalog_explorer_red.html", preset = "view=red"},   # this file's stub preset
+          {file = "plots/index.html", replace = false}]               # behind a symlink: never stubbed
 grammar = ["kv-view"]                   # legacy hash grammars the page keeps answering
-preset = ""
+preset = ""                             # stub preset for items without their own
 ```
+
+Several legacy files can map to one unified page. A table item's `preset` is the hash its
+`--replace` redirect stub appends, so each old URL opens on its own view. `replace = false`
+keeps a file out of `--replace` (ARCHITECTURE section 4.1, docs/deploy.md section 6).
 
 A family with several portals (for example a public and a secure one) lists several
 `[[portal]]` entries and sets `PageSpec.portal` on each page.
@@ -54,13 +60,21 @@ A family with several portals (for example a public and a secure one) lists seve
 - `ctx.limit`: fixture mode; cap every catalog at this many rows when it is set.
 - `ctx.inputs.add(path)`: register every file read. The registry records sha256, size and
   mtime for the build report and refuses tmp paths (exit 5) unless the build runs with
-  `--allow-tmp-inputs`.
+  `--allow-tmp-inputs`. File digests are cached by `(path, mtime_ns, size)`, so a large
+  unchanged file is hashed once. A directory is recorded cheaply by its own mtime, its
+  entry count and a digest of its top-level entry names. No tree is walked, so registering a
+  multi-GB model grid directory costs one `scandir`. A file rewritten in place inside a
+  registered directory, or anything below its top level, does not change that record:
+  register the files (or sub-directories) whose content matters.
 - `ctx.legacy.module(name)`: import a legacy module from `legacy_paths` inside an empty
   temporary cwd. The import fails with `LegacyImportError` (exit 6) when it creates files;
   the module sha goes into the build provenance and `portalkit status` flags changes.
 - `ctx.cache.memo(key, fn, inputs=[paths])`: cache numpy arrays, astropy Tables or JSON
-  under `~/.cache/portalkit/<family>/`, keyed on `key`, the inputs' path, mtime and size,
-  and the build's tier and `limit` (so a fixture-mode value never reaches a full build).
+  under `~/.cache/portalkit/<family>/` (or `$PK_CACHE_DIR/<family>/`), keyed on `key`, the
+  inputs' path, mtime and size (a directory input: the stamp described above), and the
+  build's tier and `limit` (so a fixture-mode value never reaches a full build). A value
+  memoised before the directory stamp existed (full tree digest key) is found once with one
+  tree walk and then aliased under the new key, so long-running memos are kept.
   Put any other setting that changes the result (a law, a cut, a legacy module version)
   into `key`. `--no-cache` disables it.
 - `ctx.log(message)`: progress output.
@@ -114,7 +128,20 @@ HTML page per `PageSpec`, the bundles under `data/` and `build_report.json` (bud
 capabilities, warnings, inputs, adapter and legacy module shas). `--vendor-assets` copies
 the JS and CSS into `_pk/v<version>/` for builds that must work without the published
 asset tree. `portalkit check` validates every document against the schemas and the size
-budgets; `--gate G2` additionally refuses `json-legacy` record sets.
+budgets; `--gate G2` additionally refuses `json-legacy` record sets and absolute local paths
+(`/orange/`, `/blue/`, `/home/`) in served `.html`/`.json` files, which G1 reports as
+warnings. Provenance in served files is written as `<label>:<relative path>`, with the roots
+taken from `legacy_dir`, `legacy_paths` and `inputs`. Keep absolute paths out of README text
+and captions too. `build_report.json` keeps the full paths and is never deployed.
+
+`portal.json` gains a `counts` entry for every built page except the landing page. Each entry
+holds the size of the page's primary dataset: catalog rows, image items or record ids
+(ARCHITECTURE section 4.2). Landing cards can therefore show counts without hard-coded text.
+The card nouns default to source(s), image(s) or spectrum/spectra by dataset kind; a dataset
+that counts something else declares `noun=("model", "models")` on its `CatalogSpec`,
+`ImageSetSpec` or `RecordSetSpec`.
+A `context=True` catalog (a density backdrop) counts only its manifest and density grids
+toward first paint. Set `exact_rows=False` on it, because nothing lists it.
 
 Legacy payloads can be inspected with `portalkit extract-legacy page.html --out payload.json`.
 

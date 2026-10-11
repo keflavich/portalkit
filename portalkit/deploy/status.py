@@ -27,8 +27,8 @@ from typing import Any, Iterable, Mapping
 
 from .. import schema
 from . import DeployError, UsageError
-from .deploy import (NOT_DEPLOYED, TMP_SUFFIX, _get, deployed_builds, load_manifest,
-                     manifest_path_for, resolve_target, sha256_file, shared_legacy_dirs)
+from .deploy import (_get, deployed_builds, legacy_entries, load_manifest, manifest_path_for,
+                     not_deployed, resolve_target, sha256_file, shared_legacy_dirs)
 from .stage import iter_stage_files, latest_build, portal_stage_dir, stage_root as _stage_root
 
 #: Default registry directory: ``<repo>/sites``.
@@ -100,7 +100,7 @@ def _staged_tree(src: Path) -> dict[str, str]:
     files, _ = iter_stage_files(src)
     out = {}
     for rel in files:
-        if rel in NOT_DEPLOYED or rel.endswith(TMP_SUFFIX):
+        if not_deployed(rel):
             continue
         out[rel] = sha256_file(src / rel)[0]
     return out
@@ -137,7 +137,7 @@ def portal_status(family: str, site: Mapping, portal: Any, *,
             stubbed.add(os.path.normpath(tgt / r["legacy"]))
     ldir = _get(portal, "legacy_dir")
     for pg in _get(portal, "page", []) or []:
-        for lf in _get(pg, "legacy", []) or []:
+        for lf, _preset, _replace in legacy_entries(pg):
             if not ldir:
                 continue
             lp = Path(ldir) / lf

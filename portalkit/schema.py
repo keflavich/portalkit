@@ -102,6 +102,8 @@ GRAMMARS = ("bare-name", "kv-view", "gc-query", "wavelength", "beat", "gallery-i
 CLIP_MODES = ("none", "saturate", "drop")
 VISIBILITIES = ("public", "secure")
 AUTHS = ("public", "secure")
+#: ``portal.json counts[].kind``: what a landing card counts (section 4.2)
+PORTAL_COUNT_KINDS = ("catalog", "images", "records")
 TIERS = ("A", "B", "C")
 PANE_TIERS = ("T0", "T1", "T2", "F")
 OVERLAY_KINDS = ("polygons", "circles", "markers", "polyline", "rings", "boxes", "vector", "track")
@@ -506,6 +508,34 @@ def _segments(e: _E, path: str, segs: Any, n: int | None) -> None:
 # section 4.1 site registry (TOML)
 # ---------------------------------------------------------------------------
 
+def _legacy_files(e: _E, path: str, v: Any) -> None:
+    """``[[portal.page]] legacy``: strings or ``{file, preset?, replace?}`` tables; each file
+    is relative to ``legacy_dir`` and listed once."""
+    if not _list(e, path, v):
+        return
+    seen: set[str] = set()
+    for i, item in enumerate(v):
+        ip = _p(path, i)
+        if isinstance(item, dict):
+            _keys(e, ip, item, ("file",), ("preset", "replace"))
+            if "preset" in item:
+                _str(e, _p(ip, "preset"), item["preset"], nonempty=False)
+            if "replace" in item:
+                _bool(e, _p(ip, "replace"), item["replace"])
+            if "file" not in item or not _str(e, _p(ip, "file"), item["file"]):
+                continue
+            f = item["file"]
+        elif _str(e, ip, item):
+            f = item
+        else:
+            continue
+        if f.startswith("/") or ".." in f.split("/"):
+            e(ip, f"{f!r} must be a path relative to legacy_dir")
+        if f in seen:
+            e(ip, f"duplicate legacy file {f!r}")
+        seen.add(f)
+
+
 def validate_site(obj: Any, stem: str | None = None) -> list[str]:
     """Validate a parsed ``sites/<family>.toml`` (dict from ``tomllib``)."""
     e = _E()
@@ -571,7 +601,7 @@ def validate_site(obj: Any, stem: str | None = None) -> list[str]:
             _keys(e, gp, pg, ("id",), ("legacy", "preset", "grammar"))
             _str(e, _p(gp, "id"), pg.get("id"))
             if "legacy" in pg:
-                _strlist(e, _p(gp, "legacy"), pg["legacy"])
+                _legacy_files(e, _p(gp, "legacy"), pg["legacy"])
             if "preset" in pg:
                 _str(e, _p(gp, "preset"), pg["preset"], nonempty=False)
             if "grammar" in pg and _strlist(e, _p(gp, "grammar"), pg["grammar"]):
@@ -592,7 +622,7 @@ def validate_portal(obj: Any) -> list[str]:
     json_errors(obj, "", e)
     _schema_key(e, obj, "portal", True)
     _keys(e, "", obj, ("id", "title", "visibility", "build", "pk", "pages"),
-          ("schema", "related", "search"))
+          ("schema", "related", "search", "counts"))
     _str(e, "id", obj.get("id"))
     _str(e, "title", obj.get("title"))
     _str(e, "visibility", obj.get("visibility"), choices=VISIBILITIES)
@@ -640,6 +670,26 @@ def validate_portal(obj: Any) -> list[str]:
             if _str(e, _p(sp, "page"), s.get("page")) and pages is not None and s["page"] not in page_ids:
                 e(_p(sp, "page"), f"page {s['page']!r} is not listed in pages")
             _relpath(e, _p(sp, "manifest"), s.get("manifest"))
+    if "counts" in obj and _list(e, "counts", obj["counts"]):
+        seen_pages: set = set()
+        for i, c in enumerate(obj["counts"]):
+            cp = _p("counts", i)
+            if not _obj(e, cp, c):
+                continue
+            _keys(e, cp, c, ("page", "ds", "kind", "n"), ("unit", "units"))
+            if _str(e, _p(cp, "page"), c.get("page")):
+                if pages is not None and c["page"] not in page_ids:
+                    e(_p(cp, "page"), f"page {c['page']!r} is not listed in pages")
+                if c["page"] in seen_pages:
+                    e(_p(cp, "page"), f"duplicate count for page {c['page']!r}")
+                seen_pages.add(c["page"])
+            _str(e, _p(cp, "ds"), c.get("ds"))
+            _str(e, _p(cp, "kind"), c.get("kind"), choices=PORTAL_COUNT_KINDS)
+            if "n" in c:
+                _num(e, _p(cp, "n"), c["n"], lo=0, integer=True)
+            for k in ("unit", "units"):
+                if k in c:
+                    _str(e, _p(cp, k), c[k])
     return e.errors
 
 
@@ -926,9 +976,15 @@ def validate_page(obj: Any) -> list[str]:
         _opt_str(e, "page", pg, "subtitle", nonempty=False)
         if "legacy" in pg and pg["legacy"] is not None and _obj(e, "page.legacy", pg["legacy"]):
             lg = pg["legacy"]
-            _keys(e, "page.legacy", lg, ("files",), ("grammar", "preset"))
+            _keys(e, "page.legacy", lg, ("files",), ("grammar", "preset", "presets"))
             if "files" in lg:
                 _strlist(e, "page.legacy.files", lg["files"])
+            if "presets" in lg and _obj(e, "page.legacy.presets", lg["presets"]):
+                files = lg.get("files") if isinstance(lg.get("files"), list) else []
+                for k, v in lg["presets"].items():
+                    _str(e, _p("page.legacy.presets", k), v, nonempty=False)
+                    if k not in files:
+                        e(_p("page.legacy.presets", k), "not one of page.legacy.files")
             if "grammar" in lg and _strlist(e, "page.legacy.grammar", lg["grammar"]):
                 for i, g in enumerate(lg["grammar"]):
                     if g not in GRAMMARS:

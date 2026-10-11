@@ -79,8 +79,12 @@ legacy = ["nirspec_6927_sedgallery.html"]
 grammar = ["bare-name"]
 
 # One page serves the three legacy spectrum-PNG galleries (all filters, 2221 overlay, 1182
-# overlay). PageConfig.preset is per page, so the _2221/_1182 stubs open on the default
-# role; the role switcher selects c2221/c1182 (hash grammar: #role=c2221).
+# overlay). The per-file preset makes the _2221/_1182 redirect stubs open on the matching
+# image role (gallery store key `role`; section 4.1 legacy tables).
 [[portal.page]]
 id = "gallery_6927"
-legacy = ["pngs/gallery_6927.html", "pngs/gallery_6927_2221.html", "pngs/gallery_6927_1182.html"]
+legacy = [
+    "pngs/gallery_6927.html",
+    {file = "pngs/gallery_6927_2221.html", preset = "role=c2221"},
+    {file = "pngs/gallery_6927_1182.html", preset = "role=c1182"},
+]

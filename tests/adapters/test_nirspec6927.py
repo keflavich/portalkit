@@ -29,7 +29,6 @@ from portalkit.spec import (CatalogSpec, HipsSpec, Image2D, ImageSetSpec, Isochr
 REPO = Path(__file__).resolve().parents[2]
 LIMIT = 50
 FAMILY = "nirspec6927"
-INV_FAMILY = "nirspec-6927"       # key used by inventory_caps.json and port_table.json
 INV = json.loads((REPO / "tests" / "data" / "inventory_caps.json").read_text(encoding="utf-8"))
 TMP_ROOTS = tuple(os.path.realpath(p) for p in {tempfile.gettempdir(), "/tmp", "/var/tmp"})
 PAGES = ["index", "nirspec_6927_map", "nirspec_6927_manifold", "nirspec_6927_specviewer",
@@ -165,6 +164,11 @@ def test_fixture_build_passes_check(built):
     assert [p["id"] for p in report["pages"]] == PAGES
     for pg in report["pages"]:
         assert pg["first_paint_bytes"] <= 2_000_000, pg["id"]
+    # the 121,068-row context catalogue counts its density grids only (no row chunks)
+    fp = {p["id"]: p["first_paint_bytes"] for p in report["pages"]}
+    assert fp["nirspec_6927_colorcolor"] < 1_000_000, fp["nirspec_6927_colorcolor"]
+    bg = json.loads((built["portal"] / "data/bg/manifest.json").read_text(encoding="utf-8"))
+    assert "rows" not in bg
     # records stay out of first paint: spectra, 2D spectra and products load on focus
     for k in ("spec", "s2d", "prod"):
         assert report["budgets"]["datasets"][k]["first_paint_bytes"] == 0, k
@@ -228,7 +232,7 @@ def test_caps_superset_of_legacy(built):
     for pc in SITE.portal().pages:
         enabled = set(pages[pc.id]["caps"]["enabled"])
         for leg in pc.legacy:
-            key = f"{INV_FAMILY}/{leg}"
+            key = f"{FAMILY}/{leg}"
             if key not in INV:       # the _2221/_1182 PNG galleries are not inventoried
                 continue
             need = set(INV[key])
@@ -242,7 +246,7 @@ def test_port_table_caps_filled(built):
     pages = {p["id"]: p for p in _report(built)["pages"]}
     by_legacy = {leg: pc.id for pc in SITE.portal().pages for leg in pc.legacy}
     rows = [r for r in json.loads((REPO / "tests" / "data" / "port_table.json").read_text(encoding="utf-8"))
-            if r["family"] == INV_FAMILY and r["legacy_page"] in by_legacy]
+            if r["family"] == FAMILY and r["legacy_page"] in by_legacy]
     assert len(rows) == 10
     for r in rows:
         pg = pages[by_legacy[r["legacy_page"]]]

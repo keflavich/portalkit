@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -55,11 +56,27 @@ def sites_dir(path: os.PathLike | str | None = None) -> Path:
 
 @dataclass
 class PageConfig:
-    """One ``[[portal.page]]`` entry: the legacy -> unified mapping."""
+    """One ``[[portal.page]]`` entry: the legacy -> unified mapping.
+
+    ``legacy`` holds the legacy file names; ``files`` the per-file entries
+    (:class:`~portalkit.spec.LegacyFile`: file, per-file stub ``preset``, ``replace``)."""
     id: str
     legacy: list[str] = field(default_factory=list)
     preset: str = ""
     grammar: list[str] = field(default_factory=list)
+    files: list = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        from .spec import LegacyFile
+        if not self.files:
+            self.files = [LegacyFile(file=f) for f in self.legacy]
+        else:
+            self.files = [LegacyFile.coerce(f) for f in self.files]
+            self.legacy = [f.file for f in self.files]
+
+    def presets(self) -> dict[str, str]:
+        """Per-file stub presets (files whose entry sets ``preset``)."""
+        return {f.file: f.preset for f in self.files if f.preset is not None}
 
 
 @dataclass
@@ -106,7 +123,7 @@ class SiteConfig:
             raise UsageError(f"invalid site registry {path or obj.get('family')}", details=errs)
         portals = []
         for p in obj.get("portal", []) or []:
-            pages = [PageConfig(id=g["id"], legacy=list(g.get("legacy", [])),
+            pages = [PageConfig(id=g["id"], files=list(g.get("legacy", []) or []),
                                 preset=str(g.get("preset", "")),
                                 grammar=list(g.get("grammar", []))) for g in p.get("page", []) or []]
             portals.append(PortalConfig(
@@ -188,14 +205,27 @@ def cache_base() -> Path:
     return Path(env) if env else Path.home() / ".cache" / "portalkit"
 
 
-def _stat_key(path: str) -> tuple[str, int, int]:
+def _dir_stamp(path: str) -> tuple[str, int, int]:
+    """``(sha256 of the sorted entry names, directory mtime_ns, entry count)`` of a directory.
+
+    One ``stat`` of the directory and one ``scandir`` of its top level: no entry is stat'ed
+    and no sub-directory is walked, so a directory of multi-GB model grids costs the same as
+    an empty one. Adding, removing or renaming an entry changes the stamp; a file rewritten
+    in place does not (an adapter that depends on such a file's content registers the file
+    itself, ``ctx.inputs.add(file)`` / ``memo(inputs=[file])``)."""
     st = os.stat(path)
-    return (os.path.abspath(path), int(st.st_mtime_ns), int(st.st_size))
+    with os.scandir(path) as it:
+        names = sorted(e.name for e in it)
+    h = hashlib.sha256("\n".join(names).encode("utf-8", "surrogateescape"))
+    return h.hexdigest(), int(st.st_mtime_ns), len(names)
 
 
-def _tree_digest(path: str) -> tuple[str, int, int]:
-    """(sha256 over sorted ``relpath, size, mtime_ns`` lines, newest mtime_ns, total size)
-    of a directory tree; symlinked directories are not followed."""
+def _legacy_tree_digest(path: str) -> tuple[str, int, int]:
+    """The pre-WPE1 directory key: ``(sha256 over sorted 'relpath, size, mtime_ns' lines,
+    newest mtime_ns, total size)`` of the whole tree (symlinked directories not followed).
+
+    Walks and stats every file, so it runs only in :meth:`Cache.memo` after a miss of the
+    current key, to find a value memoised under the old key (:meth:`Cache.legacy_key_hash`)."""
     h = hashlib.sha256()
     newest = 0
     total = 0
@@ -217,12 +247,14 @@ def _tree_digest(path: str) -> tuple[str, int, int]:
 
 
 class InputRegistry:
-    """Records build inputs: ``add(path)`` -> ``{path, sha256, mtime, size}``.
+    """Records build inputs: ``add(path)`` -> ``{path, sha256, mtime, size, kind}``.
 
-    Directories get a digest of their file listing (relative path, size, mtime) rather than
-    of their bytes. File digests are cached in ``<cache_dir>/input_sha256.json`` keyed by
-    ``(path, mtime_ns, size)``, so unchanged multi-GB inputs are hashed once. ``add_many``
-    writes that file once at the end; a single ``add`` writes it when it hashed a new file.
+    A directory is recorded by its stamp (:func:`_dir_stamp`: directory mtime, entry count
+    and a digest of the top-level entry names; ``size`` is 0 and ``entries`` the count), so
+    no tree is walked or hashed. File digests are cached in
+    ``<cache_dir>/input_sha256.json`` keyed by ``(path, mtime_ns, size)``, so unchanged
+    multi-GB inputs are hashed once. ``add_many`` writes that file once at the end; a single
+    ``add`` writes it when it hashed a new file.
     """
 
     def __init__(self, allow_tmp: bool = False, cache_dir: os.PathLike | str | None = None) -> None:
@@ -285,13 +317,17 @@ class InputRegistry:
         the digest-cache write to :meth:`flush`."""
         p = os.path.abspath(os.fspath(path))
         self.check(p)
-        if not os.path.exists(p):
-            raise FileNotFoundError(f"input {p} does not exist")
-        if os.path.isdir(p):
-            sha, mtime_ns, size = _tree_digest(p)
+        try:
+            st = os.stat(p)
+        except FileNotFoundError:
+            raise FileNotFoundError(f"input {p} does not exist") from None
+        entries = None
+        if stat.S_ISDIR(st.st_mode):
+            sha, mtime_ns, entries = _dir_stamp(p)
+            size = 0
             kind = "dir"
         else:
-            _, mtime_ns, size = _stat_key(p)
+            mtime_ns, size = int(st.st_mtime_ns), int(st.st_size)
             key = f"{p}|{mtime_ns}|{size}"
             cache = self._load_sha_cache()
             sha = cache.get(key)
@@ -305,6 +341,8 @@ class InputRegistry:
         import datetime as _dt
         mtime = _dt.datetime.fromtimestamp(mtime_ns / 1e9, _dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         rec = {"path": p, "sha256": sha, "mtime": mtime, "size": int(size), "kind": kind}
+        if entries is not None:
+            rec["entries"] = entries
         self._records[p] = rec
         return dict(rec)
 
@@ -331,6 +369,10 @@ class InputRegistry:
 # ---------------------------------------------------------------------------
 
 _SAFE = re.compile(r"[^A-Za-z0-9_.-]+")
+#: ``.meta.json`` format version written by :meth:`Cache._store` (absent in pre-WPE1 entries)
+_META_V = 2
+#: per-key record of pre-WPE1 entries that did not match (:meth:`Cache._adopt_legacy`)
+_LEGACY_CHECKED = ".legacy-checked.json"
 
 
 class Cache:
@@ -356,28 +398,154 @@ class Cache:
         self.scope: dict[str, Any] | None = dict(scope) if scope is not None else None
         self.hits = 0
         self.misses = 0
+        self._names: set[str] | None = None
 
     def key_hash(self, key: str, inputs: Iterable[os.PathLike | str] = ()) -> str:
-        """sha256 of ``(key, [(path, mtime_ns, size)][, scope])`` (first 24 hex digits)."""
+        """sha256 of ``(key, [(path, mtime_ns, size)][, scope])`` (first 24 hex digits); a
+        directory contributes its :func:`_dir_stamp` (no tree walk)."""
         stats = []
         for p in inputs:
             p = os.fspath(p)
-            if os.path.isdir(p):
-                sha, mtime_ns, size = _tree_digest(p)
-                stats.append([os.path.abspath(p), mtime_ns, size, sha])
+            st = os.stat(p)
+            if stat.S_ISDIR(st.st_mode):
+                sha, mtime_ns, n = _dir_stamp(p)
+                stats.append([os.path.abspath(p), mtime_ns, n, sha])
             else:
-                stats.append(list(_stat_key(p)))
+                stats.append([os.path.abspath(p), int(st.st_mtime_ns), int(st.st_size)])
+        return self._hash_parts(key, stats)
+
+    def _hash_parts(self, key: str, stats: list) -> str:
         parts: list[Any] = [str(key), stats]
         if self.scope:
             parts.append(self.scope)
         blob = json.dumps(parts, sort_keys=True, default=str).encode("utf-8")
         return hashlib.sha256(blob).hexdigest()[:24]
 
+    def legacy_key_hash(self, key: str, inputs: Iterable[os.PathLike | str] = ()) -> str | None:
+        """The key hash the pre-WPE1 cache gave these inputs (each directory by a full tree
+        digest, :func:`_legacy_tree_digest`), or ``None`` when no input is a directory (the
+        two schemes then agree). Used only to adopt values memoised before the change."""
+        stats = []
+        has_dir = False
+        for p in inputs:
+            p = os.fspath(p)
+            st = os.stat(p)
+            if stat.S_ISDIR(st.st_mode):
+                has_dir = True
+                sha, mtime_ns, size = _legacy_tree_digest(p)
+                stats.append([os.path.abspath(p), mtime_ns, size, sha])
+            else:
+                stats.append([os.path.abspath(p), int(st.st_mtime_ns), int(st.st_size)])
+        return self._hash_parts(key, stats) if has_dir else None
+
     def _stem(self, key: str, h: str) -> Path:
         safe = _SAFE.sub("_", str(key)).strip("_")[:60] or "value"
         return self.dir / f"{safe}.{h}"
 
+    def _try_load(self, stem: Path, meta_path: Path) -> tuple[bool, Any]:
+        if not meta_path.is_file():
+            return False, None
+        try:
+            return True, self._load(stem, json.loads(meta_path.read_text(encoding="utf-8")))
+        except (OSError, ValueError, KeyError, TypeError):
+            return False, None
+
+    def _listing(self) -> set[str]:
+        """Names in the cache directory, read with one ``scandir`` per :class:`Cache`
+        (pre-WPE1 entries all predate it, so a listing taken once is complete for them)."""
+        if self._names is None:
+            try:
+                with os.scandir(self.dir) as it:
+                    self._names = {e.name for e in it}
+            except (FileNotFoundError, NotADirectoryError):
+                self._names = set()
+        return self._names
+
+    def _legacy_candidates(self, key: str, current: str) -> list[str]:
+        """Stems of this key's entries that may hold a pre-WPE1 value: a ``.meta.json`` other
+        than ``current`` that is neither an alias (``alias_of``) nor written by this version
+        (``v``). Costs one directory listing and a read of each such small ``.meta.json``."""
+        safe = _SAFE.sub("_", str(key)).strip("_")[:60] or "value"
+        pat = re.compile(re.escape(safe) + r"\.([0-9a-f]{24})\.meta\.json")
+        out = []
+        for name in sorted(self._listing()):
+            m = pat.fullmatch(name)
+            if m is None or name == current + ".meta.json":
+                continue
+            try:
+                meta = json.loads((self.dir / name).read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if isinstance(meta, dict) and "alias_of" not in meta and "v" not in meta:
+                out.append(name[: -len(".meta.json")])
+        return out
+
+    def _checked_path(self, key: str) -> Path:
+        safe = _SAFE.sub("_", str(key)).strip("_")[:60] or "value"
+        return self.dir / f"{safe}{_LEGACY_CHECKED}"
+
+    def _checked_ctx(self, inputs: list[str]) -> str:
+        """The adoption-check context: the scope and the input paths (not their state)."""
+        blob = json.dumps([self.scope or {}, sorted(os.path.abspath(p) for p in inputs)],
+                          sort_keys=True, default=str)
+        return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+    def _read_checked(self, path: Path) -> dict[str, list[str]]:
+        try:
+            obj = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return obj if isinstance(obj, dict) else {}
+
+    def _adopt_legacy(self, key: str, inputs: list[str], meta_path: Path) -> tuple[bool, Any]:
+        """After a miss with a directory input: load a value stored under the pre-WPE1 key of
+        the same inputs and write an alias ``.meta.json`` under the current key that points at
+        the old value file. The old files are never modified, moved or deleted.
+
+        The tree walk (:meth:`legacy_key_hash`) runs only when the cache directory holds an
+        entry of this key that may be pre-WPE1 (:meth:`_legacy_candidates`) and that has not
+        already failed to match for the same scope and input paths (``<key>.legacy-checked.json``).
+        A cold cache, a new key, or a tree that changed after a failed adoption costs no walk."""
+        if not any(os.path.isdir(p) for p in inputs):
+            return False, None
+        current = meta_path.name[: -len(".meta.json")]
+        cands = self._legacy_candidates(key, current)
+        if not cands:
+            return False, None
+        cpath = self._checked_path(key)
+        cctx = self._checked_ctx(inputs)
+        checked_all = self._read_checked(cpath)
+        checked = set(checked_all.get(cctx) or [])
+        if set(cands) <= checked:
+            return False, None
+        old_h = self.legacy_key_hash(key, inputs)
+        if old_h is None:
+            return False, None
+        old_stem = self._stem(key, old_h)
+        old_meta = old_stem.with_name(old_stem.name + ".meta.json")
+        ok, value = self._try_load(old_stem, old_meta) if old_stem.name in cands else (False, None)
+        if not ok:
+            checked_all[cctx] = sorted(checked | set(cands))
+            try:
+                self._atomic(cpath, lambda p: p.write_text(json.dumps(checked_all, sort_keys=True),
+                                                           encoding="utf-8"))
+            except OSError:
+                pass   # read-only cache: the next miss walks again
+            return False, None
+        try:
+            meta = json.loads(old_meta.read_text(encoding="utf-8"))
+            meta["alias_of"] = old_stem.name
+            self._atomic(meta_path, lambda p: p.write_text(json.dumps(meta), encoding="utf-8"))
+        except OSError:
+            pass   # read-only cache: the value is still used; the next run walks again
+        if self.log is not None:
+            self.log(f"cache adopt {key}: {old_stem.name} (pre-WPE1 directory key)")
+        return True, value
+
     def memo(self, key: str, fn: Callable[[], Any], inputs: Iterable[os.PathLike | str] = ()) -> Any:
+        """``fn()`` memoised under ``(key, inputs, scope)``; see :meth:`key_hash`. A value
+        stored under the pre-WPE1 directory key of the same inputs is adopted
+        (:meth:`_adopt_legacy`)."""
         inputs = [os.fspath(p) for p in inputs]
         if self.registry is not None:
             self.registry.add_many(inputs)
@@ -386,17 +554,12 @@ class Cache:
         h = self.key_hash(key, inputs)
         stem = self._stem(key, h)
         meta_path = stem.with_name(stem.name + ".meta.json")
-        if meta_path.is_file():
-            try:
-                value = self._load(stem, json.loads(meta_path.read_text(encoding="utf-8")))
-            except (OSError, ValueError, KeyError, TypeError):
-                value = None
-                ok = False
-            else:
-                ok = True
-            if ok:
-                self.hits += 1
-                return value
+        ok, value = self._try_load(stem, meta_path)
+        if not ok:
+            ok, value = self._adopt_legacy(key, inputs, meta_path)
+        if ok:
+            self.hits += 1
+            return value
         self.misses += 1
         value = fn()
         self._store(stem, meta_path, key, value)
@@ -437,7 +600,7 @@ class Cache:
                                 f"dict of ndarrays, Table or JSON value") from exc
             kind, ext = "json", ".json"
             self._atomic(stem.with_name(stem.name + ext), lambda p: p.write_text(text, encoding="utf-8"))
-        meta = {"kind": kind, "file": stem.name + ext, "key": str(key)}
+        meta = {"kind": kind, "file": stem.name + ext, "key": str(key), "v": _META_V}
         self._atomic(meta_path, lambda p: p.write_text(json.dumps(meta), encoding="utf-8"))
         if self.log is not None:
             self.log(f"cache store {key} -> {stem.name}{ext}")

@@ -5,7 +5,7 @@
  "extras/jwst-gc/jwst_gc_aladin.html (critic)": [],
  "extras/robitaille imaging_run/png_b and modelgrids/ccds/gallery.html (critic)": [],
  "extras/~30 jQuery autoindex galleries in w51/brick/sgrb2/wd2/wd1/cloudc (critic)": [],
- "gc-manifold/GC Treasury catalog manifold viewer (treasury_manifold)": [
+ "gc_manifold/GC Treasury catalog manifold viewer (treasury_manifold)": [
   "brush_lasso",
   "brush_rect",
   "brush_set_ops",
@@ -22,7 +22,7 @@
   "selectable_axes",
   "sky_map_aladin"
  ],
- "gc-manifold/GC per-field catalog manifold viewers (<field>_manifold; 11 instances of one template)": [
+ "gc_manifold/GC per-field catalog manifold viewers (<field>_manifold; 11 instances of one template)": [
   "brush_lasso",
   "brush_rect",
   "brush_set_ops",
@@ -41,59 +41,59 @@
   "selectable_axes",
   "sky_map_aladin"
  ],
- "gc-manifold/jwst-gc pipeline monitor (monitor.html, fields/<target>.html, *_monitor5as.html)": [
+ "gc_manifold/jwst-gc pipeline monitor (monitor.html, fields/<target>.html, *_monitor5as.html)": [
   "collapsible_panels",
   "cross_page_nav",
   "dark_light_theme",
   "lazy_data_loading",
   "sky_map_aladin"
  ],
- "jwst-archive/Gallery: 1611 Serpens": [
+ "jwst_archive/Gallery: 1611 Serpens": [
   "keyboard_nav",
   "lightbox",
   "static_sed_png"
  ],
- "jwst-archive/Gallery: 1611 broad": [
+ "jwst_archive/Gallery: 1611 broad": [
   "keyboard_nav",
   "lightbox",
   "static_sed_png"
  ],
- "jwst-archive/Gallery: 1611 narrow": [
+ "jwst_archive/Gallery: 1611 narrow": [
   "keyboard_nav",
   "lightbox",
   "static_sed_png"
  ],
- "jwst-archive/Gallery: 1611 two gratings": [
+ "jwst_archive/Gallery: 1611 two gratings": [
   "keyboard_nav",
   "lightbox",
   "static_sed_png"
  ],
- "jwst-archive/Gallery: 3222 IRAS16293": [
+ "jwst_archive/Gallery: 3222 IRAS16293": [
   "keyboard_nav",
   "lightbox",
   "static_sed_png"
  ],
- "jwst-archive/Gallery: 3222 broad": [
+ "jwst_archive/Gallery: 3222 broad": [
   "keyboard_nav",
   "lightbox",
   "static_sed_png"
  ],
- "jwst-archive/Gallery: 3222 narrow": [
+ "jwst_archive/Gallery: 3222 narrow": [
   "keyboard_nav",
   "lightbox",
   "static_sed_png"
  ],
- "jwst-archive/Gallery: PRISM": [
+ "jwst_archive/Gallery: PRISM": [
   "keyboard_nav",
   "lightbox",
   "static_sed_png"
  ],
- "jwst-archive/Gallery: PRISM 2221 filters": [
+ "jwst_archive/Gallery: PRISM 2221 filters": [
   "keyboard_nav",
   "lightbox",
   "static_sed_png"
  ],
- "jwst-archive/JWST archive colour portal": [
+ "jwst_archive/JWST archive colour portal": [
   "av_slider",
   "brush_rect",
   "class_coloring",
@@ -112,7 +112,7 @@
   "source_list_search",
   "spectrum_viewer_1d"
  ],
- "jwst-archive/JWST archive ice manifold": [
+ "jwst_archive/JWST archive ice manifold": [
   "av_slider",
   "brush_rect",
   "brush_set_ops",
@@ -132,17 +132,17 @@
   "source_list_search",
   "spectrum_viewer_1d"
  ],
- "jwst-archive/JWST archive portal README": [
+ "jwst_archive/JWST archive portal README": [
   "cross_page_nav",
   "readme_provenance"
  ],
- "jwst-archive/Spectra PNG gallery": [
+ "jwst_archive/Spectra PNG gallery": [
   "filter_toggles",
   "keyboard_nav",
   "lightbox",
   "static_sed_png"
  ],
- "jwst-archive/Spectra PNG gallery with classification checklist": [
+ "jwst_archive/Spectra PNG gallery with classification checklist": [
   "collapsible_panels",
   "filter_toggles",
   "keyboard_nav",
@@ -150,11 +150,11 @@
   "selection_export",
   "static_sed_png"
  ],
- "jwst-archive/W51 archive_colors README": [
+ "jwst_archive/W51 archive_colors README": [
   "cross_page_nav",
   "readme_provenance"
  ],
- "jwst-archive/W51 photometry vs JWST archive spectra": [
+ "jwst_archive/W51 photometry vs JWST archive spectra": [
   "brush_rect",
   "class_coloring",
   "cmd_ccd_scatter",
@@ -172,12 +172,12 @@
   "source_list_search",
   "spectrum_viewer_1d"
  ],
- "nirspec-2640/index.html": [
+ "nirspec2640/index.html": [
   "cross_page_nav",
   "readme_provenance",
   "responsive_mobile"
  ],
- "nirspec-2640/nirspec_2640_colorcolor.html": [
+ "nirspec2640/nirspec_2640_colorcolor.html": [
   "brush_rect",
   "cmd_ccd_scatter",
   "cross_page_nav",
@@ -189,7 +189,7 @@
   "selectable_axes",
   "selection_export"
  ],
- "nirspec-2640/nirspec_2640_manifold.html": [
+ "nirspec2640/nirspec_2640_manifold.html": [
   "av_slider",
   "brush_rect",
   "brush_set_ops",
@@ -214,7 +214,7 @@
   "source_list_search",
   "spectrum_viewer_1d"
  ],
- "nirspec-2640/nirspec_2640_map.html": [
+ "nirspec2640/nirspec_2640_map.html": [
   "catalog_markers_on_sky",
   "cdn_fallback",
   "collapsible_panels",
@@ -228,7 +228,7 @@
   "sky_map_aladin",
   "source_list_search"
  ],
- "nirspec-2640/nirspec_2640_pvgallery.html": [
+ "nirspec2640/nirspec_2640_pvgallery.html": [
   "cross_page_nav",
   "deep_link_hash",
   "keyboard_nav",
@@ -237,7 +237,7 @@
   "responsive_mobile",
   "source_list_search"
  ],
- "nirspec-2640/nirspec_2640_red_excess.html": [
+ "nirspec2640/nirspec_2640_red_excess.html": [
   "brush_rect",
   "class_coloring",
   "cmd_ccd_scatter",
@@ -247,7 +247,7 @@
   "hover_preview",
   "selectable_axes"
  ],
- "nirspec-2640/nirspec_2640_sedgallery.html": [
+ "nirspec2640/nirspec_2640_sedgallery.html": [
   "cross_page_nav",
   "deep_link_hash",
   "keyboard_nav",
@@ -257,7 +257,7 @@
   "source_list_search",
   "static_sed_png"
  ],
- "nirspec-2640/nirspec_2640_specviewer.html": [
+ "nirspec2640/nirspec_2640_specviewer.html": [
   "av_slider",
   "cross_page_nav",
   "deep_link_hash",
@@ -268,26 +268,26 @@
   "responsive_mobile",
   "spectrum_viewer_1d"
  ],
- "nirspec-2640/pngs/gallery_2640.html": [
+ "nirspec2640/pngs/gallery_2640.html": [
   "keyboard_nav",
   "lightbox",
   "responsive_mobile"
  ],
- "nirspec-2640/pngs/gallery_2640_bb.html": [
+ "nirspec2640/pngs/gallery_2640_bb.html": [
   "keyboard_nav",
   "lightbox",
   "responsive_mobile"
  ],
- "nirspec-2640/pngs/gallery_2640_nb.html": [
+ "nirspec2640/pngs/gallery_2640_nb.html": [
   "keyboard_nav",
   "lightbox",
   "responsive_mobile"
  ],
- "nirspec-6927/index.html": [
+ "nirspec6927/index.html": [
   "cross_page_nav",
   "readme_provenance"
  ],
- "nirspec-6927/nirspec_6927_cogas.html": [
+ "nirspec6927/nirspec_6927_cogas.html": [
   "class_coloring",
   "cross_page_nav",
   "deep_link_hash",
@@ -297,7 +297,7 @@
   "lightbox",
   "responsive_mobile"
  ],
- "nirspec-6927/nirspec_6927_colorcolor.html": [
+ "nirspec6927/nirspec_6927_colorcolor.html": [
   "cmd_ccd_scatter",
   "cross_page_nav",
   "density_rendering",
@@ -305,7 +305,7 @@
   "filter_toggles",
   "hover_preview"
  ],
- "nirspec-6927/nirspec_6927_h2.html": [
+ "nirspec6927/nirspec_6927_h2.html": [
   "class_coloring",
   "cross_page_nav",
   "deep_link_hash",
@@ -313,7 +313,7 @@
   "lightbox",
   "responsive_mobile"
  ],
- "nirspec-6927/nirspec_6927_icecolumns.html": [
+ "nirspec6927/nirspec_6927_icecolumns.html": [
   "class_coloring",
   "cmd_ccd_scatter",
   "cross_page_nav",
@@ -323,7 +323,7 @@
   "hover_preview",
   "lightbox"
  ],
- "nirspec-6927/nirspec_6927_manifold.html": [
+ "nirspec6927/nirspec_6927_manifold.html": [
   "av_slider",
   "brush_rect",
   "brush_set_ops",
@@ -343,7 +343,7 @@
   "source_list_search",
   "spectrum_viewer_1d"
  ],
- "nirspec-6927/nirspec_6927_map.html": [
+ "nirspec6927/nirspec_6927_map.html": [
   "catalog_markers_on_sky",
   "cdn_fallback",
   "class_coloring",
@@ -356,7 +356,7 @@
   "sky_map_aladin",
   "source_list_search"
  ],
- "nirspec-6927/nirspec_6927_msata_finding.html": [
+ "nirspec6927/nirspec_6927_msata_finding.html": [
   "catalog_markers_on_sky",
   "cdn_fallback",
   "class_coloring",
@@ -367,7 +367,7 @@
   "responsive_mobile",
   "sky_map_aladin"
  ],
- "nirspec-6927/nirspec_6927_pvgallery.html": [
+ "nirspec6927/nirspec_6927_pvgallery.html": [
   "cross_page_nav",
   "deep_link_hash",
   "filter_toggles",
@@ -375,7 +375,7 @@
   "lightbox",
   "source_list_search"
  ],
- "nirspec-6927/nirspec_6927_refstar_map.html": [
+ "nirspec6927/nirspec_6927_refstar_map.html": [
   "catalog_markers_on_sky",
   "cdn_fallback",
   "class_coloring",
@@ -385,7 +385,7 @@
   "hover_preview",
   "sky_map_aladin"
  ],
- "nirspec-6927/nirspec_6927_sedgallery.html": [
+ "nirspec6927/nirspec_6927_sedgallery.html": [
   "cross_page_nav",
   "deep_link_hash",
   "keyboard_nav",
@@ -393,7 +393,7 @@
   "source_list_search",
   "static_sed_png"
  ],
- "nirspec-6927/nirspec_6927_specviewer.html": [
+ "nirspec6927/nirspec_6927_specviewer.html": [
   "cross_page_nav",
   "deep_link_hash",
   "filter_toggles",
@@ -401,16 +401,16 @@
   "lazy_data_loading",
   "spectrum_viewer_1d"
  ],
- "nirspec-6927/pngs/gallery_6927.html": [
+ "nirspec6927/pngs/gallery_6927.html": [
   "keyboard_nav",
   "lightbox",
   "responsive_mobile"
  ],
- "nirspec-6927/public brick_2221/nirspec_6927/gallery.html": [
+ "nirspec6927/public brick_2221/nirspec_6927/gallery.html": [
   "keyboard_nav",
   "lightbox"
  ],
- "nirspec-6927/refstar_check/index.html": [
+ "nirspec6927/refstar_check/index.html": [
   "keyboard_nav",
   "lightbox",
   "readme_provenance",
@@ -482,32 +482,32 @@
   "responsive_mobile",
   "static_sed_png"
  ],
- "sickle-brick-miri/brick_2221/ccds_cmds/gallery.html": [
+ "sickle_brick/brick_2221/ccds_cmds/gallery.html": [
   "keyboard_nav",
   "lightbox"
  ],
- "sickle-brick-miri/brick_2221/ccds_cmds/gallery_blue405410.html": [
+ "sickle_brick/brick_2221/ccds_cmds/gallery_blue405410.html": [
   "keyboard_nav",
   "lightbox"
  ],
- "sickle-brick-miri/brick_2221/ccds_cmds/gallery_cmd.html": [
+ "sickle_brick/brick_2221/ccds_cmds/gallery_cmd.html": [
   "keyboard_nav",
   "lightbox"
  ],
- "sickle-brick-miri/brick_2221/ccds_cmds/gallery_cmd_iso.html": [
+ "sickle_brick/brick_2221/ccds_cmds/gallery_cmd_iso.html": [
   "keyboard_nav",
   "lightbox"
  ],
- "sickle-brick-miri/brick_2221/ccds_cmds/gallery_cmd_lowext.html": [
+ "sickle_brick/brick_2221/ccds_cmds/gallery_cmd_lowext.html": [
   "keyboard_nav",
   "lightbox"
  ],
- "sickle-brick-miri/brick_2221/nirspec_6927/gallery.html": [
+ "sickle_brick/brick_2221/nirspec_6927/gallery.html": [
   "keyboard_nav",
   "lightbox",
   "static_sed_png"
  ],
- "sickle-brick-miri/brick_2221/sed_figures_f1500w_all/gallery.html": [
+ "sickle_brick/brick_2221/sed_figures_f1500w_all/gallery.html": [
   "av_slider",
   "brush_circle",
   "brush_lasso",
@@ -536,17 +536,17 @@
   "source_list_search",
   "static_sed_png"
  ],
- "sickle-brick-miri/brick_2221/sed_figures_f1500w_all/gallery_legacy.html": [
+ "sickle_brick/brick_2221/sed_figures_f1500w_all/gallery_legacy.html": [
   "keyboard_nav",
   "lightbox",
   "static_sed_png"
  ],
- "sickle-brick-miri/brick_2221/sed_figures_top100_f1500w/gallery.html": [
+ "sickle_brick/brick_2221/sed_figures_top100_f1500w/gallery.html": [
   "keyboard_nav",
   "lightbox",
   "static_sed_png"
  ],
- "sickle-brick-miri/sickle_miri_sed_manifold.html": [
+ "sickle_brick/sickle_miri_sed_manifold.html": [
   "brush_rect",
   "brush_set_ops",
   "class_coloring",
@@ -563,7 +563,7 @@
   "source_list_search",
   "static_sed_png"
  ],
- "sickle-brick-miri/sickle_miri_sed_map.html": [
+ "sickle_brick/sickle_miri_sed_map.html": [
   "catalog_markers_on_sky",
   "cdn_fallback",
   "class_coloring",
@@ -813,7 +813,7 @@
   "responsive_mobile",
   "sky_map_aladin"
  ],
- "wd2-nircam/map_ccd.html": [
+ "wd2/map_ccd.html": [
   "brush_circle",
   "brush_lasso",
   "brush_rect",
@@ -828,7 +828,7 @@
   "selectable_axes",
   "sky_map_aladin"
  ],
- "wd2-nircam/sabbi.html": [
+ "wd2/sabbi.html": [
   "brush_lasso",
   "brush_rect",
   "brush_set_ops",
@@ -846,7 +846,7 @@
   "selectable_axes",
   "source_list_search"
  ],
- "wd2-nircam/wd2_colorcolor.html": [
+ "wd2/wd2_colorcolor.html": [
   "brush_lasso",
   "brush_rect",
   "cmd_ccd_scatter",
@@ -859,7 +859,7 @@
   "selectable_axes",
   "static_sed_png"
  ],
- "wd2-nircam/wd2_manifold.html": [
+ "wd2/wd2_manifold.html": [
   "av_slider",
   "brush_lasso",
   "brush_rect",
@@ -889,7 +889,7 @@
   "spectrum_viewer_1d",
   "static_sed_png"
  ],
- "wd2-nircam/wd2_sedgallery.html": [
+ "wd2/wd2_sedgallery.html": [
   "cross_page_nav",
   "deep_link_hash",
   "keyboard_nav",
@@ -900,7 +900,7 @@
   "source_list_search",
   "static_sed_png"
  ],
- "wd2-nircam/wd2_wavelength_explorer.html": [
+ "wd2/wd2_wavelength_explorer.html": [
   "collapsible_panels",
   "deep_link_hash",
   "hips_layer_stacking",

@@ -596,3 +596,62 @@ def test_status_flags(world, tmp_path):
     txt = stmod.format_status(stmod.status(s, stage_root=world["stage"]))
     assert "main" in txt and BID2 in txt
     assert json.loads(stmod.format_status(rows, as_json=True))[0]["status"] == "excluded"
+
+
+# ---------------------------------------------------------------------------
+# per-legacy-file preset and replace policy (WPE1 item 1)
+# ---------------------------------------------------------------------------
+
+def test_replace_per_file_preset_and_replace_false(world):
+    stage_portal(world["stage"])
+    ld = world["orange"] / "sec/portal"
+    (ld / "a.html").write_text("old a")
+    (ld / "sub").mkdir()
+    (ld / "sub/b.html").write_text("old b")
+    real = world["orange"] / "hidden" / "c.html"
+    real.write_text("behind a symlink")
+    os.symlink(real, ld / "c.html")
+    pages = [{"id": "map", "preset": "p0", "legacy": [
+        "a.html", {"file": "sub/b.html", "preset": "role=c2221"},
+        {"file": "c.html", "replace": False}]}]
+    s = site(world, pages=pages)
+    plan = dmod.plan_deploy(FAM, BID, s, stage_root=world["stage"], replace="stub",
+                            emap=world["emap"])
+    assert plan.conflicts == []          # the symlinked c.html is skipped, not refused
+    by = {ra.legacy_file: ra for ra in plan.replace}
+    assert sorted(by) == ["a.html", "sub/b.html"]
+    assert by["a.html"].preset == "p0" and by["sub/b.html"].preset == "role=c2221"
+    assert any("replace=false" in w and "c.html" in w for w in plan.warnings)
+    run(world, s, replace="stub")
+    assert "'#role=c2221'" in (ld / "sub/b.html").read_text()
+    assert "'#p0'" in (ld / "a.html").read_text()
+    assert real.read_text() == "behind a symlink"
+    # without replace=false the symlinked file is a refusal
+    pages[0]["legacy"][2] = "c.html"
+    plan = dmod.plan_deploy(FAM, BID, site(world, pages=pages), stage_root=world["stage"],
+                            replace="stub", emap=world["emap"])
+    assert any("symlink" in c for c in plan.conflicts)
+
+
+def test_legacy_entries_forms():
+    from portalkit.context import PageConfig
+    raw = {"id": "g", "legacy": ["a.html", {"file": "b.html", "preset": ""},
+                                 {"file": "c.html", "replace": False}]}
+    want = [("a.html", None, True), ("b.html", "", True), ("c.html", None, False)]
+    assert dmod.legacy_entries(raw) == want
+    pc = PageConfig(id="g", files=raw["legacy"])
+    assert pc.legacy == ["a.html", "b.html", "c.html"]
+    assert dmod.legacy_entries(pc) == want
+    assert pc.presets() == {"b.html": ""}
+    assert dmod.legacy_entries(PageConfig(id="h", legacy=["x.html"])) == [("x.html", None, True)]
+
+
+def test_not_deployed_any_depth(world):
+    assert dmod.not_deployed("build_report.json")
+    assert dmod.not_deployed("sub/build_report.json")
+    assert dmod.not_deployed("data/x.json" + dmod.TMP_SUFFIX)
+    assert not dmod.not_deployed("portal.json")
+    stage_portal(world["stage"], files={"sub/build_report.json": "{}"})
+    run(world, site(world))
+    assert not (tgt(world) / "build_report.json").exists()
+    assert not (tgt(world) / "sub/build_report.json").exists()

@@ -88,6 +88,108 @@ _RES_SPEC_KIND = ((TemplateSpec, "templates"), (FilterSetSpec, "filters"),
                   (ExtinctionSpec, "extinction"))
 _PROV_INPUTS_MAX = 50
 
+# ---------------------------------------------------------------------------
+# local paths in served documents (section 9.3: provenance carries labels, the build report
+# keeps the full paths)
+# ---------------------------------------------------------------------------
+
+#: absolute local paths that must not reach a rendered page or served JSON (``check``)
+#: (``file://`` URLs and paths after ``:``, ``=``, a quote or a space match; a path segment of
+#: a URL or of a relative path, ``./``, ``~/`` and ``%``-escaped forms do not)
+LOCAL_PATH_RE = re.compile(r"(?:file://|(?<![A-Za-z0-9_.~%/]))/(?:orange|blue|home)/[^\s\"'<>`]*")
+#: trailing punctuation kept outside a label when an embedded path is substituted
+_PATH_TRAIL = ".,;:)]}"
+_GLOB_CHARS = set("*?[")
+
+
+def _static_prefix(pattern: str) -> str:
+    """The leading path components of an input pattern before the first glob character."""
+    parts = Path(pattern).parts
+    keep = []
+    for p in parts:
+        if _GLOB_CHARS.intersection(p):
+            break
+        keep.append(p)
+    return str(Path(*keep)) if keep else "/"
+
+
+class PathLabeler:
+    """Maps an absolute local path to ``<label>:<path relative to a declared root>``.
+
+    Roots (longest match wins; on a tie the first declared): every portal's ``legacy_dir``
+    (label ``legacy_dir``), the ``legacy_paths`` (``legacy``) and the parent of the static
+    prefix of every declared input pattern (``input``). A path under no root becomes
+    ``file:<basename>``. Relative paths and URLs pass through unchanged."""
+
+    def __init__(self, roots: Iterable[tuple[str, str]]) -> None:
+        seen: set[str] = set()
+        self.roots: list[tuple[str, str]] = []
+        for label, root in roots:
+            r = os.path.normpath(os.path.abspath(root))
+            if r == "/" or r in seen:
+                continue
+            seen.add(r)
+            self.roots.append((label, r))
+
+    @classmethod
+    def for_site(cls, site: SiteConfig) -> "PathLabeler":
+        roots: list[tuple[str, str]] = []
+        roots += [("legacy_dir", p.legacy_dir) for p in site.portals if p.legacy_dir]
+        roots += [("legacy", p) for p in site.legacy_paths]
+        roots += [("input", os.path.dirname(_static_prefix(i))) for i in site.inputs]
+        return cls(roots)
+
+    def is_local(self, s: str) -> bool:
+        if s.startswith("file://"):
+            return True
+        if not s.startswith("/") or s.startswith("//"):
+            return False
+        if LOCAL_PATH_RE.match(s):
+            return True
+        n = os.path.normpath(s)
+        return any(n == r or n.startswith(r + "/") for _, r in self.roots)
+
+    def __call__(self, path: str | os.PathLike) -> str:
+        s = os.fspath(path)
+        if s.startswith("file://"):
+            s = s[len("file://"):]
+        if not s.startswith("/"):
+            return s
+        n = os.path.normpath(s)
+        best: tuple[str, str] | None = None
+        for label, r in self.roots:
+            if (n == r or n.startswith(r + "/")) and (best is None or len(r) > len(best[1])):
+                best = (label, r)
+        if best is None:
+            return f"file:{os.path.basename(n)}"
+        rel = os.path.relpath(n, best[1])
+        return f"{best[0]}:{rel}"
+
+    def _sub(self, m: re.Match) -> str:
+        s = m.group(0)
+        tail = len(s) - len(s.rstrip(_PATH_TRAIL))
+        core, rest = (s[:-tail], s[-tail:]) if tail else (s, "")
+        return self(core) + rest
+
+    def scrub_text(self, s: str) -> str:
+        """``s`` with a local path labelled: the whole string when it is one, else every
+        ``/orange/``, ``/blue/`` or ``/home/`` path embedded in it (:data:`LOCAL_PATH_RE`)."""
+        if self.is_local(s):
+            return self(s)
+        return LOCAL_PATH_RE.sub(self._sub, s) if "/" in s else s
+
+    def scrub(self, obj: Any) -> Any:
+        """A copy of a JSON-like value with every local-path string labelled, in values and
+        in mapping keys, whole or embedded (:meth:`scrub_text`)."""
+        if isinstance(obj, Mapping):
+            return {(self.scrub_text(k) if isinstance(k, str) else k): self.scrub(v)
+                    for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [self.scrub(v) for v in obj]
+        if isinstance(obj, str):
+            return self.scrub_text(obj)
+        return obj
+
 
 class BuildError(DeployError):
     """A build step failed (exit 1): invalid page, writer error, check failure."""
@@ -380,11 +482,15 @@ def _merge_legacy(page: PageSpec, portal: Any) -> PageSpec:
     if page.legacy is None:
         if not (pc.legacy or pc.grammar or pc.preset):
             return page
-        leg = LegacyRef(files=list(pc.legacy), grammar=list(pc.grammar), preset=pc.preset)
+        leg = LegacyRef(files=list(pc.legacy), grammar=list(pc.grammar), preset=pc.preset,
+                        presets=pc.presets())
     else:
-        leg = LegacyRef(files=list(page.legacy.files) or list(pc.legacy),
+        files = list(page.legacy.files) or list(pc.legacy)
+        presets = {**pc.presets(), **(page.legacy.presets or {})}
+        leg = LegacyRef(files=files,
                         grammar=list(page.legacy.grammar) or list(pc.grammar),
-                        preset=page.legacy.preset or pc.preset)
+                        preset=page.legacy.preset or pc.preset,
+                        presets={k: v for k, v in presets.items() if k in files})
     return dataclasses.replace(page, legacy=leg)
 
 
@@ -407,10 +513,41 @@ def _copy_web(dest: Path, ledger: Ledger) -> int:
     return n
 
 
-def shared_resources(dest: BundleWriter) -> dict[str, str]:
+class LabellingWriter(BundleWriter):
+    """A :class:`BundleWriter` whose JSON documents pass through :meth:`PathLabeler.scrub`
+    before they are written (and hashed), for documents the build does not compose itself:
+    the ``portalkit.physics`` shared resources and physics datasets (``meta.source``)."""
+
+    def __init__(self, root: str | Path, base: str = "", ledger: Ledger | None = None,
+                 dataset: str | None = None, fsync: bool = False, *,
+                 labeler: PathLabeler | None = None) -> None:
+        super().__init__(root, base, ledger, dataset, fsync)
+        self.labeler = labeler if labeler is not None else PathLabeler(())
+
+    @classmethod
+    def wrap(cls, w: BundleWriter, labeler: PathLabeler) -> "LabellingWriter":
+        return cls(w.root, w.base, w.ledger, w.dataset, w.fsync, labeler=labeler)
+
+    def sub(self, rel: str, dataset: str | None = None) -> "LabellingWriter":
+        return LabellingWriter.wrap(super().sub(rel, dataset), self.labeler)
+
+    def put_json(self, rel_dir: str, stem: str, obj: Any, kind: str = "json",
+                 first_paint: bool = False) -> str:
+        return super().put_json(rel_dir, stem, self.labeler.scrub(obj), kind, first_paint)
+
+    def put_stable_json(self, rel: str, obj: Any, kind: str = "json",
+                        first_paint: bool = False) -> str:
+        return super().put_stable_json(rel, self.labeler.scrub(obj), kind, first_paint)
+
+
+def shared_resources(dest: BundleWriter, labeler: PathLabeler | None = None) -> dict[str, str]:
     """Write templates, filters, extinction and features into ``dest`` and return the
-    ``res_refs`` (``{kind: "{res}<path>"}``)."""
+    ``res_refs`` (``{kind: "{res}<path>"}``). Local paths in the documents (the template
+    source in ``meta.source``) are labelled (:class:`LabellingWriter`; a path under none of
+    ``labeler``'s roots becomes ``file:<basename>``)."""
     from .physics import write_shared
+    if not isinstance(dest, LabellingWriter):
+        dest = LabellingWriter.wrap(dest, labeler if labeler is not None else PathLabeler(()))
     paths = write_shared(dest, ledger=dest.ledger)
     return {k: "{res}" + p.lstrip("/") for k, p in paths.items()}
 
@@ -454,7 +591,7 @@ class _PortalBuild:
     def shared_res(self) -> dict[str, str]:
         if self.res_refs is None:
             if self.fb.vendor_assets:
-                self.res_refs = shared_resources(self.w.sub("res"))
+                self.res_refs = shared_resources(self.w.sub("res"), self.fb.labeler)
             else:
                 self.res_refs = self.fb.shared_res()
         return self.res_refs
@@ -564,10 +701,10 @@ class _PortalBuild:
                     self.shared_res()
                 else:
                     from .physics import write_dataset
-                    pw = self.w.sub(f"data/res/{k}", k)
+                    pw = LabellingWriter.wrap(self.w.sub(f"data/res/{k}", k), self.fb.labeler)
                     pr = write_dataset(spec, pw, ledger=self.ledger)
                     self.refs[k] = {"kind": kind, "url": f"data/res/{k}/{pr.path}"}
-                    self.manifests[k] = pr.doc
+                    self.manifests[k] = self.fb.labeler.scrub(pr.doc)
                     self.ds_report[k] = {"kind": kind, "shared": False, "files": len(pr.files)}
             elif isinstance(spec, ReadmeSpec):
                 self.ds_report[k] = {"kind": "readme"}
@@ -667,7 +804,52 @@ class _PortalBuild:
                     search.append({"ds": k, "page": p.id, "manifest": f"data/{k}/manifest.json"})
         if search:
             doc["search"] = search
+        counts = [c for c in (self._page_count(p) for p in self.built) if c is not None]
+        if counts:
+            doc["counts"] = counts
         return doc
+
+    #: landing-card nouns per primary-dataset kind (portal.json ``counts``); a spec's
+    #: ``noun`` overrides them
+    COUNT_UNITS = {"catalog": ("source", "sources"), "images": ("image", "images"),
+                   "records": ("spectrum", "spectra")}
+
+    def _page_count(self, page: PageSpec) -> dict | None:
+        """``portal.json counts`` entry of one page: the size of its primary dataset (a
+        gallery's image set, a spectra page's record set, else its first non-context
+        catalog; fallbacks in the order catalog, images, records). ``None`` for a landing
+        page or a page without one of these datasets."""
+        if page.archetype == "landing":
+            return None
+        ds = self.fb.ds
+        found: dict[str, tuple[str, int]] = {}
+        for k in page.datasets:
+            s = ds.get(k)
+            n = None
+            if isinstance(s, CatalogSpec) and not s.context:
+                kind, n = "catalog", (self.manifests.get(k) or {}).get("n")
+            elif isinstance(s, ImageSetSpec):
+                kind, n = "images", (self.ds_report.get(k) or {}).get("items")
+            elif isinstance(s, RecordSetSpec):
+                kind, n = "records", (self.manifests.get(k) or {}).get("n")
+            else:
+                continue
+            if isinstance(n, int) and not isinstance(n, bool) and kind not in found:
+                found[kind] = (k, n)
+        prefer = {"gallery": ("images", "catalog", "records"),
+                  "spectra": ("records", "catalog", "images")}.get(
+                      page.archetype, ("catalog", "images", "records"))
+        for kind in prefer:
+            if kind in found:
+                k, n = found[kind]
+                one, many = self.COUNT_UNITS[kind]
+                noun = getattr(ds.get(k), "noun", None)
+                if (isinstance(noun, (tuple, list)) and len(noun) == 2
+                        and all(isinstance(x, str) and x for x in noun)):
+                    one, many = noun
+                return {"page": page.id, "ds": k, "kind": kind, "n": n,
+                        "unit": one, "units": many}
+        return None
 
     def finish(self) -> dict:
         fb = self.fb
@@ -733,6 +915,7 @@ class _FamilyBuild:
             raise UsageError(f"family {family!r} is excluded (status = \"excluded\")")
         if not self.site.adapter:
             raise UsageError(f"family {family!r} has no adapter")
+        self.labeler = PathLabeler.for_site(self.site)
         self.tier = tier or self.site.tier_default
         if self.tier not in ("A", "B", "C"):
             raise UsageError(f"tier must be A, B or C, got {self.tier!r}")
@@ -807,11 +990,16 @@ class _FamilyBuild:
             pass
 
     def provenance(self) -> dict:
+        """Provenance block of the served manifests: input and legacy-module paths are
+        labelled (:class:`PathLabeler`); ``build_report.json`` keeps the full paths."""
         recs = self.ctx.inputs.records()
+        lab = self.labeler
+        mods = [dict(m, path=lab(m["path"])) if isinstance(m.get("path"), str) else dict(m)
+                for m in self.ctx.legacy.shas()]
         prov: dict[str, Any] = {
-            "inputs": [{"path": r["path"], "sha256": r["sha256"], "mtime": r["mtime"], "size": r["size"]}
-                       for r in recs[:_PROV_INPUTS_MAX]],
-            "legacy_modules": self.ctx.legacy.shas(),
+            "inputs": [{"path": lab(r["path"]), "sha256": r["sha256"], "mtime": r["mtime"],
+                        "size": r["size"]} for r in recs[:_PROV_INPUTS_MAX]],
+            "legacy_modules": mods,
             "adapter": f"{getattr(self.adapter, 'name', self.family)}@{self.adapter_sha[:12]}",
             "portalkit": VERSION, "tier": self.tier, "built": _iso(self.now),
         }
@@ -824,7 +1012,8 @@ class _FamilyBuild:
             if self._res is None:
                 self.staging.mkdir(parents=True, exist_ok=True)
                 self.log(f"shared resources -> {self.staging / RES_DIRNAME}")
-                self._res = shared_resources(BundleWriter(self.staging, RES_DIRNAME, Ledger()))
+                self._res = shared_resources(BundleWriter(self.staging, RES_DIRNAME, Ledger()),
+                                             self.labeler)
             return self._res
 
     def map_jobs(self, jobs: list[tuple[str, Callable[[Ledger], tuple]]]) -> list[tuple]:
@@ -864,6 +1053,9 @@ class _FamilyBuild:
             key = getattr(s, "key", None)
             if key is not None and key != k:
                 raise BuildError(f"dataset {k!r} has key {key!r}; dict keys and spec keys must agree")
+            # served provenance carries labelled paths only (section 9.3); idempotent
+            if isinstance(s, CatalogSpec) and s.catalogs_provenance:
+                s.catalogs_provenance = self.labeler.scrub(list(s.catalogs_provenance))
         by_portal: dict[str, list[PageSpec]] = {}
         seen: dict[str, set] = {}
         for p in pages:
@@ -1188,9 +1380,59 @@ def _check_portal(pdir: Path, gate: str | None, rep: CheckReport) -> None:
             checked[key] = kind
             stats["datasets"] += 1
             _check_doc(p, kind, dsid, gate, fp_by_ds, errors, warnings)
+    _check_local_paths(pdir, gate, errors, warnings)
     rep.errors += [f"{pid}: {e}" for e in errors]
     rep.warnings += [f"{pid}: {w}" for w in warnings]
     rep.portals[pid] = stats
+
+
+_LOCAL_PATH_BYTES_RE = re.compile(LOCAL_PATH_RE.pattern.encode())
+_LOCAL_PATH_SHOW = 10
+
+
+def _local_path_hits(base: Path, skip_top: tuple[str, ...] = ()) -> list[str]:
+    """``<relpath>: <n> local path(s), e.g. <first>`` for every ``.html``/``.json`` file under
+    ``base`` (``build_report.json`` and the top-level directories ``skip_top`` excluded)."""
+    hits: list[str] = []
+    for dirpath, dirnames, filenames in os.walk(base):
+        dirnames.sort()
+        if Path(dirpath) == base:
+            dirnames[:] = [d for d in dirnames if d not in skip_top]
+        for name in sorted(filenames):
+            if not name.endswith((".html", ".json")) or name == BUILD_REPORT:
+                continue
+            p = Path(dirpath) / name
+            try:
+                data = p.read_bytes()
+            except OSError:
+                continue
+            found = _LOCAL_PATH_BYTES_RE.findall(data)
+            if found:
+                ex = found[0].decode("utf-8", "replace")[:120]
+                hits.append(f"{p.relative_to(base).as_posix()}: {len(found)} local path(s), "
+                            f"e.g. {ex}")
+    return hits
+
+
+def _report_hits(hits: list[str], prefix: str, out: list[str]) -> None:
+    for h in hits[:_LOCAL_PATH_SHOW]:
+        out.append(f"{prefix} {h}")
+    if len(hits) > _LOCAL_PATH_SHOW:
+        out.append(f"{prefix} {len(hits) - _LOCAL_PATH_SHOW} more file(s)")
+
+
+def _check_local_paths(pdir: Path, gate: str | None, errors: list[str],
+                       warnings: list[str]) -> None:
+    """Absolute local paths (``/orange/``, ``/blue/``, ``/home/``, also as ``file://``) in
+    staged ``.html``/``.json`` files of the portal and of the build's shared ``_res/`` tree
+    next to it: a warning at G1 (and without a gate), an error at G2. ``build_report.json``
+    (never deployed) keeps full paths and is skipped. The build labels the shared-resource
+    and physics documents it writes (:class:`LabellingWriter`), so they follow the same rule."""
+    out = errors if gate == "G2" else warnings
+    _report_hits(_local_path_hits(pdir), "absolute local path in served file", out)
+    if (pdir.parent / RES_DIRNAME).is_dir():
+        hits = [f"../{RES_DIRNAME}/" + h for h in _local_path_hits(pdir.parent / RES_DIRNAME)]
+        _report_hits(hits, "absolute local path in shared resource", out)
 
 
 def _check_doc(p: Path, kind: str | None, dsid: str, gate: str | None, fp_by_ds: Mapping[str, int],

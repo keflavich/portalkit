@@ -517,10 +517,29 @@ def test_portal_errors():
     assert _has(errs, "related[0].auth")
 
 
+def test_portal_counts():
+    p = portal_doc()
+    pid = p["pages"][0]["id"]
+    p["counts"] = [{"page": pid, "ds": "src", "kind": "catalog", "n": 12, "unit": "source",
+                    "units": "sources"}]
+    assert schema.validate_portal(p) == []
+    p["counts"] += [{"page": pid, "ds": "img", "kind": "images", "n": 3},
+                    {"page": "ghost", "ds": "x", "kind": "pixels", "n": -1, "extra": 1}]
+    errs = schema.validate_portal(p)
+    assert _has(errs, "counts[1].page", "duplicate count")
+    assert _has(errs, "counts[2].page", "not listed")
+    assert _has(errs, "counts[2].kind")
+    assert _has(errs, "counts[2].n", "below minimum")
+    assert _has(errs, "counts[2]", "unknown key 'extra'")
+
+
 def test_portal_empty_pages_ok():
     p = portal_doc()
     p["pages"] = []
     p["search"] = []
+    errs = schema.validate_portal(p)
+    assert errs and all("not listed in pages" in e for e in errs), errs
+    p["counts"] = []            # counts name pages, so a page-less portal has none
     assert schema.validate_portal(p) == []
 
 
@@ -541,6 +560,35 @@ def test_site_contract_example_and_errors():
     assert _has(errs, "portal[0].url", "ending in '/'")
     assert _has(errs, "grammar[0]", "unknown grammar")
     assert _has(errs, "legacy_dir", "absolute")
+
+
+def test_site_legacy_tables():
+    s = site_doc()
+    pg = s["portal"][0]["page"][0]
+    pg["legacy"] = ["a.html", {"file": "pngs/b.html", "preset": "role=c2221"},
+                    {"file": "imaging/index.html", "replace": False}, {"file": "c.html", "preset": ""}]
+    assert schema.validate_site(s, stem="nirspec6927") == []
+    pg["legacy"] = [{"preset": "x"}, {"file": "a.html", "replace": "no", "extra": 1},
+                    {"file": 3}, "a.html", "/abs.html", "../up.html", 7]
+    errs = schema.validate_site(s)
+    assert _has(errs, "legacy[0]", "missing required key 'file'")
+    assert _has(errs, "legacy[1]", "unknown key 'extra'")
+    assert _has(errs, "legacy[1].replace", "boolean")
+    assert _has(errs, "legacy[2].file", "expected string")
+    assert _has(errs, "legacy[3]", "duplicate legacy file")
+    assert _has(errs, "legacy[4]", "relative to legacy_dir")
+    assert _has(errs, "legacy[5]", "relative to legacy_dir")
+    assert _has(errs, "legacy[6]", "expected string")
+
+
+def test_page_legacy_presets():
+    p = page_doc()
+    p["page"]["legacy"] = {"files": ["a.html", "b.html"], "presets": {"b.html": "role=c1182"}}
+    assert schema.validate_page(p) == []
+    p["page"]["legacy"]["presets"] = {"z.html": "x", "a.html": 3}
+    errs = schema.validate_page(p)
+    assert _has(errs, "presets.z.html", "not one of page.legacy.files")
+    assert _has(errs, "presets.a.html", "expected string")
 
 
 def test_site_excluded_without_adapter():

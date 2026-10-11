@@ -64,7 +64,8 @@ class Adapter:
             return Spectrum(wave=w, channels={"flux": 1e-3 * w ** -1})
         ds = {"src": cat,
               "spec": RecordSetSpec(key="spec", kind="pks1", catalog="src",
-                                    ids=[r["id"] for r in rows[:5]], loader=load),
+                                    ids=[r["id"] for r in rows[:5]], loader=load,
+                                    noun=("trace", "traces")),
               "readme": ReadmeSpec(markdown="# Smoke\\n\\nA test portal."),
               "tpl": TemplateSpec()}
         img = os.environ.get("PK_CLI_IMG")
@@ -118,7 +119,8 @@ def env(tmp_path_factory):
 
         [[portal.page]]
         id = "explorer"
-        legacy = ["old_map.html"]
+        legacy = ["old_map.html", {{file = "old_map_b.html", preset = "view=b"}},
+                  {{file = "linked/index.html", replace = false}}]
         grammar = ["kv-view"]
         '''))
     stage = root / "stage"
@@ -187,9 +189,27 @@ def test_page_json_refs_and_legacy(built):
     assert urls["src"] == "data/src/manifest.json"
     assert any(u.startswith("{res}") for u in urls.values())
     assert page["page"]["legacy"]["grammar"] == ["kv-view"]
+    # per-file legacy tables (section 4.1): files stay strings, presets map file -> preset
+    assert page["page"]["legacy"]["files"] == ["old_map.html", "old_map_b.html",
+                                               "linked/index.html"]
+    assert page["page"]["legacy"]["presets"] == {"old_map_b.html": "view=b"}
     assert (built["portal"] / "data/src/manifest.json").is_file()
     portal = json.loads((built["portal"] / "portal.json").read_text())
     assert [p["id"] for p in portal["pages"]] == ["index", "explorer", "spectra"]
+
+
+def test_portal_counts_cover_every_page(built):
+    """portal.json ``counts``: one entry per non-landing page with the size of its primary
+    dataset (catalog rows, record ids, image items)."""
+    portal = json.loads((built["portal"] / "portal.json").read_text())
+    by = {c["page"]: c for c in portal["counts"]}
+    assert set(by) == {"explorer", "spectra"}
+    assert by["explorer"] == {"page": "explorer", "ds": "src", "kind": "catalog", "n": 30,
+                              "unit": "source", "units": "sources"}
+    assert by["spectra"]["kind"] == "records" and by["spectra"]["ds"] == "spec"
+    # a spec's ``noun`` replaces the kind's default nouns
+    assert by["spectra"]["n"] == 5 and (by["spectra"]["unit"], by["spectra"]["units"]) == ("trace", "traces")
+    assert [s["ds"] for s in portal["search"]] == ["src"]
 
 
 def test_shared_resources_attached_by_the_caps_rule(built):
@@ -246,6 +266,65 @@ def test_check_detects_damage(built, tmp_path, capsys):
     assert code in (1, 2)
 
 
+def test_served_files_carry_labelled_paths(built, env):
+    """Provenance in served documents uses ``<label>:<relpath>``; build_report.json keeps the
+    full paths (section 9.3)."""
+    legacy = str(env["legacy"])
+    man = json.loads((built["portal"] / "data/src/manifest.json").read_text())
+    paths = [i["path"] for i in man["provenance"]["inputs"]]
+    assert "legacy_dir:input1.txt" in paths and not any(p.startswith("/") for p in paths)
+    for f in built["portal"].rglob("*"):
+        if f.suffix in (".html", ".json") and f.name != "build_report.json":
+            assert legacy not in f.read_text(), f
+    rep = json.loads((built["portal"] / "build_report.json").read_text())
+    assert any(i["path"] == f"{legacy}/input1.txt" for i in rep["inputs"])
+
+
+def test_check_flags_absolute_local_paths(built, tmp_path):
+    bad = tmp_path / "abs"
+    shutil.copytree(built["portal"], bad)
+    (bad / "data/extra.json").write_text(json.dumps({"p": "/orange/x/y.fits",
+                                                     "q": "file:///home/u/z.py"}))
+    (bad / "build_report.json").write_text(json.dumps({"inputs": [{"path": "/blue/a"}]}))
+    g1 = buildmod.check_build(bad, gate="G1")
+    assert g1.ok and any("data/extra.json: 2 local path(s)" in w for w in g1.warnings), g1.warnings
+    assert not any("build_report" in w for w in g1.warnings)
+    g2 = buildmod.check_build(bad, gate="G2")
+    assert not g2.ok and any("absolute local path" in e for e in g2.errors)
+    assert buildmod.check_build(built["portal"], gate="G2").ok
+
+
+def test_check_local_paths_in_shared_res(built, tmp_path):
+    """Shared-resource documents (vendored res/, the build's _res/) follow the same rule as
+    every served file: a warning at G1, an error at G2."""
+    root = tmp_path / "b"
+    pdir = root / "main"
+    shutil.copytree(built["portal"], pdir)
+    (pdir / "res" / "templates").mkdir(parents=True)
+    (pdir / "res" / "templates" / "index.json").write_text(json.dumps({"meta": {"source": "/orange/t.fits"}}))
+    (root / "_res" / "templates").mkdir(parents=True)
+    (root / "_res" / "templates" / "index.abc.json").write_text(json.dumps({"meta": {"source": "/blue/t.fits"}}))
+    g1 = buildmod.check_build(pdir, gate="G1")
+    assert g1.ok and any("res/templates/index.json" in w for w in g1.warnings), g1.warnings
+    assert any("shared resource ../_res/templates/index.abc.json" in w for w in g1.warnings), g1.warnings
+    g2 = buildmod.check_build(pdir, gate="G2")
+    assert not g2.ok
+    assert any("res/templates/index.json" in e for e in g2.errors), g2.errors
+    assert any("../_res/templates/index.abc.json" in e for e in g2.errors), g2.errors
+
+
+def test_shared_resources_are_labelled(built):
+    """The default template source (an absolute /orange/ path in physics' meta.source) is
+    labelled when the build writes the shared _res/ tree."""
+    res = built["dir"] / "_res"
+    docs = [p for p in res.rglob("*.json")]
+    assert docs
+    for p in docs:
+        assert not buildmod.LOCAL_PATH_RE.search(p.read_text()), p
+    idx = [json.loads(p.read_text()) for p in (res / "templates").glob("index.*.json")]
+    assert idx and all(not str(d.get("meta", {}).get("source", "")).startswith("/") for d in idx)
+
+
 def test_build_vendor_assets_page_filter(env):
     res = buildmod.build_family(FAMILY, pages=["explorer"], vendor_assets=True,
                                 allow_tmp_inputs=True, stage_root=env["stage"],
@@ -257,6 +336,7 @@ def test_build_vendor_assets_page_filter(env):
     assert (pdir / "_pk" / f"v{VERSION}" / "js" / "core" / "boot.js").is_file()
     assert not (pdir / "spectra.html").exists()
     assert buildmod.check_build(pdir).ok
+    assert buildmod.check_build(pdir, gate="G2").ok       # vendored res/ is labelled too
 
 
 # ---------------------------------------------------------------------------

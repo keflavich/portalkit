@@ -880,6 +880,10 @@ def assemble(page: PageSpec, datasets: Mapping[str, DatasetSpec], manifests: Map
             lg["grammar"] = list(page.legacy.grammar)
         if page.legacy.preset:
             lg["preset"] = page.legacy.preset
+        presets = {k: v for k, v in (getattr(page.legacy, "presets", None) or {}).items()
+                   if k in lg["files"]}
+        if presets:
+            lg["presets"] = presets
         doc["page"]["legacy"] = lg
     if page.links:
         doc["links"] = dict(page.links)

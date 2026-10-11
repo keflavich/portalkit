@@ -29,7 +29,12 @@ Exit codes: `1` verify or check failure, `2` usage error, `3` exposure or symlin
   `/blue/adamginsburg/adamginsburg/portalkit_stage`. `stage.check_stage_root` refuses (exit 3) a stage
   root that the web server can reach.
 * `build_report.json` sits next to `portal.json` in the staged portal (or in the build
-  directory). Deploy reads it for provenance and never copies it into the target. Deploy
+  directory). It is the only staged file with full local input paths: served manifests and
+  pages carry `<label>:<relative path>` provenance (`legacy_dir:`, `legacy:`, `input:`,
+  `file:<basename>`; ARCHITECTURE section 9.3). Deploy reads it for provenance and never copies
+  a file named `build_report.json` into the target, at any depth (`deploy.not_deployed`).
+  `portalkit check` warns (G1) or fails (G2) when another staged `.html`/`.json` file holds an
+  absolute `/orange/`, `/blue/` or `/home/` path. Deploy
   looks for these keys at the top level or under `provenance`:
   `adapter_sha`, `legacy_modules` (`[{name, path, sha256}]`), `portalkit`,
   `allow_tmp_inputs`, `inputs` (`[{path, sha256, ...}]` or paths).
@@ -111,7 +116,10 @@ Write rules:
 ### Ownership manifest
 
 `<target>/.portalkit-deploy.json` (schema `pk-deploy/1`, validated with
-`schema.validate_deploy`):
+`schema.validate_deploy`). It keeps the absolute `target` and the full `legacy_modules` paths
+from `build_report.json`, because `status` compares those files for LEGACY-CHANGED. It sits in
+the served target, so it is the one served JSON file the no-local-path rule (ARCHITECTURE
+§9.3) does not cover; `portalkit check` scans the staged tree only.
 
 ```json
 {"schema": "pk-deploy/1", "family": "sgrb2", "portal": "main", "target": "/abs/target",
@@ -169,13 +177,31 @@ portalkit deploy FAMILY BUILD_ID --replace          # stub (default)
 portalkit deploy FAMILY BUILD_ID --replace=inplace
 ```
 
-For each `[[portal.page]]` with `legacy = [...]` whose unified page was built:
+For each `[[portal.page]]` with `legacy = [...]` whose unified page was built. A legacy item
+is a file name or a table (ARCHITECTURE section 4.1):
+
+```toml
+[[portal.page]]
+id = "gallery_6927"
+preset = ""                                            # page default for every stub
+legacy = [
+    "pngs/gallery_6927.html",                          # stub appends the page preset
+    {file = "pngs/gallery_6927_2221.html", preset = "role=c2221"},   # this stub only
+    {file = "imaging/index.html", replace = false},   # never stubbed or backed up
+]
+```
+
+`replace = false` items stay in place, and the plan lists them as a warning. Use it for a
+legacy file that sits behind a symlink, for example robitaille `imaging/ ->
+modelgrids/imaging_run/png`, which would otherwise refuse the whole replace (exit 3). Every
+other item is processed as follows:
 
 1. The original goes to `<legacy_dir>/.portalkit_backup/<build_id>/<file>` (mode and mtime
    kept) and `backup.json` (schema `pk-backup/1`) records its md5, size, mtime, the page id,
    the unified file and the sha256 of what deploy wrote over it.
 2. `stub` writes a 300-byte page that calls
-   `location.replace('<unified url>'+location.search+(location.hash||'#<preset>'))`, with a
+   `location.replace('<unified url>'+location.search+(location.hash||'#<preset>'))`, where
+   `<preset>` is the item's own preset if it has one, else the page preset, with a
    `<noscript>` link. `inplace` writes the unified page with every relative URL prefixed so
    it works from the legacy directory.
 3. The manifest gains one `replaced` row per file.
@@ -279,7 +305,9 @@ Every refusal raises a `DeployError` subclass whose `exit_code` matches the tabl
   can detect edits made after the replace.
 * Secondary manifests for extra portals in one target are named
   `.portalkit-deploy.<portal>.json`.
-* `build_report.json` is not deployed.
+* `build_report.json` is not deployed (at any depth of the staged tree).
+* `legacy` items may be `{file, preset?, replace?}` tables (WPE1; now also in ARCHITECTURE
+  section 4.1).
 * `.htaccess` ownership is recorded by its marker line instead of a manifest entry.
 * The exposure scan maps directory symlinks only; a file symlink into a served root does not
   expose its directory.

@@ -34,7 +34,8 @@ __all__ = [
     "ColumnSpec", "VirtualDim", "Group", "Preset", "DensitySpec", "ManifoldSpec", "ForeignRef",
     "CatalogSpec", "Spectrum", "Image2D", "RecordSetSpec", "ImageItem", "ImageSetSpec",
     "TemplateSpec", "FilterSetSpec", "ExtinctionSpec", "Track", "IsochroneSpec", "HipsSpec",
-    "OverlaySpec", "NarrativeSpec", "ReadmeSpec", "DatasetSpec", "LegacyRef", "PageSpec",
+    "OverlaySpec", "NarrativeSpec", "ReadmeSpec", "DatasetSpec", "LegacyFile", "LegacyRef",
+    "PageSpec",
     "Adapter", "ARCHETYPES", "safe_key", "catalog_from_rows", "join", "standard_pages",
 ]
 
@@ -157,6 +158,8 @@ class CatalogSpec:
     caveats: list[str] = field(default_factory=list)
     catalogs_provenance: list[dict] = field(default_factory=list)
     foreign: ForeignRef | None = None
+    # landing-card nouns (singular, plural) for portal.json counts; None -> the kind default
+    noun: tuple[str, str] | None = None
 
     def column(self, key: str) -> ColumnSpec | None:
         """The :class:`ColumnSpec` with ``key``, or None."""
@@ -204,6 +207,8 @@ class RecordSetSpec:
     png: Callable[[str], tuple[str, dict] | None] | None = None   # pki1 PNG mode: id -> (url, extent)
     layout: Literal["shard", "file"] = "shard"
     legacy_json: tuple[str, str] | None = None         # (dir_url, pattern) Tier A/B only
+    # landing-card nouns (singular, plural) for portal.json counts; None -> the kind default
+    noun: tuple[str, str] | None = None
 
 
 @dataclass
@@ -225,6 +230,8 @@ class ImageSetSpec:
     presets: list[Preset] = field(default_factory=list)
     catalog: str | None = None
     join: str | None = None   # join item.id to catalog id or alias
+    # landing-card nouns (singular, plural) for portal.json counts; None -> the kind default
+    noun: tuple[str, str] | None = None
 
     @classmethod
     def from_rows(cls, rows: list[dict], roles: dict[str, Any], key: str = "img", *,
@@ -357,10 +364,34 @@ DatasetSpec = Union[CatalogSpec, RecordSetSpec, ImageSetSpec, TemplateSpec, Filt
 
 
 @dataclass
+class LegacyFile:
+    """One ``legacy`` item of a ``[[portal.page]]`` entry (a string or a table in the TOML).
+
+    ``preset`` is the hash fragment the ``--replace`` redirect stub of this file appends
+    (``None``: the page preset). ``replace=False`` keeps the file out of ``--replace``
+    stubbing (for example a file reached through a served symlink)."""
+    file: str
+    preset: str | None = None
+    replace: bool = True
+
+    @classmethod
+    def coerce(cls, item: "str | dict | LegacyFile") -> "LegacyFile":
+        """A :class:`LegacyFile` from a TOML item (string or ``{file, preset?, replace?}``)."""
+        if isinstance(item, LegacyFile):
+            return item
+        if isinstance(item, str):
+            return cls(file=item)
+        pre = item.get("preset")
+        return cls(file=str(item["file"]), preset=None if pre is None else str(pre),
+                   replace=bool(item.get("replace", True)))
+
+
+@dataclass
 class LegacyRef:
     files: list[str]
     grammar: list[str] = field(default_factory=list)
     preset: str = ""
+    presets: dict[str, str] = field(default_factory=dict)   # file -> per-file stub preset
 
 
 @dataclass
