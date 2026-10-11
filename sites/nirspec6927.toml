@@ -1,0 +1,86 @@
+# JWST NIRSpec program 6927 (Brick MSA survey) portal (WP22; ARCHITECTURE.md sections 4.1
+# and 14.7, wave 1). The legacy tree /orange/adamginsburg/jwst/spectra/nirspec_6927 is served
+# only through web/secure/jwst (login required): the unified portal is declared secure and
+# every data/figure link points at the secure site. The h2, msata_finding, refstar_map and
+# refstar_check pages stay legacy (later waves); the landing page links them.
+# Legacy deep links: the per-source pages wrote/read `#<source name>` (bare-name; specviewer
+# writes it on load); the manifold wrote `#view=..&x=..&y=..&c=..&star=..` (kv-view).
+# Tier A deviation (section 9.2): no legacy payload holds the 2D spectra, the Brick background
+# catalogue or the isochrones, so every tier builds those from the s2d FITS, the catalogue
+# FITS and MIST (see adapters/nirspec6927.py).
+family = "nirspec6927"
+adapter = "adapters.nirspec6927:ADAPTER"
+tier_default = "B"
+legacy_paths = ["/orange/adamginsburg/jwst/brick/analysis"]
+
+[[portal]]
+id = "nirspec6927"
+title = "JWST NIRSpec 6927 (Brick MSA) portal"
+visibility = "secure"
+legacy_dir = "/orange/adamginsburg/jwst/spectra/nirspec_6927"
+url = "https://data.rc.ufl.edu/secure/adamginsburg/jwst/spectra/nirspec_6927/unified/"
+inputs = [
+    "/orange/adamginsburg/jwst/spectra/nirspec_6927/nirspec_6927_sources.json",
+    "/orange/adamginsburg/jwst/spectra/nirspec_6927/nirspec_6927_ice_lines.ecsv",
+    "/orange/adamginsburg/jwst/spectra/nirspec_6927/nirspec_6927_synthphot.ecsv",
+    "/orange/adamginsburg/jwst/spectra/nirspec_6927/nirspec_6927_cogas.ecsv",
+    "/orange/adamginsburg/jwst/spectra/nirspec_6927/nirspec_6927_globalcontinuum.ecsv",
+    "/orange/adamginsburg/jwst/spectra/nirspec_6927/nirspec_6927_line_detections.ecsv",
+    "/orange/adamginsburg/jwst/spectra/nirspec_6927/nirspec_6927_slits.ecsv",
+    "/orange/adamginsburg/jwst/spectra/nirspec_6927/specdata/*.json",
+    "/orange/adamginsburg/jwst/spectra/data_L3_20260823/*_x1d.fits",
+    "/orange/adamginsburg/jwst/spectra/data_L3_o022_20260825/*_x1d.fits",
+    "/orange/adamginsburg/jwst/spectra/data_L3_o023_20260923/*_x1d.fits",
+    "/orange/adamginsburg/jwst/brick/catalogs/basic_merged_indivexp_photometry_tables_merged_ok2221or1182_20251211_abfix.fits",
+]
+
+[[portal.page]]
+id = "index"
+legacy = ["index.html"]
+
+[[portal.page]]
+id = "nirspec_6927_map"
+legacy = ["nirspec_6927_map.html"]
+grammar = ["bare-name"]
+
+[[portal.page]]
+id = "nirspec_6927_manifold"
+legacy = ["nirspec_6927_manifold.html"]
+grammar = ["kv-view", "bare-name"]
+
+[[portal.page]]
+id = "nirspec_6927_specviewer"
+legacy = ["nirspec_6927_specviewer.html"]
+grammar = ["specviewer"]
+
+[[portal.page]]
+id = "nirspec_6927_colorcolor"
+legacy = ["nirspec_6927_colorcolor.html"]
+grammar = ["bare-name"]
+
+[[portal.page]]
+id = "nirspec_6927_icecolumns"
+legacy = ["nirspec_6927_icecolumns.html"]
+grammar = ["bare-name"]
+
+[[portal.page]]
+id = "nirspec_6927_cogas"
+legacy = ["nirspec_6927_cogas.html"]
+grammar = ["bare-name"]
+
+[[portal.page]]
+id = "nirspec_6927_pvgallery"
+legacy = ["nirspec_6927_pvgallery.html"]
+grammar = ["bare-name"]
+
+[[portal.page]]
+id = "nirspec_6927_sedgallery"
+legacy = ["nirspec_6927_sedgallery.html"]
+grammar = ["bare-name"]
+
+# One page serves the three legacy spectrum-PNG galleries (all filters, 2221 overlay, 1182
+# overlay). PageConfig.preset is per page, so the _2221/_1182 stubs open on the default
+# role; the role switcher selects c2221/c1182 (hash grammar: #role=c2221).
+[[portal.page]]
+id = "gallery_6927"
+legacy = ["pngs/gallery_6927.html", "pngs/gallery_6927_2221.html", "pngs/gallery_6927_1182.html"]
