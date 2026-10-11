@@ -84,11 +84,69 @@ dataset, image, script or a relative path that resolves into a secure-only direc
 refused (exit 3). Plain links to secure pages (`<a href>`, `links`/`related` entries, objects
 with `link_only: true` or an `auth` key) are allowed with a "login required" warning.
 
-The full scan of the real roots reads about 860k directory entries and took about 12 minutes
-on the shared filesystem (most of it in a few very large directories under
-`web/secure/salt/` and `web/secure/ACES/`). The result is cached for an hour in
-`$PK_CACHE_DIR` (default `~/.cache/portalkit/exposure-<key>.json`); `scan(cache_s=0)` forces a
-fresh walk.
+Most of the cost of a scan is listing a few very large directories under
+`web/secure/salt/` and `web/secure/ACES/`. Three measures keep it down without changing any
+classification:
+
+* **One listing per real directory.** Several symlink routes (and both roots) reach the same
+  directories; each real directory is listed once per scan and its children are re-labelled
+  for every route that reaches it. Symlinks are still resolved (`stat`, `readlink`,
+  `realpath`) once per link, and every warning keeps the logical path of the route it was
+  found on, so entries, `via` chains and warnings are identical to a walk that lists every
+  route separately.
+* **Result cache.** The result is cached for `cache_s` seconds (default an hour) in memory and
+  in `$PK_CACHE_DIR/exposure-<key>.json` (default `~/.cache/portalkit/`). The key covers the
+  roots, depth and prune globs. A scan with `$PK_CACHE_DIR` set elsewhere also reads, never
+  writes, a matching file in `~/.cache/portalkit/`.
+* **Directory stamps.** The cache file (format version 3; older files are ignored) records,
+  per listed directory, `(st_dev, st_ino, st_mtime_ns, st_ctime_ns)` and the names of its
+  subdirectories and symlinks. After `cache_s` expires the next scan `stat`s each directory
+  and reuses the recorded names when the whole stamp matches, so only changed directories
+  are listed again. The ctime covers changes that leave the mtime alone: `chmod`/`chown` (a
+  directory made unlistable is listed again and reported as `cannot list`, as in a fresh
+  walk) and an entry change followed by a restored mtime (`touch -r`, `rsync -t`); users
+  cannot set ctime. Every symlink is re-resolved on every scan, so a link whose target
+  appeared, moved or disappeared is reclassified even though its own directory is
+  unchanged. A directory whose mtime or ctime lies within 5 s of the time it was listed is
+  never reused (timestamp granularity), and a malformed stamp is ignored (the directory is
+  listed). One case changes no stamp: a change of the scanning user's group membership,
+  which can make a directory listable or unlistable; run with `cache_s=0` after one.
+
+`scan(cache_s=0)` disables all three caches (no read, no write) and lists everything.
+`ExposureMap.stats` reports the counts of the last walk (`scandir`, `stat`, `dirents`,
+`readlink`, `realpath`, `reused`, `shared`, `dirs`, `wall_s`); a map read from a cache
+file has empty stats.
+
+Measured on the real roots (2026-10-11, depth 4, prune `*_hips`; call counts from wrapped
+`os` functions, so `lstat` and `readlink` include the calls made inside `realpath`):
+
+| Run | wall | `scandir` | dirents read | `stat` | `lstat` | `readlink` | `realpath` |
+|---|---|---|---|---|---|---|---|
+| before, cold filesystem cache | 589 s | 6439 | 1,032,422 | 32,567 | 52,005 | 9,185 | 3,073 |
+| before, warm filesystem cache | 10.1 s | 6439 | 1,032,422 | 32,567 | 52,005 | 9,185 | 3,073 |
+| after, no result cache, warm filesystem | 8.8 s | 5957 | 849,349 | 38,230 | 49,898 | 8,517 | 2,963 |
+| after, expired result cache (stamps) | 6.2 s | 0 | 0 | 38,230 | 49,898 | 8,517 | 2,963 |
+
+All four runs produced the same 3073 entries and 2190 warnings, in the same order. The
+"after" rows used cache format 2 (stamps without ctime); format 3 reads the ctime from the
+same `stat` call, so the call counts are unchanged.
+
+The wall time depends mostly on whether the filesystem metadata is cached: the first row ran
+with a cold metadata cache, the others right after it. The cold-cache cost of the new walk
+was not measured, so the table does not show a reduction of the cold-metadata cost (the
+608 s fixture setup of a cold robitaille adapter-test run). What it shows: the new walk lists
+about 18% fewer entries, and a stamp revalidation lists none, but a revalidation still makes
+about 38,000 `stat` and 50,000 `lstat` calls (the per-directory stamp checks and the
+per-symlink `realpath`), and each of those can be a metadata-server round trip on cold
+Lustre. A cold revalidation may therefore still take minutes. The case that avoids the walk
+entirely is a result younger than `cache_s` in memory, in `$PK_CACHE_DIR`, or (read-only) in
+`~/.cache/portalkit/`; the adapter-test speedup on a cold node comes mainly from that
+read-only fallback when the user has scanned the same roots within the hour. Reusing the
+recorded `realpath` of a symlink whose own `lstat` stamp and target ancestors are unchanged
+would remove most of the remaining calls; it is not implemented. One data point: after the
+switch to format 3, when no cache file of the current format existed, the robitaille adapter
+tests took 625 s (host load average about 110), compared with 30 s for the same tests with a
+usable cache file. That run did a full fresh walk; its walk time was not profiled separately.
 
 ## 4. Deploy
 
@@ -145,7 +203,38 @@ the served target, so it is the one served JSON file the no-local-path rule (ARC
 `--htaccess` writes the section 11.5 cache-header block to `<target>/.htaccess`, behind a
 first-line marker `# portalkit: managed file (pk-htaccess/1) ...`. An existing `.htaccess`
 without the marker is an ownership conflict (exit 4). The file is not listed in the manifest
-because Apache refuses to serve `.ht*` files and `verify --http` could not fetch it.
+because Apache refuses to serve `.ht*` files and `verify --http` could not fetch it. An
+`.htaccess` written by an earlier portalkit version (same marker) is rewritten in place.
+
+After the cache-header block the file denies deploy's own bookkeeping files:
+
+```
+# deploy bookkeeping (ownership manifests, backups, temporaries) is never served
+<IfModule mod_alias.c>
+  RedirectMatch 403 "/\.portalkit[^/]*(/|$)|\.pk-tmp$"
+</IfModule>
+```
+
+* It covers the ownership manifests `.portalkit-deploy.json` and
+  `.portalkit-deploy.<portal>.json`, which keep the absolute `target` and the full
+  `legacy_modules` paths (the one served JSON exception to the no-local-path rule), anything
+  under a `.portalkit_backup/` directory, and in-flight `*.pk-tmp` files. Requests for them
+  answer 403. Every other owned file (no path segment starting with `.portalkit`) is
+  unaffected; `htaccess.denied(rel)` applies the same pattern in Python.
+* `RedirectMatch` belongs to the `FileInfo` override class, the class the cache-header
+  directives (`Header`, `AddType`) already need, so the deny rule adds no `AllowOverride`
+  requirement. A `Require all denied` rule would need `AuthConfig`, and Apache answers 500 for
+  every request in a directory whose `.htaccess` uses an override class it does not allow.
+  When `AllowOverride` is `None` the whole file is ignored and the manifest is served.
+* The rule applies only when `--htaccess` is passed. Without it, or when the target already
+  has a foreign `.htaccess`, the manifest stays readable at `<url>/.portalkit-deploy.json`.
+  `status` and `verify` read the manifest from disk, never over HTTP, so denying it changes
+  nothing for them.
+* Backups live in `<legacy_dir>/.portalkit_backup/`, outside the default target
+  `<legacy_dir>/unified`, and `backup.json` records the absolute `legacy_dir` and `target`.
+  `htaccess.write_backup_htaccess(legacy_dir)` writes the same deny rule (with the marker,
+  without the cache headers) to `<legacy_dir>/.portalkit_backup/.htaccess`, with the same
+  ownership and symlink checks.
 
 ## 5. Verify
 
@@ -309,8 +398,14 @@ Every refusal raises a `DeployError` subclass whose `exit_code` matches the tabl
 * `legacy` items may be `{file, preset?, replace?}` tables (WPE1; now also in ARCHITECTURE
   section 4.1).
 * `.htaccess` ownership is recorded by its marker line instead of a manifest entry.
+* The portalkit `.htaccess` carries a deny rule for `.portalkit*` paths and `*.pk-tmp` after
+  the section 11.5 block (WPE3).
 * The exposure scan maps directory symlinks only; a file symlink into a served root does not
   expose its directory.
+* The exposure cache file carries per-directory stamps (format version 3: dev, inode, mtime,
+  ctime) that let an expired
+  result be revalidated without listing unchanged directories, and a scan with a custom
+  `$PK_CACHE_DIR` also reads `~/.cache/portalkit/` (WPE3, section 3).
 * Build entries use `note` values `in progress` (an incomplete deploy) and
   `replace rolled back <time>` (the replace was undone; the build is still deployed).
 * `verify --http` never sends `PK_BASIC_AUTH` to a public portal's URLs: they must answer 200

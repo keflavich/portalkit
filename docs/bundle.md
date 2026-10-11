@@ -39,7 +39,9 @@ img = images.write(spec: ImageSetSpec, dest, *, rows=cat.row_of, thumb=None,
   keys, unknown encodings); `StagingError` for a write outside the staging root or through a
   symlink.
 * `catalog.head_chunk_starts(n)` returns the manifest `chunk_starts` for `n` rows (or `None`);
-  `catalog.first_paint_files(manifest)` lists the data files counted as first paint (section 8).
+  `catalog.first_paint_files(manifest, context=False)` lists the data files counted as first
+  paint (section 8); `context=True` applies the context-catalog rule (manifest plus density
+  grids only).
 * Python readers (`portalkit.bundle.codec`, mirroring `web/js/workers/data.worker.js`):
   `catalog_chunk_starts(man)` (`chunk_starts`, else `[0, chunk_rows, ...]`; `ValueError` on a
   malformed list), `chunk_ranges(man, nfiles)` (`[first, end)` per chunk file; one file covers
@@ -254,8 +256,20 @@ budget`.
     the head ids chunk. Positions are not counted (sky markers load them after first paint).
     The head chunk is chunk 0: the LOD base sample with `chunk_starts`, else the whole file
     (or the first `chunk_rows` rows).
+  * Context catalogs (`CatalogSpec.context = True`, drawn only as a density backdrop and
+    never listed; IMPLEMENTATION_NOTES 114) follow their own rule. `first_paint_bytes` counts
+    `manifest.json` plus every density grid of the catalog (the backdrop of each axes
+    preset), or the two axis columns (all chunks, as above) when the catalog has no grid. No
+    row chunk and no head chunk are counted, because the list never shows a context catalog.
+    `catalog.write` passes `context=spec.context`.
+  * `catalog.first_paint_files(manifest, context=False)` returns these files (paths relative
+    to the dataset directory, the manifest itself excluded; the caller adds its size). With
+    `context=True` it returns the context set above; otherwise the plot file(s) followed by
+    the list's first screen. Nothing is listed for the list when `n == 0`.
   * The same files carry `first_paint: true` in the ledger, so `Ledger.first_paint(ds)`
     equals `first_paint_bytes`. `build.py` sums it over a page's catalogs.
+  * The estimate leaves out the context axis columns that the scatter pane currently bins in
+    the worker for its backdrop (IMPLEMENTATION_NOTES 114); it counts only the grids.
 
 ## 9. Record sets (sections 5.6-5.8)
 

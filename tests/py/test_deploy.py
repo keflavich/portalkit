@@ -476,6 +476,107 @@ def test_htaccess_written_and_foreign_refused(world):
     assert h.read_text() == "AuthType Basic\n"
 
 
+def test_htaccess_keeps_cache_block_and_denies_manifest(world):
+    """WPE3: the section 11.5 block is kept verbatim and a mod_alias rule denies deploy's
+    dot-files (ownership manifests with absolute paths, backups, temporaries)."""
+    text = hmod.HTACCESS_TEXT
+    assert text.startswith(hmod.MARKER + "\n" + hmod.HTACCESS_BODY)
+    assert 'RedirectMatch 403 "' + hmod.DENY_RE + '"' in text
+    assert "<IfModule mod_alias.c>" in text
+    # no directive that needs the AuthConfig/Limit overrides (a 500 for the whole directory
+    # when AllowOverride lacks them)
+    for word in ("Require", "Deny from", "Order ", "AuthType"):
+        assert word not in text, word
+    assert hmod.denied(dmod.MANIFEST_NAME)
+    assert hmod.denied(".portalkit-deploy.other.json")
+
+
+@pytest.mark.parametrize("rel,deny", [
+    (".portalkit-deploy.json", True),
+    (".portalkit-deploy.c.json", True),
+    ("sub/.portalkit-deploy.json", True),
+    (".portalkit_backup/20261010T120000Z-0123abcd/backup.json", True),
+    (".portalkit_backup/20261010T120000Z-0123abcd/sub/a.html", True),
+    (".portalkit_backup", True),
+    ("map.html.pk-tmp", True),
+    ("data/src/cols.0123abcd.bin.pk-tmp", True),
+    ("/secure/adamginsburg/x/unified/.portalkit-deploy.json", True),
+    ("map.html", False),
+    ("portal.json", False),
+    ("data/src/manifest.json", False),
+    ("data/src/cols.0123abcd.bin", False),
+    ("portalkit-res/v1/filters.json", False),     # a name containing 'portalkit'
+    ("data/x.portalkit-deploy.json", False),      # not at a segment start
+    ("a.pk-tmp.html", False),
+    ("ünï/.portalkit-deploy.json", True),
+    ("", False),
+])
+def test_htaccess_denied(rel, deny):
+    assert hmod.denied(rel) is deny
+
+
+def test_htaccess_denies_every_deploy_dotfile_in_target(world):
+    """After deploys of two portals into one target (primary and secondary manifests) with
+    --htaccess, every dot-file deploy left in the target except .htaccess itself is denied,
+    and no manifest-owned (served) file is."""
+    t = world["orange"] / "both" / "shared"
+    stage_portal(world["stage"], pid="a")
+    d = world["stage"] / FAM / BID / "c"
+    (d / "sub").mkdir(parents=True)
+    (d / "sub" / "c.html").write_text("<p>c</p>")
+    run(world, site(world, "public", "both", pid="a", target=str(t)), htaccess=True)
+    run(world, site(world, "public", "both", pid="c", target=str(t)), htaccess=True)
+    h = t / ".htaccess"
+    assert h.read_text() == hmod.HTACCESS_TEXT
+    dot = sorted(str(p.relative_to(t)) for p in t.rglob(".*") if p.name != ".htaccess")
+    assert dot == sorted([dmod.MANIFEST_NAME, ".portalkit-deploy.c.json"])
+    assert all(hmod.denied(r) for r in dot)
+    for mname in dot:
+        man = json.loads((t / mname).read_text())
+        assert man["target"] == str(t)              # absolute: the reason it is denied
+        assert not any(hmod.denied(r) for r in man["files"]), mname
+
+
+def test_htaccess_upgrades_previous_owned_file(world):
+    """An .htaccess written by an earlier portalkit (marker, no deny block) is rewritten."""
+    stage_portal(world["stage"])
+    t = tgt(world)
+    t.mkdir(parents=True)
+    old = hmod.MARKER + "\n" + hmod.HTACCESS_BODY
+    (t / ".htaccess").write_text(old)
+    assert hmod.htaccess_owned(t / ".htaccess")
+    assert hmod.write_htaccess(t, dry_run=True) == t / ".htaccess"
+    assert (t / ".htaccess").read_text() == old                  # dry run writes nothing
+    run(world, site(world), htaccess=True)
+    assert (t / ".htaccess").read_text() == hmod.HTACCESS_TEXT
+    assert hmod.write_htaccess(t) is None
+
+
+def test_backup_htaccess(world, tmp_path):
+    ld = world["orange"] / "sec/portal"
+    assert hmod.write_backup_htaccess(ld) is None                 # no backup tree yet
+    b = ld / ".portalkit_backup"
+    b.mkdir()
+    assert hmod.write_backup_htaccess(ld, dry_run=True) == b / ".htaccess"
+    assert not (b / ".htaccess").exists()
+    assert hmod.write_backup_htaccess(ld) == b / ".htaccess"
+    text = (b / ".htaccess").read_text()
+    assert text == hmod.BACKUP_HTACCESS_TEXT and hmod.htaccess_owned(b / ".htaccess")
+    assert "Cache-Control" not in text and hmod.DENY_RE in text
+    assert hmod.write_backup_htaccess(ld) is None                 # unchanged
+    (b / ".htaccess").write_text("AuthType Basic\n")
+    with pytest.raises(OwnershipConflict):
+        hmod.write_backup_htaccess(ld)
+    (b / ".htaccess").unlink()
+    os.symlink(tmp_path, b / ".htaccess")
+    with pytest.raises(SymlinkRefusal):
+        hmod.write_backup_htaccess(ld)
+    ld2 = world["orange"] / "pub"
+    os.symlink(world["orange"] / "hidden", ld2 / ".portalkit_backup")
+    with pytest.raises(SymlinkRefusal):
+        hmod.write_backup_htaccess(ld2)
+
+
 @pytest.mark.parametrize("rel,cc", [
     ("data/src/cols.0123abcd.bin", hmod.IMMUTABLE),
     ("data/src/stats.0123abcd.json", hmod.IMMUTABLE),

@@ -133,6 +133,9 @@ budgets; `--gate G2` additionally refuses `json-legacy` record sets and absolute
 warnings. Provenance in served files is written as `<label>:<relative path>`, with the roots
 taken from `legacy_dir`, `legacy_paths` and `inputs`. Keep absolute paths out of README text
 and captions too. `build_report.json` keeps the full paths and is never deployed.
+`physics.templates.load_source` follows the same rule for template spectra: `meta.source` is
+`file:<basename>` for an absolute path, or the label a `labeler=` callable (such as the build's
+`PathLabeler`) returns.
 
 `portal.json` gains a `counts` entry for every built page except the landing page. Each entry
 holds the size of the page's primary dataset: catalog rows, image items or record ids

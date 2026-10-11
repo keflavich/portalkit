@@ -299,6 +299,382 @@ def test_reference_policy(tree, emap):
     assert check_references("public", [rel], emap).level == "refuse"
 
 
+# -- scan cost: shared listings, directory stamps, cache fallback (WPE3) ----------------------
+
+def _reference_scan(roots: dict, depth: int = 4, prune: tuple = ("*_hips",)) -> tuple[list, list]:
+    """The pre-WPE3 walk (one listing per route), kept as the classification oracle."""
+    import fnmatch
+    import stat as st_
+
+    def list_dir(logical):
+        warnings, out = [], []
+        try:
+            with os.scandir(logical) as it:
+                dents = sorted(it, key=lambda de: de.name)
+        except OSError as exc:
+            return [], [f"cannot list {logical}: {exc.strerror or exc}"]
+        for de in dents:
+            if any(fnmatch.fnmatch(de.name, pat) for pat in prune):
+                continue
+            if de.is_symlink():
+                try:
+                    st = os.stat(de.path)
+                except OSError:
+                    warnings.append(f"dangling symlink {de.path}")
+                    continue
+                if not st_.S_ISDIR(st.st_mode):
+                    continue
+                out.append(("link", de.name, de.path, os.path.realpath(de.path), os.readlink(de.path)))
+            elif de.is_dir(follow_symlinks=False):
+                out.append(("dir", de.name, de.path))
+        return out, warnings
+
+    entries, warnings = [], []
+    for kind in ("public", "secure"):
+        root = os.path.abspath(roots[kind])
+        prefix = ex.URL_PREFIXES[kind]
+        root_real = os.path.realpath(root)
+        if not os.path.isdir(root_real):
+            warnings.append(f"{kind} root {root} is not a directory")
+            continue
+        entries.append((root_real, kind, ex._join_url(prefix, ""), (f"{kind}: {root}",)))
+        expanded = {root_real}
+        level = [(root, "", (f"{kind}: {root}",), frozenset([root_real]))]
+        d = 0
+        while level and d < depth:
+            nxt = []
+            for logical, rel, chain, anc in level:
+                children, warns = list_dir(logical)
+                warnings.extend(warns)
+                for ch in children:
+                    child_rel = f"{rel}/{ch[1]}" if rel else ch[1]
+                    if ch[0] == "dir":
+                        nxt.append((ch[2], child_rel, chain, anc))
+                        continue
+                    hop = chain + (f"{ch[2]} -> {ch[4]}",)
+                    entries.append((ch[3], kind, ex._join_url(prefix, child_rel), hop))
+                    if ch[3] not in anc and ch[3] not in expanded:
+                        expanded.add(ch[3])
+                        nxt.append((ch[2], child_rel, hop, anc | {ch[3]}))
+            level = nxt
+            d += 1
+    return entries, warnings
+
+
+def _sig(m) -> tuple[list, list]:
+    return [(e.real, e.kind, e.url, e.via) for e in m.entries], list(m.warnings)
+
+
+def _shared_tree(tree) -> dict:
+    """The fake tree plus routes that reach the same directories several times."""
+    o, pub, sec = tree["orange"], tree["public"], tree["secure"]
+    (o / "jwst" / "sgrb2" / "sub" / "deeper").mkdir(parents=True)
+    os.symlink(o / "w51" / "portal", o / "jwst" / "sgrb2" / "sub" / "w51p")
+    os.symlink(tree["base"] / "nowhere", o / "jwst" / "sgrb2" / "dangling ü")   # seen per route
+    (o / "jwst" / "sgrb2" / "x_hips").mkdir()
+    os.symlink(o / "w51", o / "jwst" / "sgrb2" / "x_hips" / "hidden")
+    os.symlink(o / "jwst" / "sgrb2", pub / "sgrb2_again")
+    os.symlink(o / "jwst", pub / "jwst" / "all")
+    (o / "jwst" / "notes.txt").write_text("x")
+    os.symlink(o / "jwst" / "notes.txt", o / "jwst" / "sgrb2" / "file_link")
+    return {"public": pub, "secure": sec}
+
+
+@pytest.mark.parametrize("depth,prune", [(4, ("*_hips",)), (6, ()), (1, ("*_hips",)), (0, ())])
+def test_shared_listings_match_reference_walk(tree, depth, prune):
+    roots = _shared_tree(tree)
+    m = scan(roots, depth=depth, prune=prune, cache_s=0)
+    ref_entries, ref_warnings = _reference_scan(roots, depth, prune)
+    assert _sig(m) == (ref_entries, ref_warnings)
+    if depth >= 4:
+        assert any("dangling ü" in w for w in m.warnings)
+        # several routes reach the same directories: each is listed once
+        assert m.stats["shared"] > 0
+        assert m.stats["scandir"] == m.stats["dirs"]
+        o = tree["orange"]
+        for p, kind in ((o / "jwst" / "sgrb2" / "sub", "both"), (o / "w51" / "portal", "both"),
+                        (o / "jwst" / "spectra" / "nirspec_6927", "both")):
+            assert classify(p, m).kind == kind, p
+
+
+def test_listing_counts_on_the_fake_tree(tree):
+    """Call counts reported by the walk: one scandir per distinct real directory."""
+    roots = _shared_tree(tree)
+    m = scan(roots, cache_s=0)
+    st = m.stats
+    assert st["scandir"] == st["dirs"] and st.get("reused", 0) == 0
+    assert st["readlink"] == st["realpath"] > 0
+    assert "stat" in st and st["wall_s"] >= 0
+    assert st["shared"] >= 3
+
+
+def _later(monkeypatch, seconds: float) -> None:
+    real_time = ex.time.time
+    monkeypatch.setattr(ex.time, "time", lambda: real_time() + seconds)
+
+
+def _age_tree(base: Path, monkeypatch, seconds: float = 3600.0) -> None:
+    """Make every directory's stamp trusted (outside the racy window): mtimes go into the
+    past, and since ``utime`` sets ctime to now (users cannot set ctime), the scan clock moves
+    forward by more than ``_RACY_S``."""
+    t = ex.time.time() - seconds
+    for dirpath, dirnames, _ in os.walk(base):
+        os.utime(dirpath, (t, t))
+    _later(monkeypatch, 6 * ex._RACY_S)
+
+
+def test_expired_cache_revalidates_by_stamps(tree, tmp_path, monkeypatch):
+    monkeypatch.setenv("PK_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    ex.clear_cache()
+    roots = _shared_tree(tree)
+    _age_tree(tree["base"], monkeypatch)
+    m1 = scan(roots, cache_s=60)
+    assert m1.stats.get("reused", 0) == 0
+    files = list((tmp_path / "cache").glob("exposure-*.json"))
+    assert len(files) == 1
+    import json as _json
+    doc = _json.loads(files[0].read_text())
+    assert doc["version"] == 3 and doc["dirs"]
+    assert all(len(v) == 6 for v in doc["dirs"].values())
+    _later(monkeypatch, 120)                     # past cache_s: revalidate
+    ex.clear_cache()
+    m2 = scan(roots, cache_s=60)
+    assert _sig(m2) == _sig(m1) == _sig(scan(roots, cache_s=0))
+    assert m2.stats.get("scandir", 0) == 0 and m2.stats["reused"] == m2.stats["dirs"]
+    # symlinks are resolved again even when their directory is reused
+    assert m2.stats["realpath"] == m1.stats["realpath"]
+    assert m2.scanned > m1.scanned
+
+
+def test_stamps_detect_changes(tree, tmp_path, monkeypatch):
+    """A new symlink changes its directory's mtime; a link whose target disappears is
+    re-resolved although its own directory is unchanged."""
+    monkeypatch.setenv("PK_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    ex.clear_cache()
+    o = tree["orange"]
+    roots = _shared_tree(tree)
+    (o / "gone" / "inner").mkdir(parents=True)
+    os.symlink(o / "gone" / "inner", tree["public"] / "jwst" / "wd2" / "to_inner")
+    _age_tree(tree["base"], monkeypatch)
+    m1 = scan(roots, cache_s=60)
+    assert classify(o / "gone" / "inner", m1).kind == "both"     # also via secure/wd2mirror
+    # change 1: a new link in a stamped directory
+    os.symlink(o / "robitaille_models" / "portal", tree["public"] / "rportal")
+    # change 2: the target of an existing link disappears; the link's directory keeps its stamp
+    os.rmdir(o / "gone" / "inner")
+    _later(monkeypatch, 120)
+    ex.clear_cache()
+    m2 = scan(roots, cache_s=60)
+    assert _sig(m2) == _sig(scan(roots, cache_s=0))
+    assert classify(o / "robitaille_models" / "portal", m2).kind == "both"
+    assert classify(o / "gone" / "inner", m2).kind == "unserved"
+    assert any(w.endswith("to_inner") and w.startswith("dangling") for w in m2.warnings)
+    assert 0 < m2.stats["reused"] < m2.stats["dirs"]
+    assert m2.stats["scandir"] >= 1                 # the public root was listed again
+
+
+def _restore_modes(base: Path) -> None:
+    for dirpath, dirnames, _ in os.walk(base):
+        for d in dirnames:
+            p = os.path.join(dirpath, d)
+            if not os.path.islink(p):
+                os.chmod(p, 0o755)
+
+
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                    reason="root can list any directory")
+def test_stamps_detect_permission_change(tree, tmp_path, monkeypatch):
+    """chmod changes only ctime: a directory made unlistable is listed again (and fails, as
+    in a fresh walk) although its mtime is unchanged."""
+    monkeypatch.setenv("PK_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    ex.clear_cache()
+    o = tree["orange"]
+    roots = _shared_tree(tree)
+    sub = tree["public"] / "permtest"
+    sub.mkdir()
+    (o / "permdata").mkdir()
+    os.symlink(o / "permdata", sub / "lnk")
+    _age_tree(tree["base"], monkeypatch)
+    m1 = scan(roots, cache_s=60)
+    assert classify(o / "permdata", m1).kind == "public"
+    mt = sub.stat().st_mtime_ns
+    os.chmod(sub, 0o311)                            # searchable, not listable
+    try:
+        os.utime(sub, ns=(mt, mt))
+        assert sub.stat().st_mtime_ns == mt
+        _later(monkeypatch, 120)
+        ex.clear_cache()
+        m2 = scan(roots, cache_s=60)
+        fresh = scan(roots, cache_s=0)
+        assert _sig(m2) == _sig(fresh)
+        assert classify(o / "permdata", m2).kind == "unserved"
+        assert any(w.startswith(f"cannot list {sub}") for w in m2.warnings)
+        assert 0 < m2.stats["reused"] < m2.stats["dirs"]
+    finally:
+        os.chmod(sub, 0o755)
+    ex.clear_cache()
+
+
+def test_stamps_detect_link_swap_with_restored_mtime(tree, tmp_path, monkeypatch):
+    """A symlink replaced while the directory mtime is restored (touch -r) leaves
+    (dev, ino, mtime) unchanged; ctime still changes, so the directory is listed again."""
+    monkeypatch.setenv("PK_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    ex.clear_cache()
+    o = tree["orange"]
+    roots = _shared_tree(tree)
+    sub = tree["public"] / "swaptest"
+    sub.mkdir()
+    (o / "swap1").mkdir()
+    (o / "swap2").mkdir()
+    os.symlink(o / "swap1", sub / "lnk")
+    _age_tree(tree["base"], monkeypatch)
+    m1 = scan(roots, cache_s=60)
+    assert classify(o / "swap1", m1).kind == "public"
+    assert classify(o / "swap2", m1).kind == "unserved"
+    st = sub.stat()
+    os.unlink(sub / "lnk")
+    os.symlink(o / "swap2", sub / "lnk2")
+    os.utime(sub, ns=(st.st_atime_ns, st.st_mtime_ns))
+    assert (sub.stat().st_ino, sub.stat().st_mtime_ns) == (st.st_ino, st.st_mtime_ns)
+    _later(monkeypatch, 120)
+    ex.clear_cache()
+    m2 = scan(roots, cache_s=60)
+    assert _sig(m2) == _sig(scan(roots, cache_s=0))
+    assert classify(o / "swap2", m2).kind == "public"
+    assert classify(o / "swap1", m2).kind == "unserved"
+    assert not any("swaptest/lnk" in w for w in m2.warnings)
+    ex.clear_cache()
+
+
+@pytest.mark.parametrize("bad", [
+    [["only-name"]], [["x", "q"]], [[1, "d"]], [["../up", "d"]], "notalist", None,
+])
+def test_malformed_stamp_is_ignored(tree, tmp_path, monkeypatch, bad):
+    """A malformed directory stamp in the cache file costs a scandir, never an error."""
+    import json as _json
+    monkeypatch.setenv("PK_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    ex.clear_cache()
+    roots = _shared_tree(tree)
+    _age_tree(tree["base"], monkeypatch)
+    m1 = scan(roots, cache_s=60)
+    (f,) = list((tmp_path / "cache").glob("exposure-*.json"))
+    doc = _json.loads(f.read_text())
+    key = sorted(doc["dirs"])[0]
+    if isinstance(bad, list):
+        doc["dirs"][key][5] = bad
+    else:
+        doc["dirs"][key] = bad
+    f.write_text(_json.dumps(doc))
+    _later(monkeypatch, 120)
+    ex.clear_cache()
+    m2 = scan(roots, cache_s=60)
+    assert _sig(m2) == _sig(m1)
+    assert m2.stats["scandir"] == 1 and m2.stats["reused"] == m2.stats["dirs"] - 1
+    ex.clear_cache()
+
+
+def test_racy_stamps_are_not_reused(tree, tmp_path, monkeypatch):
+    """Directories modified within the racy window of their listing are listed again."""
+    monkeypatch.setenv("PK_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    ex.clear_cache()
+    roots = _shared_tree(tree)                      # fresh mtimes: inside the racy window
+    m1 = scan(roots, cache_s=60)
+    _later(monkeypatch, 120)
+    ex.clear_cache()
+    m2 = scan(roots, cache_s=60)
+    assert m2.stats.get("reused", 0) == 0 and m2.stats["scandir"] == m1.stats["scandir"]
+    assert _sig(m2) == _sig(m1)
+
+
+def test_cache_disabled_writes_and_reads_nothing(tree, tmp_path, monkeypatch):
+    monkeypatch.setenv("PK_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    ex.clear_cache()
+    roots = _shared_tree(tree)
+    _age_tree(tree["base"], monkeypatch)
+    scan(roots, cache_s=60)
+    _later(monkeypatch, 120)
+    files = sorted((tmp_path / "cache").glob("exposure-*.json"))
+    stamp = [(f, f.stat().st_mtime_ns) for f in files]
+    m = scan(roots, cache_s=0)
+    assert m.stats.get("reused", 0) == 0 and m.stats["scandir"] == m.stats["dirs"]
+    assert [(f, f.stat().st_mtime_ns) for f in files] == stamp
+    assert sorted((tmp_path / "cache").glob("exposure-*.json")) == files
+    ex.clear_cache()
+
+
+def test_old_format_cache_is_ignored(tree, tmp_path, monkeypatch):
+    import json as _json
+    monkeypatch.setenv("PK_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    ex.clear_cache()
+    roots = {"public": tree["public"], "secure": tree["secure"]}
+    m1 = scan(roots, cache_s=3600)
+    (f,) = list((tmp_path / "cache").glob("exposure-*.json"))
+    doc = _json.loads(f.read_text())
+    doc["version"] = 1
+    doc["entries"] = []                              # a stale v1 file must not be used
+    f.write_text(_json.dumps(doc))
+    ex.clear_cache()
+    m2 = scan(roots, cache_s=3600)
+    assert _sig(m2) == _sig(m1) and m2.stats["scandir"] > 0
+    assert _json.loads(f.read_text())["version"] == 3
+    f.write_text("{not json")
+    ex.clear_cache()
+    assert _sig(scan(roots, cache_s=3600)) == _sig(m1)
+    ex.clear_cache()
+
+
+def test_default_cache_dir_is_read_only_fallback(tree, tmp_path, monkeypatch):
+    """With $PK_CACHE_DIR set elsewhere, a scan of the same roots in ~/.cache/portalkit is
+    used (fresh: as is; expired: for its stamps) and never rewritten."""
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("PK_CACHE_DIR", raising=False)
+    ex.clear_cache()
+    roots = _shared_tree(tree)
+    _age_tree(tree["base"], monkeypatch)
+    m1 = scan(roots, cache_s=60)
+    (dflt,) = list((home / ".cache" / "portalkit").glob("exposure-*.json"))
+    before = (dflt.stat().st_mtime_ns, dflt.read_bytes())
+    monkeypatch.setenv("PK_CACHE_DIR", str(tmp_path / "isolated"))
+    ex.clear_cache()
+    m2 = scan(roots, cache_s=60)                     # fresh in the default dir
+    assert _sig(m2) == _sig(m1) and m2.stats == {}
+    assert not (tmp_path / "isolated").exists()
+    _later(monkeypatch, 120)
+    ex.clear_cache()
+    m3 = scan(roots, cache_s=60)                     # expired: stamps from the default dir
+    assert _sig(m3) == _sig(m1) and m3.stats["reused"] == m3.stats["dirs"]
+    assert (dflt.stat().st_mtime_ns, dflt.read_bytes()) == before
+    assert list((tmp_path / "isolated").glob("exposure-*.json"))
+    ex.clear_cache()
+
+
+def test_memory_cache_and_stamps_per_process(tree, tmp_path, monkeypatch):
+    """In one process an expired result is revalidated from the in-memory stamps when the
+    disk cache cannot be written."""
+    monkeypatch.setenv("PK_CACHE_DIR", str(tmp_path / "ro"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(ex, "_write_cache", lambda *a, **k: None)
+    ex.clear_cache()
+    roots = _shared_tree(tree)
+    _age_tree(tree["base"], monkeypatch)
+    m1 = scan(roots, cache_s=60)
+    assert scan(roots, cache_s=60) is m1             # memory hit
+    _later(monkeypatch, 120)
+    m2 = scan(roots, cache_s=60)
+    assert m2 is not m1 and _sig(m2) == _sig(m1)
+    assert m2.stats["reused"] == m2.stats["dirs"]
+    ex.clear_cache()
+
+
 @pytest.mark.slow
 def test_real_tree_readonly():
     """Read-only scan of the real served roots (slow on the shared filesystem)."""

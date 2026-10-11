@@ -3,10 +3,11 @@
 # imaging -> modelgrids/imaging_run/png symlink); all of it is public. The legacy
 # imaging/gallery.html (a broken jQuery directory gallery titled "ACES mosaics") is merged
 # into the unified imaging page and dropped from the navigation; the legacy file stays put.
-# The imaging page maps no legacy files: imaging/ is a symlink into the data tree
+# The imaging page maps imaging/index.html and imaging/gallery.html with replace = false
+# (section 4.1 legacy tables, WPE1): imaging/ is a symlink into the data tree
 # (modelgrids/imaging_run/png), so `deploy --replace` would have to write through it
-# (section 11.3 refuses symlinks; check_components raises SymlinkRefusal) and
-# gallery.html must never be stubbed.
+# (section 11.3 refuses symlinks; check_components raises SymlinkRefusal) and neither file is
+# ever stubbed or backed up. `deploy` lists them as plan warnings and `status` reports them.
 # The adapter registers the model-grid geometry directories it reads as inputs itself.
 family = "robitaille"
 adapter = "adapters.robitaille:ADAPTER"
@@ -40,4 +41,7 @@ grammar = ["kv-view", "bare-name"]
 
 [[portal.page]]
 id = "imaging"
-legacy = []
+legacy = [
+    {file = "imaging/index.html", replace = false},
+    {file = "imaging/gallery.html", replace = false},
+]

@@ -335,7 +335,7 @@ class RobitailleAdapter:
         return CatalogSpec(
             key="mod", table=t, id="id", columns=cols, aliases=aliases, virtual=virt, groups=groups,
             presets=presets, density=dens, manifold=ManifoldSpec(dims=dims, frames=frames, default_frame=default),
-            title=f"R&R YSO models + FRIED ({len(t):,} rows)",
+            title=f"R&R YSO models + FRIED ({len(t):,} rows)", noun=("model", "models"),
             caveats=[f"{n_geo} Richardson+ (2024) geometries sampled evenly in Class x Stage; magnitudes "
                      f"are Vega at 1 kpc in a {raw['ap_au']:.1f} au aperture.",
                      "FRIED rows have no photometry; they appear in the parameter views only.",

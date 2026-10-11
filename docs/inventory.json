@@ -2453,6 +2453,14 @@
     {
      "page": "pngs/gallery_6927.html (+ gallery_6927_2221.html, gallery_6927_1182.html; jQuery autoindex slideshows)",
      "output_path": "/orange/adamginsburg/jwst/spectra/nirspec_6927/pngs/gallery_6927.html",
+     "additional_legacy_files": [
+      "pngs/gallery_6927_2221.html",
+      "pngs/gallery_6927_1182.html"
+     ],
+     "additional_output_paths": [
+      "/orange/adamginsburg/jwst/spectra/nirspec_6927/pngs/gallery_6927_2221.html",
+      "/orange/adamginsburg/jwst/spectra/nirspec_6927/pngs/gallery_6927_1182.html"
+     ],
      "generator": "/orange/adamginsburg/jwst/brick/analysis/NIRSpec_6927_Spectra.py (write_galleries :459-497)",
      "template": "GALLERY_TEMPLATE in NIRSpec_6927_Spectra.py plus a JS tail copied verbatim from the archive gallery_prism.html; style.css copied with MOBILE_CSS appended",
      "intent": "Static slideshow of the per-source spectrum PNGs. Three variants filter by regex: _p06927 (spectrum), _2221 (spectrum with 2221 filters) and _1182 (spectrum with 1182 filters).",

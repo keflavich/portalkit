@@ -318,9 +318,35 @@ def test_pages(runs, adapter):
 
 
 def test_site_legacy_mapping():
-    """imaging/ is a symlink into the data tree: the imaging page maps no legacy file for --replace,
-    and imaging/gallery.html is never stubbed (port table: legacy file left in place)."""
+    """imaging/ is a symlink into the data tree: the imaging page maps imaging/index.html and
+    imaging/gallery.html as ``replace = false`` legacy items (section 4.1, WPE1), so --replace never
+    stubs or backs them up (port table: legacy files left in place), while status still lists them."""
+    from portalkit.spec import LegacyFile
     site = load_site(FAMILY)
-    pages = {pg.id: pg for pg in site.portals[0].pages}
-    assert pages["imaging"].legacy == []
-    assert not any("imaging/" in f for pg in pages.values() for f in pg.legacy)
+    portal = site.portals[0]
+    pages = {pg.id: pg for pg in portal.pages}
+    assert pages["imaging"].legacy == ["imaging/index.html", "imaging/gallery.html"]
+    assert list(pages["imaging"].files) == [LegacyFile("imaging/index.html", replace=False),
+                                            LegacyFile("imaging/gallery.html", replace=False)]
+    for pid in ("index", "manifold"):
+        assert all(lf.replace for lf in pages[pid].files), pid
+    replaced = [lf.file for pg in pages.values() for lf in pg.files if lf.replace]
+    assert not any(f.startswith("imaging/") for f in replaced)
+    ldir = Path(portal.legacy_dir)
+    if ldir.is_dir():                              # read-only: the mapped legacy files exist
+        for f in pages["imaging"].legacy:
+            assert (ldir / f).is_file(), f
+        assert (ldir / "imaging").is_symlink()
+
+
+def test_portal_counts_use_model_noun(build, adapter, runs):
+    """portal.json counts name the manifold's rows 'models' (CatalogSpec.noun, WPE1 note 117)."""
+    assert runs["A"][1]["mod"].noun == ("model", "models")
+    assert runs["B"][1]["mod"].noun == ("model", "models")
+    doc = json.loads((Path(build.staging) / FAMILY / "portal.json").read_text())
+    counts = {c["page"]: c for c in doc.get("counts", [])}
+    man = counts["manifold"]
+    assert man["ds"] == "mod" and man["kind"] == "catalog"
+    assert (man["unit"], man["units"]) == ("model", "models")
+    assert 0 < man["n"] <= LIMIT
+    assert "index" not in counts                                   # landing page has no count

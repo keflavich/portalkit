@@ -479,6 +479,84 @@ def test_templates_tiny_source_edge_cases(tmp_path):
     assert res2.path == res.path
 
 
+def test_templates_source_is_labelled_not_absolute(tmp_path):
+    """WPE3: meta.source is a served label, never the absolute local path (section 9.3
+    "Served paths"); a direct write outside the build stages no local path."""
+    import re
+    p = _tiny_source(tmp_path)
+    assert p.is_absolute()
+    res = T.write(TemplateSpec(source=p), tmp_path / "out")
+    assert res.doc["meta"]["source"] == "file:tiny.json"
+    text = (tmp_path / "out" / res.path).read_text()
+    assert str(tmp_path) not in text
+    assert not re.search(r"(?:file://|(?<![A-Za-z0-9_.~%/]))/(?:orange|blue|home|tmp)/", text)
+    assert T.load_source(TemplateSpec(source=p))["meta"]["source"] == "file:tiny.json"
+    # the source's other meta survives (unicode included)
+    assert res.doc["meta"]["note"] == "tiny ü"
+    # a labeler (for example build.PathLabeler) gives '<label>:<relpath>'
+    calls = []
+
+    def lab(s):
+        calls.append(s)
+        return "input:" + Path(s).name
+
+    res2 = T.write(TemplateSpec(source=p), tmp_path / "out2", labeler=lab)
+    assert res2.doc["meta"]["source"] == "input:tiny.json" and calls == [str(p)]
+    assert res2.path != res.path                     # the label is part of the hashed index
+
+
+@pytest.mark.parametrize("path,want", [
+    ("/orange/adamginsburg/jwst/spectra/templates/jwst_template_spectra.json",
+     "file:jwst_template_spectra.json"),
+    ("/blue/x/../y/t ü.json", "file:t ü.json"),
+    ("file:///home/u/t.json", "file:t.json"),
+    ("templates/t.json", "templates/t.json"),       # relative: kept as given
+    ("t.json", "t.json"),
+    (Path("/a/b/c.json"), "file:c.json"),
+])
+def test_template_source_label(path, want):
+    assert T.source_label(path) == want
+
+
+def test_template_source_label_matches_pathlabeler():
+    """Without declared roots the label equals what build.PathLabeler writes."""
+    build = pytest.importorskip("portalkit.build")
+    lab = build.PathLabeler([])
+    for s in ("/orange/a/b/jwst_template_spectra.json", "/home/u/x y.json", "rel/t.json"):
+        assert T.source_label(s) == lab(s)
+    lab2 = build.PathLabeler([("input", "/orange/a")])
+    assert T.source_label("/orange/a/b/t.json", lab2) == "input:b/t.json"
+
+
+def test_template_source_label_from_writer(tmp_path):
+    """A dest writer carrying a labeler (build.LabellingWriter) supplies the root label, so
+    build.shared_resources / physics.write_shared stage '<label>:<relpath>'."""
+    build = pytest.importorskip("portalkit.build")
+    p = _tiny_source(tmp_path)
+    lab = build.PathLabeler([("input", str(tmp_path))])
+    w = build.LabellingWriter.wrap(BundleWriter(tmp_path / "out", "", Ledger()), lab)
+    res = T.write(TemplateSpec(source=p), w)
+    assert res.doc["meta"]["source"] == "input:tiny.json"
+    staged = json.loads((tmp_path / "out" / res.path).read_text())
+    assert staged["meta"]["source"] == "input:tiny.json"
+    # through physics.write_shared (the build's shared-resource path) as well
+    out = physics.write_shared(w, template_spec=TemplateSpec(source=p))
+    assert json.loads((tmp_path / "out" / out["templates"]).read_text()
+                      )["meta"]["source"] == "input:tiny.json"
+    # an explicit labeler wins over the writer's
+    res2 = T.write(TemplateSpec(source=p), w, labeler=lambda s: "legacy:x.json")
+    assert res2.doc["meta"]["source"] == "legacy:x.json"
+    # a plain writer has no labeler: file:<basename>
+    res3 = T.write(TemplateSpec(source=p), BundleWriter(tmp_path / "out3", "", Ledger()))
+    assert res3.doc["meta"]["source"] == "file:tiny.json"
+
+
+@needs_templates
+def test_default_template_source_label():
+    d = T.load_source(TemplateSpec())
+    assert d["meta"]["source"] == "file:jwst_template_spectra.json"
+
+
 @pytest.mark.parametrize("bad", [
     {"templates": [{"key": "a", "f": {"g": [1.0, 2.0, 3.0, 4.0, -1.0]}}]},
     {"templates": [{"key": "a", "f": {"g": [1.0, 2.0, float("nan"), 4.0, 1.0]}}]},
@@ -743,6 +821,9 @@ def test_write_shared_and_dispatch(tmp_path):
         assert schema.validate(doc) == [], kind
         name = rel.rsplit("/", 1)[-1]
         assert name.split(".")[1] == h8((tmp_path / "res" / rel).read_bytes())
+    tdoc = json.loads((tmp_path / "res" / refs["templates"]).read_text())
+    assert tdoc["meta"]["source"] == "file:jwst_template_spectra.json"     # WPE3: no local path
+    assert str(T.DEFAULT_SOURCE) not in (tmp_path / "res" / refs["templates"]).read_text()
     r = physics.write_dataset(ExtinctionSpec(), tmp_path / "x")
     assert r.path == refs["extinction"]
     with pytest.raises(TypeError):

@@ -32,15 +32,16 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import re
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 import numpy as np
 
 from . import PhysicsResult, _writer
 
-__all__ = ["DEFAULT_SOURCE", "LAW_KEYS", "load_source", "extend_templates",
+__all__ = ["DEFAULT_SOURCE", "LAW_KEYS", "load_source", "source_label", "extend_templates",
            "build_extended_templates", "templates_document", "write", "planck_lambda",
            "planck_nu", "TEMPLATE_FILE_SOFT_MAX"]
 
@@ -154,10 +155,33 @@ def build_extended_templates(src_json: str | Path, dest_json: str | Path, wmax_u
     return dest_json
 
 
-def load_source(spec: Any = None, *, planck: str = "nu") -> dict:
+def source_label(path: str | os.PathLike,
+                 labeler: Callable[[str], str] | None = None) -> str:
+    """The served label of a template source path (``meta.source``).
+
+    ``labeler`` (for example a :class:`portalkit.build.PathLabeler`) maps the path to
+    ``<label>:<relpath>`` under a declared root. Without one, an absolute path becomes
+    ``file:<basename>``, which is what ``PathLabeler`` writes for a path under no declared root
+    (ARCHITECTURE.md section 9.3 "Served paths"); a ``file://`` URL is treated as its path, and a
+    relative path is kept as given."""
+    s = os.fspath(path)
+    if labeler is not None:
+        return str(labeler(s))
+    if s.startswith("file://"):
+        s = s[len("file://"):]
+    if not s.startswith("/"):
+        return s
+    return f"file:{os.path.basename(os.path.normpath(s))}"
+
+
+def load_source(spec: Any = None, *, planck: str = "nu",
+                labeler: Callable[[str], str] | None = None) -> dict:
     """The template JSON for a TemplateSpec (source + optional extension).
 
     ``planck`` selects the blackbody used by ``extend_to_um`` (see :func:`extend_templates`).
+    ``meta.source`` is the served label of the source path (:func:`source_label`; default
+    ``file:<basename>``), never the absolute local path, so a direct :func:`write` (or
+    ``physics.write_shared``) call outside the build stages no local path either.
     """
     src = getattr(spec, "source", None) if spec is not None else None
     if isinstance(spec, Mapping):
@@ -173,7 +197,7 @@ def load_source(spec: Any = None, *, planck: str = "nu") -> dict:
         ext = spec.get("extend_to_um")
     if ext is not None:
         d = extend_templates(d, float(ext), planck=planck)
-    d.setdefault("meta", {})["source"] = str(path)
+    d.setdefault("meta", {})["source"] = source_label(path, labeler)
     return d
 
 
@@ -236,16 +260,26 @@ def templates_document(src: Mapping, file_urls: Mapping[str, Any]) -> dict:
             "laws": laws}
 
 
-def write(spec: Any, dest: Any, *, ledger: Any = None, planck: str = "nu") -> PhysicsResult:
+def write(spec: Any, dest: Any, *, ledger: Any = None, planck: str = "nu",
+          labeler: Callable[[str], str] | None = None) -> PhysicsResult:
     """Write the template set into ``dest/templates/``; ``path`` is ``templates/index.<h8>.json``.
 
     ``planck="lambda"`` gives legacy Brick2221 parity for ``extend_to_um`` (see module docstring).
+    ``labeler`` labels ``meta.source`` (:func:`source_label`). Without one, a ``dest`` writer
+    that carries a callable ``labeler`` attribute (``portalkit.build.LabellingWriter``, which
+    the build passes through ``physics.write_shared`` and ``write_dataset``) supplies it, so
+    the build stages the site's root label (``input:templates/...``) and not only
+    ``file:<basename>``.
     """
     from ..bundle.codec import gz
     from ..schema import validate_pks1_header, validate_templates
     from ..bundle.records import split_record
 
-    src = load_source(spec, planck=planck)
+    if labeler is None:
+        dest_labeler = getattr(dest, "labeler", None)
+        if callable(dest_labeler):
+            labeler = dest_labeler
+    src = load_source(spec, planck=planck, labeler=labeler)
     w = _writer(dest, ledger)
     tw = w.sub("templates")
     urls: dict[str, dict] = {"grids": {}, "templates": {}, "laws": {}}
