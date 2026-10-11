@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   HASH_ORDER, parseHash, formatHash, encodeHashValue, encodeJSONParam, decodeJSONParam,
-  isHashStoreKey, stateToHash, hashToPatch, bindHash,
+  isHashStoreKey, stateToHash, hashToPatch, bindHash, skyImplied, BEAT_VIEW, BEAT_OVL,
 } from '../../web/js/core/hash.js';
 import {createStore} from '../../web/js/core/store.js';
 import {HASH_DEBOUNCE_MS, HASH_MAX_CHARS} from '../../web/js/core/constants.js';
@@ -827,4 +827,205 @@ test('default_off survives bindHash: write, reload into a fresh store, hub at op
   store3.set({'filters:src': {cats: {...opened.cats, cls: []}}}, {history: true});
   win3.back();
   assert.deepEqual(store3.get('filters:src'), opened);
+});
+
+// ---------------------------------------------------------------- beat-implied sky (WPD2)
+// A view / overlay set a narrative beat applied is implied by beat= and stays out of the hash;
+// once the user changes it (marker dropped) sky= / ovl= are written; a hash with beat= marks
+// the parts it leaves out, and sky= / ovl= in the hash make their part explicit.
+
+const B3 = {ra: 266.4368, dec: -29.0078, fov: 0.14};
+
+test('skyImplied: marker equal to the beat, or "" while no beat is set', () => {
+  assert.deepEqual(skyImplied({}), {view: false, ovl: false});
+  assert.deepEqual(skyImplied({sky: null, beat: 'b3'}), {view: false, ovl: false});
+  assert.deepEqual(skyImplied({sky: {...B3, [BEAT_VIEW]: 'b3', [BEAT_OVL]: 'b3'}, beat: 'b3'}), {view: true, ovl: true});
+  assert.deepEqual(skyImplied({sky: {...B3, [BEAT_VIEW]: 'b2', [BEAT_OVL]: 'b3'}, beat: 'b3'}), {view: false, ovl: true});
+  assert.deepEqual(skyImplied({sky: {...B3, [BEAT_VIEW]: '', [BEAT_OVL]: ''}, beat: null}), {view: true, ovl: true});
+  assert.deepEqual(skyImplied({sky: {...B3, [BEAT_VIEW]: '', [BEAT_OVL]: ''}, beat: 'b1'}), {view: false, ovl: false});
+  assert.deepEqual(skyImplied({sky: {...B3, [BEAT_VIEW]: 3}, beat: '3'}), {view: false, ovl: false}, 'markers are strings');
+  assert.deepEqual(skyImplied({sky: {...B3}, beat: null}), {view: false, ovl: false}, 'no markers: explicit');
+});
+
+test('stateToHash leaves out the parts the beat implies, writes explicit ones', () => {
+  const ovl = [{id: 'fields'}, {id: 'marks'}];
+  const both = {sky: {...B3, base: 'dss', overlays: ovl, [BEAT_VIEW]: 'b3', [BEAT_OVL]: 'b3'}, beat: 'b3'};
+  assert.deepEqual(stateToHash(both), {base: 'dss', beat: 'b3'}, 'base is not implied by a beat');
+  const panned = {sky: {...B3, overlays: ovl, [BEAT_OVL]: 'b3'}, beat: 'b3'};
+  assert.deepEqual(stateToHash(panned), {sky: '266.4368,-29.0078,0.14', beat: 'b3'});
+  const toggled = {sky: {...B3, overlays: [{id: 'fields'}], [BEAT_VIEW]: 'b3'}, beat: 'b3'};
+  assert.deepEqual(stateToHash(toggled), {ovl: 'fields', beat: 'b3'});
+  // an empty overlay set implied by the beat is not ovl=-
+  assert.deepEqual(stateToHash({sky: {...B3, overlays: [], [BEAT_VIEW]: 'b5', [BEAT_OVL]: 'b5'}, beat: 'b5'}), {beat: 'b5'});
+  // stale markers (another beat) are explicit
+  assert.deepEqual(stateToHash({sky: {...B3, overlays: ovl, [BEAT_VIEW]: 'b2', [BEAT_OVL]: 'b2'}, beat: 'b3'}),
+    {sky: '266.4368,-29.0078,0.14', ovl: 'fields,marks', beat: 'b3'});
+  // first beat of a page opened without beat=: '' markers, nothing written
+  assert.deepEqual(stateToHash({sky: {...B3, overlays: ovl, [BEAT_VIEW]: '', [BEAT_OVL]: ''}, beat: null}), {});
+});
+
+test('hashToPatch: beat= marks the sky parts the hash leaves out; sky= / ovl= clear the marks', () => {
+  let r = hashToPatch(parseHash('#beat=b3'), {state: {sky: null}});
+  assert.deepEqual(r.patch, {beat: 'b3', sky: {[BEAT_VIEW]: 'b3', [BEAT_OVL]: 'b3'}});
+  r = hashToPatch(parseHash('#sky=266.45,-29,0.3&beat=b3'), {state: {sky: null}});
+  assert.deepEqual(r.patch.sky, {ra: 266.45, dec: -29, fov: 0.3, [BEAT_OVL]: 'b3'});
+  r = hashToPatch(parseHash('#ovl=fields&beat=b3'), {state: {sky: {...B3, [BEAT_VIEW]: 'b1', [BEAT_OVL]: 'b1'}}});
+  assert.deepEqual(r.patch.sky, {...B3, overlays: [{id: 'fields'}], [BEAT_VIEW]: 'b3'});
+  // order in the hash does not matter
+  r = hashToPatch({beat: 'b3', ovl: '-', sky: '1,2,3'}, {state: {}});
+  assert.deepEqual(r.patch.sky, {ra: 1, dec: 2, fov: 3, overlays: []});
+  // no beat=: sky= / ovl= still make their part explicit, other markers stay
+  r = hashToPatch(parseHash('#sky=1,2,3'), {state: {sky: {[BEAT_VIEW]: 'b2', [BEAT_OVL]: 'b2'}, beat: 'b2'}});
+  assert.deepEqual(r.patch.sky, {ra: 1, dec: 2, fov: 3, [BEAT_OVL]: 'b2'});
+  // the cleared marker is explicit too
+  r = hashToPatch(parseHash('#sky=-&beat=b2'), {state: {sky: {...B3, [BEAT_VIEW]: 'b1'}}});
+  assert.deepEqual(r.patch.sky, {[BEAT_OVL]: 'b2'});
+  // beat= cleared or empty: no marks; malformed sky= gives no view and keeps marks from beat=
+  assert.equal(hashToPatch(parseHash('#beat=-'), {state: {}}).patch.sky, undefined);
+  assert.equal(hashToPatch(parseHash('#beat='), {state: {}}).patch.sky, undefined);
+  r = hashToPatch(parseHash('#sky=abc&beat=b4'), {state: {}});
+  assert.deepEqual(r.patch.sky, {[BEAT_VIEW]: 'b4', [BEAT_OVL]: 'b4'});
+  // unicode beat ids
+  r = hashToPatch(parseHash('#beat=' + encodeURIComponent('β 3')), {state: {}});
+  assert.equal(r.patch.sky[BEAT_VIEW], 'β 3');
+  assert.deepEqual(stateToHash({beat: 'β 3', sky: {...B3, ...r.patch.sky}}), {beat: 'β 3'});
+});
+
+test('stateToHash / hashToPatch: the canonical form of a beat-implied state is a fixed point', () => {
+  const cases = [
+    {sky: {...B3, overlays: [{id: 'fields'}, {id: 'marks'}], [BEAT_VIEW]: 'b3', [BEAT_OVL]: 'b3'}, beat: 'b3'},
+    {sky: {ra: 266.45, dec: -29, fov: 0.3, overlays: [{id: 'fields'}], [BEAT_OVL]: 'b3'}, beat: 'b3'},
+    {sky: {...B3, overlays: [{id: 'fields', opacity: 0.4}], [BEAT_VIEW]: 'b3'}, beat: 'b3'},
+    {sky: {ra: 1e-5, dec: -89.999999, fov: 360, overlays: []}, beat: 'b3'},
+  ];
+  for (const st of cases) {
+    const s1 = formatHash(stateToHash(st));
+    const {patch} = hashToPatch(parseHash('#' + s1), {state: {}});
+    // the narrative re-applies the implied parts; model it by copying the beat's values over
+    const sky = Object.assign({}, patch.sky);
+    if (sky[BEAT_VIEW] !== undefined) Object.assign(sky, {ra: st.sky.ra, dec: st.sky.dec, fov: st.sky.fov});
+    if (sky[BEAT_OVL] !== undefined) sky.overlays = st.sky.overlays;
+    const s2 = formatHash(stateToHash(Object.assign({}, patch, {sky})));
+    assert.equal(s2, s1, JSON.stringify(st));
+  }
+});
+
+test('bindHash: implied view not cleared against a default view; user pan writes sky=; reload keeps it', () => {
+  const defs = Object.assign({}, DEF, {sky: {ra: 10, dec: 20, fov: 1}});
+  const win = fakeWindow('beat=b3');
+  const store = makeStore({sky: {ra: 10, dec: 20, fov: 1}});
+  bindHash(store, {primaryDs: 'src', defaults: defs, win});
+  assert.deepEqual(store.get('sky')[BEAT_VIEW], 'b3', 'hash beat= marks the view');
+  // the narrative applies b3 (implied), the sky pane adjusts nothing: '#beat=b3', no sky=-
+  store.set({sky: {...store.get('sky'), ...B3, overlays: [{id: 'fields'}]}}, {source: 'narr'});
+  win.advance(HASH_DEBOUNCE_MS);
+  assert.equal(win.location.hash, '#beat=b3');
+  // user pans: marker dropped by the sky pane
+  const panned = {...store.get('sky'), ra: 266.5};
+  delete panned[BEAT_VIEW];
+  store.set({sky: panned}, {source: 'sky'});
+  win.advance(HASH_DEBOUNCE_MS);
+  assert.equal(win.location.hash, '#sky=266.5,-29.0078,0.14&beat=b3');
+  // reload: the hash's view is explicit, the overlays implied
+  const store2 = makeStore({sky: {ra: 10, dec: 20, fov: 1}});
+  const win2 = fakeWindow(win.location.hash);
+  bindHash(store2, {primaryDs: 'src', defaults: defs, win: win2});
+  assert.equal(store2.get('sky').ra, 266.5);
+  assert.equal(store2.get('sky')[BEAT_VIEW], undefined);
+  assert.equal(store2.get('sky')[BEAT_OVL], 'b3');
+  store2.set({sky: {...store2.get('sky'), overlays: [{id: 'fields'}]}}, {source: 'narr'});
+  win2.advance(HASH_DEBOUNCE_MS);
+  assert.equal(win2.location.hash, '#sky=266.5,-29.0078,0.14&beat=b3');
+  // navigating to '#beat=b3' marks the view as implied again (the narrative re-applies b3)
+  win2.userNavigate('beat=b3');
+  assert.equal(store2.get('sky')[BEAT_VIEW], 'b3');
+  assert.equal(win2.location.hash, '#beat=b3');
+});
+
+test('bindHash: Back to #beat=b3 restores the default base; later writes do not bring base= back', () => {
+  // page defaults with a sky (view + base): the beat markers from beat= must not keep the
+  // defaults for absent sky keys from being restored on navigation
+  const defSky = {ra: 10, dec: 20, fov: 1, base: 'dss'};
+  const defs = Object.assign({}, DEF, {sky: defSky});
+  const win = fakeWindow('beat=b3');
+  const store = makeStore({sky: defSky});
+  bindHash(store, {primaryDs: 'src', defaults: defs, win});
+  win.userNavigate('base=2mass&beat=b3');
+  assert.equal(store.get('sky').base, '2mass');
+  assert.equal(store.get('sky')[BEAT_VIEW], 'b3');
+  win.back();
+  assert.equal(store.get('sky').base, 'dss', 'default base restored');
+  assert.equal(store.get('sky')[BEAT_VIEW], 'b3', 'markers from beat= kept');
+  assert.equal(store.get('sky')[BEAT_OVL], 'b3');
+  assert.equal(win.location.hash, '#beat=b3');
+  // the narrative writes its overlays (implied): the hash stays '#beat=b3'
+  store.set({sky: Object.assign({}, store.get('sky'), {overlays: [{id: 'x'}]})}, {source: 'narr'});
+  win.advance(HASH_DEBOUNCE_MS);
+  assert.equal(win.location.hash, '#beat=b3');
+});
+
+test('bindHash: navigating from #sky=..&beat=b3 to #beat=b4 drops the explicit view for the default', () => {
+  const defSky = {ra: 10, dec: 20, fov: 1};
+  const defs = Object.assign({}, DEF, {sky: defSky});
+  const win = fakeWindow('sky=1,2,3&beat=b3');
+  const store = makeStore({sky: defSky});
+  bindHash(store, {primaryDs: 'src', defaults: defs, win});
+  assert.deepEqual([store.get('sky').ra, store.get('sky')[BEAT_VIEW]], [1, undefined]);
+  win.userNavigate('beat=b4');
+  const s = store.get('sky');
+  // the explicit view of the previous entry is not carried over under b4's marker: the default
+  // view comes back (a beat without a sky view keeps it, reproducible from '#beat=b4')
+  assert.deepEqual([s.ra, s.dec, s.fov, s[BEAT_VIEW]], [10, 20, 1, 'b4']);
+  store.set({sky: Object.assign({}, s)}, {source: 'narr'});
+  win.advance(HASH_DEBOUNCE_MS);
+  assert.equal(win.location.hash, '#beat=b4');
+});
+
+test('bindHash: with a beat set, an explicit view equal to the page default is written', () => {
+  const defSky = {ra: 10, dec: 20, fov: 1};
+  const defs = Object.assign({}, DEF, {sky: defSky});
+  const win = fakeWindow('beat=b3');
+  const store = makeStore({sky: defSky});
+  bindHash(store, {primaryDs: 'src', defaults: defs, win});
+  store.set({sky: {...B3, [BEAT_VIEW]: 'b3', [BEAT_OVL]: 'b3'}}, {source: 'narr'});
+  win.advance(HASH_DEBOUNCE_MS);
+  assert.equal(win.location.hash, '#beat=b3');
+  // the user goes back to the default view (bookmark, pan): explicit, so sky= is written
+  store.set({sky: {ra: 10, dec: 20, fov: 1, [BEAT_OVL]: 'b3'}}, {source: 'sky'});
+  win.advance(HASH_DEBOUNCE_MS);
+  assert.equal(win.location.hash, '#sky=10,20,1&beat=b3');
+  // reload keeps it explicit
+  const store2 = makeStore({sky: defSky});
+  bindHash(store2, {primaryDs: 'src', defaults: defs, win: fakeWindow(win.location.hash)});
+  assert.equal(store2.get('sky')[BEAT_VIEW], undefined);
+  // without a beat the default view is still left out
+  const win3 = fakeWindow('');
+  const store3 = makeStore({sky: defSky});
+  bindHash(store3, {primaryDs: 'src', defaults: defs, win: win3});
+  store3.set({sky: {ra: 10, dec: 20, fov: 1}}, {source: 'sky'});
+  win3.advance(HASH_DEBOUNCE_MS);
+  assert.equal(win3.location.hash, '');
+});
+
+test('bindHash(applyInitial: false): a hash key written before binding reaches the hash', () => {
+  // boot applies the hash, the panes mount, then the binding is made: the narrative replaced
+  // '#beat=bogus' by its first beat in between
+  const win = fakeWindow('beat=bogus');
+  const store = makeStore();
+  store.set(hashToPatch(parseHash(win.location.hash), {primaryDs: 'src', state: store.snapshot()}).patch, {source: 'boot'});
+  store.set({beat: 'b1', sky: {...B3, [BEAT_VIEW]: 'b1', [BEAT_OVL]: 'b1'}}, {source: 'narr'});
+  bindHash(store, {primaryDs: 'src', defaults: DEF, win, applyInitial: false});
+  win.advance(HASH_DEBOUNCE_MS);
+  assert.equal(win.location.hash, '#beat=b1');
+  // a store that still holds what the hash gives: nothing is rewritten (unknown keys and the
+  // key order stay as the user typed them)
+  const win2 = fakeWindow('x=1&av=2&beat=b3');
+  const store2 = makeStore();
+  store2.set(hashToPatch(parseHash(win2.location.hash), {primaryDs: 'src', state: store2.snapshot()}).patch, {source: 'boot'});
+  // the narrative applies b3's view (implied): still what '#beat=b3' gives
+  store2.set({sky: {...store2.get('sky'), ...B3, overlays: [{id: 'fields'}]}}, {source: 'narr'});
+  bindHash(store2, {primaryDs: 'src', defaults: DEF, win: win2, applyInitial: false});
+  win2.advance(HASH_DEBOUNCE_MS);
+  assert.equal(win2.location.hash, '#x=1&av=2&beat=b3');
+  assert.equal(win2.log.length, 0);
 });

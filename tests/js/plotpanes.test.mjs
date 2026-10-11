@@ -17,6 +17,9 @@ import * as reg from '../../web/js/core/registry.js';
 import {createStore} from '../../web/js/core/store.js';
 import {Budget} from '../../web/js/gl/budget.js';
 import {makeView} from '../../web/js/plot/axes.js';
+import * as skyp from '../../web/js/panes/sky.js';
+import * as narr from '../../web/js/panes/narrative.js';
+import {stateToHash, BEAT_VIEW, BEAT_OVL} from '../../web/js/core/hash.js';
 
 const tick = () => new Promise((r) => setTimeout(r, 5));
 
@@ -810,4 +813,212 @@ test('registry.load attaches ui.css before the pane sheets of a widget pane, onc
   } finally {
     globalThis.document = prev;
   }
+});
+
+// ------------------------------------------------------------------ narrative beat hash rule (WPD2)
+// A beat-applied view and overlay set is implied by beat= and stays out of the hash; a user
+// pan/zoom or layer change writes sky= / ovl=; Aladin's adjustment of a programmatic goto is not
+// a user change.
+
+const B3 = {ra: 266.4368, dec: -29.0078, fov: 0.14};
+
+test('settledSky: store origin writes nothing (Aladin adjustment of a stored-view goto)', () => {
+  const cur = {...B3, [BEAT_VIEW]: 'b3'};
+  assert.equal(skyp.settledSky(cur, {ra: 266.43681, dec: -29.0078, fov: 0.1406}, {kind: 'store'}, null), null);
+  assert.equal(skyp.settledSky(cur, {ra: 10, dec: 10, fov: 3}, {kind: 'store'}, null), null);
+});
+
+test('settledSky: beat origin writes the view marked with the beat', () => {
+  const cur = {base: 'dss', overlays: [{id: 'a'}], ...B3, [BEAT_VIEW]: 'b3'};
+  // same beat and same view (within tolerance): nothing
+  assert.equal(skyp.settledSky(cur, {...B3, ra: B3.ra + 1e-7}, {kind: 'beat', beat: 'b3'}, null), null);
+  // the highlight centred somewhere else: written, implied by b3
+  const out = skyp.settledSky(cur, {ra: 266.5, dec: -29.1, fov: 0.2}, {kind: 'beat', beat: 'b3'}, null);
+  assert.deepEqual(out, {base: 'dss', overlays: [{id: 'a'}], ra: 266.5, dec: -29.1, fov: 0.2, [BEAT_VIEW]: 'b3'});
+  // a beat-less page marks with ''
+  const o2 = skyp.settledSky({...B3, [BEAT_VIEW]: ''}, {ra: 266.5, dec: -29.1, fov: 0.2}, {kind: 'beat', beat: ''}, null);
+  assert.equal(o2[BEAT_VIEW], '');
+  assert.equal(cur[BEAT_VIEW], 'b3', 'cur not modified');
+});
+
+test('settledSky: a beat goto is implied only when the narrative marked the view for that beat', () => {
+  // b2 applied fov 0.17; b3 = {highlight} without a sky view: the narrative left the view
+  // unmarked (its fov is b2's, which '#beat=b3' would not reproduce), so the centring is explicit
+  const carried = {ra: 266.41, dec: -29.0, fov: 0.17, [BEAT_OVL]: 'b3'};
+  const out = skyp.settledSky(carried, {ra: 266.43, dec: -29.01, fov: 0.17}, {kind: 'beat', beat: 'b3'}, null);
+  assert.equal(BEAT_VIEW in out, false);
+  assert.deepEqual(stateToHash({beat: 'b3', sky: out}), {sky: '266.43,-29.01,0.17', beat: 'b3'});
+  // a stale marker of another beat is not re-marked either
+  const stale = skyp.settledSky({...carried, [BEAT_VIEW]: 'b2'}, {ra: 266.43, dec: -29.01, fov: 0.17}, {kind: 'beat', beat: 'b3'}, null);
+  assert.equal(BEAT_VIEW in stale, false);
+  // narrative marked it (fov equal to the page default): implied
+  const ok = skyp.settledSky({...carried, [BEAT_VIEW]: 'b3'}, {ra: 266.43, dec: -29.01, fov: 0.17}, {kind: 'beat', beat: 'b3'}, null);
+  assert.equal(ok[BEAT_VIEW], 'b3');
+});
+
+test('settledSky: input during a programmatic goto keeps the goto as the origin when it lands', () => {
+  const cur = {...B3, [BEAT_VIEW]: 'b3', [BEAT_OVL]: 'b3'};
+  const before = {ra: 266.3, dec: -29.2, fov: 0.5};
+  // a click while the goto to B3 settles; Aladin adjusts the fov 0.4 %
+  const origin = {kind: 'user', prev: {kind: 'store'}, target: {...B3}};
+  const adjusted = {ra: 266.4368, dec: -29.0078, fov: 0.14056};
+  assert.equal(skyp.settledSky(cur, adjusted, origin, before), null);
+  // a beat goto pending: written as the beat's
+  const borigin = {kind: 'user', prev: {kind: 'beat', beat: 'b3'}, target: {ra: 266.45, dec: -29.0, fov: 0.14}};
+  assert.equal(skyp.settledSky(cur, {ra: 266.4501, dec: -29.0, fov: 0.14}, borigin, before)[BEAT_VIEW], 'b3');
+  // a real drag during the goto: the user's view
+  const dragged = skyp.settledSky(cur, {ra: 266.6, dec: -29.0, fov: 0.14}, origin, before);
+  assert.equal(BEAT_VIEW in dragged, false);
+  assert.equal(dragged.ra, 266.6);
+  assert.ok(skyp.nearView({ra: 359.9999, dec: 0, fov: 1}, {ra: 0.0001, dec: 0, fov: 1.01}));
+  assert.ok(!skyp.nearView({ra: 10, dec: 0, fov: 1}, {ra: 10, dec: 0, fov: 1.2}));
+});
+
+test('settledSky: user and explicit origins drop beatView; unchanged views write nothing', () => {
+  const cur = {...B3, [BEAT_VIEW]: 'b3', [BEAT_OVL]: 'b3', overlays: [{id: 'a'}]};
+  const moved = {ra: 266.49, dec: -29.0078, fov: 0.21};
+  for (const kind of ['user', 'explicit']) {
+    const out = skyp.settledSky(cur, moved, {kind}, B3);
+    assert.equal(out.ra, 266.49);
+    assert.equal(out.fov, 0.21);
+    assert.equal(BEAT_VIEW in out, false, kind);
+    assert.equal(out[BEAT_OVL], 'b3', 'overlay marker untouched by a view change');
+  }
+  // user input that left the viewer where it was (a click): nothing
+  assert.equal(skyp.settledSky(cur, moved, {kind: 'user'}, moved), null);
+  // explicit goto to the stored view: nothing
+  assert.equal(skyp.settledSky(cur, {...B3}, {kind: 'explicit'}, null), null);
+  // missing origin counts as user
+  assert.equal(BEAT_VIEW in skyp.settledSky(cur, moved, null, null), false);
+  // RA wrap: 359.99999 vs 0 is the same view
+  assert.equal(skyp.settledSky({ra: 0, dec: 0, fov: 1}, {ra: 359.999999, dec: 0, fov: 1}, {kind: 'user'}, null), null);
+  assert.ok(skyp.USER_VIEW_EVENTS.includes('pointerdown') && skyp.USER_VIEW_EVENTS.includes('wheel'));
+});
+
+test('layersSky writes explicit overlays and drops beatOvl only', () => {
+  const cur = {...B3, [BEAT_VIEW]: 'b3', [BEAT_OVL]: 'b3', overlays: [{id: 'a'}]};
+  const out = skyp.layersSky(cur, {base: 'dss', fits: null,
+    overlays: [{id: 'a', opacity: 0.5}, {id: 'rings', opacity: NaN}, {id: 'c'}]});
+  assert.deepEqual(out.overlays, [{id: 'a', opacity: 0.5}, {id: 'rings'}, {id: 'c'}]);
+  assert.equal(out.base, 'dss');
+  assert.equal(BEAT_OVL in out, false);
+  assert.equal(out[BEAT_VIEW], 'b3');
+  assert.equal(cur[BEAT_OVL], 'b3', 'cur not modified');
+  // a base-only change (overlays and opacities as before) keeps the overlay marker
+  const prev = [{id: 'a', opacity: 1}, {id: 'rings', opacity: undefined}];
+  const base = skyp.layersSky(cur, {base: '2mass', fits: [], overlays: [{id: 'rings', opacity: undefined}, {id: 'a', opacity: 1}]}, prev);
+  assert.equal(base[BEAT_OVL], 'b3');
+  assert.equal(base.base, '2mass');
+  assert.deepEqual(stateToHash({beat: 'b3', sky: base}), {base: '2mass', beat: 'b3'});
+  // an opacity change is an overlay change
+  const op = skyp.layersSky(cur, {base: '2mass', fits: [], overlays: [{id: 'rings'}, {id: 'a', opacity: 0.5}]}, prev);
+  assert.equal(BEAT_OVL in op, false);
+});
+
+test('narrative.explicitSky: marked parts and the page default are not explicit', () => {
+  const page = {ra: 266.4168, dec: -29.0078, fov: 0.5, overlays: [{id: 'fields'}]};
+  assert.deepEqual(narr.explicitSky(null, page), {view: false, ovl: false});
+  assert.deepEqual(narr.explicitSky({...page}, page), {view: false, ovl: false});
+  assert.deepEqual(narr.explicitSky({ra: 266.45, dec: -29.01, fov: 0.3}, page), {view: true, ovl: false});
+  assert.deepEqual(narr.explicitSky({ra: 266.45, dec: -29.01, fov: 0.3, [BEAT_VIEW]: 'b3'}, page), {view: false, ovl: false});
+  assert.deepEqual(narr.explicitSky({...page, overlays: [{id: 'rings'}]}, page), {view: false, ovl: true});
+  assert.deepEqual(narr.explicitSky({...page, overlays: [{id: 'rings'}], [BEAT_OVL]: ''}, page), {view: false, ovl: false});
+  // no page default: any finite view / overlay list is explicit
+  assert.deepEqual(narr.explicitSky({ra: 1, dec: 2, overlays: []}, undefined), {view: true, ovl: true});
+  assert.deepEqual(narr.explicitSky({ra: NaN, dec: 2}, undefined), {view: false, ovl: false});
+});
+
+test('narrative.beatSky applies and marks the beat parts, honouring keep and suppress_view', () => {
+  const cur = {base: 'dss', ra: 1, dec: 2, fov: 3, overlays: [{id: 'x'}]};
+  const view = {sky: B3};
+  const s = narr.beatSky(cur, view, ['fields', 'marks'], {mark: 'b3'});
+  assert.deepEqual(s, {base: 'dss', ...B3, overlays: [{id: 'fields'}, {id: 'marks'}], [BEAT_VIEW]: 'b3', [BEAT_OVL]: 'b3'});
+  assert.deepEqual(cur, {base: 'dss', ra: 1, dec: 2, fov: 3, overlays: [{id: 'x'}]}, 'cur not modified');
+  const kv = narr.beatSky(cur, view, ['fields'], {mark: 'b3', keepView: true});
+  assert.equal(kv.ra, 1);
+  assert.equal(BEAT_VIEW in kv, false);
+  assert.equal(kv[BEAT_OVL], 'b3');
+  const ko = narr.beatSky(cur, view, ['fields'], {mark: '', keepOvl: true});
+  assert.deepEqual(ko.overlays, [{id: 'x'}]);
+  assert.equal(BEAT_OVL in ko, false);
+  assert.equal(ko[BEAT_VIEW], '');
+  const sup = narr.beatSky(cur, {sky: B3, suppress_view: true}, [], {mark: 'b3'});
+  assert.equal(sup.ra, 1);
+  assert.equal(BEAT_VIEW in sup, false);
+  const nofov = narr.beatSky(cur, {sky: {ra: 5, dec: 6}}, [], {mark: 'b3'});
+  assert.deepEqual([nofov.ra, nofov.dec, nofov.fov], [5, 6, 3]);
+  // the carried fov 3 is not what '#beat=b3' gives (no page default): explicit
+  assert.equal(BEAT_VIEW in nofov, false);
+  // ... and implied when it equals the page default fov
+  assert.equal(narr.beatSky(cur, {sky: {ra: 5, dec: 6}}, [], {mark: 'b3', home: {ra: 0, dec: 0, fov: 3}})[BEAT_VIEW], 'b3');
+});
+
+test('narrative.beatSky marks a view the beat does not set only when it is the page default', () => {
+  const home = {ra: 10, dec: 20, fov: 1};
+  const prevBeat = {ra: 266.41, dec: -29.0, fov: 0.17, [BEAT_VIEW]: 'b2'};
+  // viewless beat after b2: the view stays (keeps the user's zoom) and becomes explicit
+  const v = narr.beatSky(prevBeat, {}, [], {mark: 'b4', home});
+  assert.deepEqual([v.ra, v.dec, v.fov, BEAT_VIEW in v], [266.41, -29.0, 0.17, false]);
+  assert.equal(stateToHash({beat: 'b4', sky: v}).sky, '266.41,-29,0.17');
+  // suppress_view behaves the same
+  assert.equal(BEAT_VIEW in narr.beatSky(prevBeat, {sky: {ra: 1, dec: 2, fov: 3}, suppress_view: true}, [], {mark: 'b4', home}), false);
+  // viewless beat on the page default view (fresh load of '#beat=b4'): implied
+  assert.equal(narr.beatSky({...home, [BEAT_VIEW]: 'b4'}, {}, [], {mark: 'b4', home})[BEAT_VIEW], 'b4');
+  // no page default and no view yet (fresh load, the sky pane's initial view): implied
+  assert.equal(narr.beatSky({}, {}, [], {mark: 'b4', home: null})[BEAT_VIEW], 'b4');
+  // highlight goto beat: the centre is the beat's, the fov must be the default one
+  assert.equal(BEAT_VIEW in narr.beatSky(prevBeat, {}, [], {mark: 'b3', home, goto: true}), false);
+  assert.equal(narr.beatSky({ra: 266.41, dec: -29.0, fov: 1}, {}, [], {mark: 'b3', home, goto: true})[BEAT_VIEW], 'b3');
+});
+
+test('narrative.explicitSky: with a beat set only the markers decide', () => {
+  const page = {ra: 10, dec: 20, fov: 1, overlays: [{id: 'fields'}]};
+  // '#sky=<default>&ovl=<default>&beat=b3': explicit, kept over b3's view
+  assert.deepEqual(narr.explicitSky({...page}, page, {beatSet: true}), {view: true, ovl: true});
+  assert.deepEqual(narr.explicitSky({...page, [BEAT_VIEW]: 'b3', [BEAT_OVL]: 'b3'}, page, {beatSet: true}), {view: false, ovl: false});
+});
+
+test('narrative.sameSky compares view, markers and overlay sets', () => {
+  const a = {...B3, overlays: [{id: 'b'}, {id: 'a'}], [BEAT_VIEW]: 'b3', [BEAT_OVL]: 'b3', base: 'x'};
+  assert.ok(narr.sameSky(a, {...a, overlays: [{id: 'a'}, {id: 'b'}], base: 'y'}));
+  assert.ok(!narr.sameSky(a, {...a, [BEAT_VIEW]: 'b4'}));
+  assert.ok(!narr.sameSky(a, {...a, [BEAT_OVL]: undefined}));
+  assert.ok(!narr.sameSky(a, {...a, fov: 0.2}));
+  assert.ok(!narr.sameSky(a, {...a, overlays: [{id: 'a'}]}));
+  assert.ok(!narr.sameSky({...a, overlays: undefined}, {...a, overlays: []}));
+});
+
+test('beat rule end to end: beat writes stay out of the hash, user writes go in', () => {
+  const h = (beat, sky) => stateToHash({beat, sky});
+  // the narrative applies b3, the sky pane's highlight goto settles: no sky= / ovl=
+  let sky = narr.beatSky({}, {sky: B3}, ['fields'], {mark: 'b3'});
+  const hl = skyp.settledSky(sky, {ra: 266.44, dec: -29.0, fov: 0.14}, {kind: 'beat', beat: 'b3'}, null);
+  assert.deepEqual(h('b3', hl), {beat: 'b3'});
+  // Aladin adjusts the goto: nothing written
+  assert.equal(skyp.settledSky(hl, {ra: 266.440001, dec: -29.0, fov: 0.1401}, {kind: 'store'}, null), null);
+  // the user drags: sky= written
+  sky = skyp.settledSky(hl, {ra: 266.49, dec: -29.0, fov: 0.14}, {kind: 'user'}, hl);
+  assert.deepEqual(h('b3', sky), {sky: '266.49,-29,0.14', beat: 'b3'});
+  // the user toggles a layer: ovl= written as well
+  sky = skyp.layersSky(sky, {base: undefined, fits: undefined, overlays: [{id: 'fields'}, {id: 'rings'}]});
+  const both = h('b3', sky);
+  assert.equal(both.sky, '266.49,-29,0.14');
+  assert.ok(typeof both.ovl === 'string' && both.ovl.includes('rings'), JSON.stringify(both));
+  // the next beat re-marks both parts: beat only again
+  sky = narr.beatSky(sky, {sky: {ra: 266.5, dec: -29.1, fov: 0.2}}, ['marks'], {mark: 'b4'});
+  assert.deepEqual(h('b4', sky), {beat: 'b4'});
+});
+
+test('sky store listener follows only a changed stored view (storedView / sameStoredView)', () => {
+  // a beat that keeps the view (highlight-only) writes overlays and markers with the same view;
+  // that write is delivered after the highlight goto and must not count as a new view
+  const b2 = {ra: 266.4268, dec: -29.0078, fov: 0.17};
+  const prev = skyp.storedView({...b2, [BEAT_VIEW]: 'b2'});
+  assert.deepEqual(prev, b2);
+  assert.ok(skyp.sameStoredView(prev, {...b2, overlays: [{id: 'fields'}], [BEAT_OVL]: 'b4'}));
+  assert.ok(!skyp.sameStoredView(prev, {...b2, ra: 266.5}), 'a moved centre is a change');
+  assert.ok(!skyp.sameStoredView(prev, {...b2, fov: 0.3}), 'a new fov is a change');
+  assert.ok(!skyp.sameStoredView({ra: 1, dec: 2, fov: NaN}, {ra: 1, dec: 2, fov: 3}), 'a fov appearing is a change');
+  assert.ok(!skyp.sameStoredView(null, b2), 'no previous view: follow');
+  assert.equal(skyp.storedView({beatView: 'b3'}), null);
 });

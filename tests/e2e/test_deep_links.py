@@ -13,6 +13,8 @@ presets as manifold frames) are asserted directly.
 
 from __future__ import annotations
 
+import json
+import re
 from urllib.parse import unquote
 
 import pytest
@@ -316,15 +318,268 @@ def test_legacy_wavelength_kv_and_speed(e2e, request, portal, open_page):
     assert not {"ra", "dec", "fov"} & set(h), h
 
 
+# ---- narrative beats (WPD2): the view and overlays a beat applies are implied by beat= and
+# stay out of the hash; a user pan/zoom or layer change writes sky= / ovl=; a hash sky= is kept
+# over the beat's view; Aladin's adjustment of a programmatic goto is not a user change.
+
+BEATS = {b["id"]: b for b in ms.narrative_spec([]).beats}
+
+PANE_OF_TYPE_JS = """(t) => { const s = document.querySelector(`section.pk-pane[data-pane-type='${t}']`);
+                            return s ? s.dataset.paneId : null; }"""
+
+# the stub Aladin instance shown by the sky pane
+SKY_INST_JS = """(p) => { const sec = document.querySelector(`section.pk-pane[data-pane-id='${p}']`);
+  return (window.__aladinStub.instances || []).find((a) => sec && sec.contains(a.div)) || null; }"""
+
+
+def narrative_ready(run, beat: str, timeout_ms: int = 60000) -> str:
+    """Wait until the narrative pane shows ``beat`` and the sky pane's viewer is ready and on a
+    finite view; returns the sky pane id."""
+    nar = run.ev(PANE_OF_TYPE_JS, "narrative")
+    sky = run.ev(PANE_OF_TYPE_JS, "sky")
+    assert nar and sky, (nar, sky)
+    run.page.wait_for_function(
+        """([n, s, b]) => { const L = window.__pk.app.layout;
+             const hn = L.pane(n), hs = L.pane(s);
+             const sn = hn && hn.stats ? hn.stats() : null, ss = hs && hs.stats ? hs.stats() : null;
+             return !!(sn && sn.beat === b && ss && ss.view && Number.isFinite(ss.view.ra)); }""",
+        arg=[nar, sky, beat], timeout=timeout_ms)
+    return sky
+
+
+def stub_move(run, sky: str, dra: float = 0.0, fov_scale: float = 1.0, user: bool = False) -> None:
+    """Move the sky pane's stub viewer by ``dra`` degrees and scale its fov; with ``user`` a
+    pointerdown on the viewer comes first (a drag), without it the move stands for Aladin's own
+    adjustment of a programmatic goto."""
+    run.ev("""([p, dra, k, user, js]) => {
+        const a = (new Function('return ' + js))()(p);
+        if (user) a.div.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true, cancelable: true}));
+        a.gotoRaDec(a.ra + dra, a.dec);
+        if (k !== 1) a.setFoV(a.fov * k);
+    }""", [sky, dra, fov_scale, user, SKY_INST_JS])
+
+
+def beat_sky(beat: str) -> dict:
+    return BEATS[beat]["view"]["sky"]
+
+
 def test_legacy_beat(e2e, request, portal, open_page):
     _legacy(e2e, request, portal, "narrative", "beat")
     run = open_page(portal.url_path("narrative"), hash="beat=b3&x=1")
+    want = beat_sky("b3")
 
     def check(r):
         assert r.store_get("beat") == "b3"
-        assert canon(r).get("beat") == "b3"
+        narrative_ready(r, "b3")
+        sky = r.store_get("sky") or {}
+        assert sky.get("ra") == pytest.approx(want["ra"], abs=1e-9)
+        assert sky.get("fov") == pytest.approx(want["fov"], abs=1e-9)
+        h = canon(r)
+        assert h.get("beat") == "b3"
+        # the beat's view and overlays are implied by beat=
+        assert "sky" not in h and "ovl" not in h, h
     check(run)
-    reload_keeps(run, "() => /(^#|&)beat=b3(&|$)/.test(location.hash)", check)
+    assert reload_keeps(run, "() => /(^#|&)beat=b3(&|$)/.test(location.hash)", check) == "#beat=b3"
+
+
+def test_beat_aladin_adjustment_is_not_a_user_change(e2e, request, portal, open_page):
+    """Aladin rounding or adjusting the fov of the beat's goto (no input on the viewer) leaves
+    the hash at ``#beat=b3`` and the stored view at the beat's."""
+    _legacy(e2e, request, portal, "narrative", "beat")
+    run = open_page(portal.url_path("narrative"), hash="beat=b3")
+    sky = narrative_ready(run, "b3")
+    stub_move(run, sky, dra=2e-5, fov_scale=1.004)
+    assert run.stable_hash() == "#beat=b3"
+    assert (run.store_get("sky") or {}).get("fov") == pytest.approx(beat_sky("b3")["fov"], abs=1e-9)
+    assert run.errors() == []
+
+
+def test_beat_user_pan_writes_sky_and_reload_keeps_it(e2e, request, portal, open_page):
+    _legacy(e2e, request, portal, "narrative", "beat")
+    run = open_page(portal.url_path("narrative"), hash="beat=b3")
+    sky = narrative_ready(run, "b3")
+    stub_move(run, sky, dra=0.05, fov_scale=1.5, user=True)
+    run.page.wait_for_function("() => /(^#|&)sky=/.test(location.hash)", timeout=15000)
+    want = beat_sky("b3")
+    ra, fov = want["ra"] + 0.05, want["fov"] * 1.5
+
+    def check(r):
+        narrative_ready(r, "b3")
+        st = r.store_get("sky") or {}
+        assert st.get("ra") == pytest.approx(ra, abs=1e-6)
+        assert st.get("fov") == pytest.approx(fov, abs=1e-6)
+        h = canon(r)
+        assert h.get("beat") == "b3" and "ovl" not in h, h
+        assert [float(x) for x in h["sky"].split(",")] == pytest.approx([ra, want["dec"], fov], abs=1e-6)
+    check(run)
+    reload_keeps(run, "() => /(^#|&)sky=/.test(location.hash)", check)
+    # moving on to the next beat applies its view again: implied, out of the hash
+    nar = run.ev(PANE_OF_TYPE_JS, "narrative")
+    run.ev("(p) => window.__pk.app.layout.pane(p).go('b4')", nar)
+    narrative_ready(run, "b4")
+    assert run.stable_hash() == "#beat=b4"
+    assert (run.store_get("sky") or {}).get("ra") == pytest.approx(beat_sky("b4")["ra"], abs=1e-9)
+    assert run.errors() == []
+
+
+def test_beat_hash_sky_kept_over_the_beat_view(e2e, request, portal, open_page):
+    _legacy(e2e, request, portal, "narrative", "beat")
+    run = open_page(portal.url_path("narrative"), hash="sky=266.45,-29.01,0.3&beat=b3")
+
+    def check(r):
+        sky = narrative_ready(r, "b3")
+        st = r.store_get("sky") or {}
+        assert (st.get("ra"), st.get("dec"), st.get("fov")) == pytest.approx((266.45, -29.01, 0.3), abs=1e-9)
+        v = r.pane_stats(sky)["view"]
+        assert (v["ra"], v["dec"], v["fov"]) == pytest.approx((266.45, -29.01, 0.3), abs=1e-6)
+        h = canon(r)
+        assert h.get("sky") == "266.45,-29.01,0.3" and h.get("beat") == "b3" and "ovl" not in h, h
+        # the beat's overlays still apply (implied)
+        shown = set(r.ev("(p) => window.__pk.app.layout.pane(p).layers()", sky))
+        on, off = set(BEATS["b3"]["view"]["layers_on"]), set(BEATS["b3"]["view"]["layers_off"])
+        assert on <= shown and not (off & shown), shown
+    check(run)
+    assert parse_hash(reload_keeps(run, "() => /(^#|&)sky=/.test(location.hash)", check)) == \
+        {"sky": "266.45,-29.01,0.3", "beat": "b3"}
+
+
+def test_beat_overlay_toggle_writes_ovl(e2e, request, portal, open_page):
+    _legacy(e2e, request, portal, "narrative", "beat")
+    run = open_page(portal.url_path("narrative"), hash="beat=b3")
+    sky = narrative_ready(run, "b3")
+    assert "rings" in BEATS["b3"]["view"]["layers_off"]
+    # the user turns on a layer the beat turned off (layers panel checkbox)
+    run.ev("""(p) => { const sec = document.querySelector(`section.pk-pane[data-pane-id='${p}']`);
+        const box = sec.querySelector('input[data-role="ovl"][data-id="rings"]');
+        box.checked = true; box.dispatchEvent(new Event('change', {bubbles: true})); }""", sky)
+    run.page.wait_for_function("() => /(^#|&)ovl=/.test(location.hash)", timeout=15000)
+
+    def check(r):
+        s = narrative_ready(r, "b3")
+        h = canon(r)
+        assert "sky" not in h and h.get("beat") == "b3", h
+        assert "rings" in [t.split(":")[0] for t in h["ovl"].split(",")], h
+        assert "rings" in r.ev("(p) => window.__pk.app.layout.pane(p).layers()", s)
+    check(run)
+    reload_keeps(run, "() => /(^#|&)ovl=/.test(location.hash)", check)
+    assert run.errors() == []
+
+
+def test_beat_unknown_id_canonicalizes_to_the_shown_beat(e2e, request, portal, open_page):
+    """``#beat=<unknown>`` shows the first beat and writes its id, so the hash names the beat
+    whose view and overlays it implies: ``#beat=b1`` with no ``sky=`` / ``ovl=``."""
+    _legacy(e2e, request, portal, "narrative", "beat")
+    run = open_page(portal.url_path("narrative"), hash="beat=bogus")
+
+    def check(r):
+        narrative_ready(r, "b1")
+        assert r.store_get("beat") == "b1"
+        st = r.store_get("sky") or {}
+        assert st.get("ra") == pytest.approx(beat_sky("b1")["ra"], abs=1e-9)
+        assert canon(r) == {"beat": "b1"}
+    check(run)
+    assert reload_keeps(run, "() => /(^#|&)beat=b1(&|$)/.test(location.hash)", check) == "#beat=b1"
+    assert run.errors() == []
+
+
+# b4 rewritten as a beat with a highlight and no sky view: the sky pane centres on the
+# highlighted rows (narrative:highlight goto) and keeps the fov it had
+HIGHLIGHT_ONLY_BEAT = "b4"
+# the rows b3 highlights on the e2e portal (narrative_spec(rec_ids): the first three records)
+B3_HIGHLIGHT = next(b["view"]["highlight"] for b in ms.narrative_spec([ms.syn_id(i) for i in range(3)]).beats
+                    if b["view"].get("highlight"))
+
+CENTROID_JS = """async ([ds, ids]) => { const app = window.__pk.app;
+  const idx = (await app.resolveIds(ds, ids)).filter((i) => i >= 0);
+  const c = await app.catalog(ds);
+  const recs = (await Promise.all(idx.map((i) => c.record(i, {pos: true})))).filter((q) => q && Number.isFinite(q.ra));
+  return recs.length ? [recs.reduce((a, q) => a + q.ra, 0) / recs.length,
+                        recs.reduce((a, q) => a + q.dec, 0) / recs.length] : null; }"""
+
+
+def open_highlight_only(browser, open_page, portal, hash: str):
+    """Open the narrative page with beat b4 served as {pane, layers, highlight: b3's rows} (no
+    ``view.sky``); returns (run, highlight)."""
+    ctx = browser.new_context(viewport={"width": 1400, "height": 900})
+
+    def rewrite(route):
+        doc = route.fetch().json()
+        hl = next(b["view"]["highlight"] for b in doc["beats"] if b["view"].get("highlight"))
+        for b in doc["beats"]:
+            if b["id"] == HIGHLIGHT_ONLY_BEAT:
+                b["view"].pop("sky", None)
+                b["view"]["highlight"] = hl
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(doc))
+    ctx.route(re.compile(r".*/data/narrative\.json(\?.*)?$"), rewrite)
+    run = open_page(portal.url_path("narrative"), hash=hash, context=ctx)
+    return run, B3_HIGHLIGHT
+
+
+def wait_highlight(run, sky: str, n: int, timeout_ms: int = 30000) -> None:
+    run.page.wait_for_function(
+        "([p, n]) => { const h = window.__pk.app.layout.pane(p); return !!h && h.stats().highlight === n; }",
+        arg=[sky, n], timeout=timeout_ms)
+
+
+def test_beat_highlight_only_is_implied_on_a_fresh_load(e2e, request, browser, portal, open_page):
+    """``#beat=b4`` where b4 only centres on its highlight: the centring settles as implied by
+    b4 (its fov is the page's initial one), so the hash stays ``#beat=b4`` and a reload gives
+    the same view."""
+    _legacy(e2e, request, portal, "narrative", "beat")
+    run, hl = open_highlight_only(browser, open_page, portal, "beat=b4")
+    assert hl and hl["ids"], hl
+    n = len(hl["ids"])
+    centre = run.ev(CENTROID_JS, [hl.get("ds") or "src", hl["ids"]])
+    assert centre is not None
+    state: dict = {}
+
+    def check(r):
+        sky = narrative_ready(r, "b4")
+        wait_highlight(r, sky, n)
+        r.page.wait_for_function(
+            "([ra, dec]) => { const s = window.__pk.store.get('sky') || {};"
+            " return Math.abs(s.ra - ra) < 1e-5 && Math.abs(s.dec - dec) < 1e-5; }",
+            arg=centre, timeout=15000)
+        st = r.store_get("sky") or {}
+        assert st.get("beatView") == "b4", st
+        assert canon(r) == {"beat": "b4"}
+        if "fov" in state:
+            assert st["fov"] == pytest.approx(state["fov"], rel=1e-6)
+        state["fov"] = st["fov"]
+    check(run)
+    assert run.stable_hash() == "#beat=b4"
+    assert reload_keeps(run, "() => /(^#|&)beat=b4(&|$)/.test(location.hash)", check) == "#beat=b4"
+    assert run.errors() == []
+
+
+def test_beat_highlight_only_after_another_beat_writes_its_view(e2e, request, browser, portal, open_page):
+    """Going from b2 (fov 0.17) to the highlight-only b4 keeps b2's fov, which ``#beat=b4``
+    alone would not reproduce: the view is written (``sky=``) and a reload keeps it."""
+    _legacy(e2e, request, portal, "narrative", "beat")
+    run, hl = open_highlight_only(browser, open_page, portal, "beat=b2")
+    n = len(hl["ids"])
+    narrative_ready(run, "b2")
+    centre = run.ev(CENTROID_JS, [hl.get("ds") or "src", hl["ids"]])
+    nar = run.ev(PANE_OF_TYPE_JS, "narrative")
+    run.ev("(p) => window.__pk.app.layout.pane(p).go('b4')", nar)
+    fov = beat_sky("b2")["fov"]
+
+    def check(r):
+        sky = narrative_ready(r, "b4")
+        r.page.wait_for_function(
+            "([ra, dec]) => { const s = window.__pk.store.get('sky') || {};"
+            " return Math.abs(s.ra - ra) < 1e-5 && Math.abs(s.dec - dec) < 1e-5; }",
+            arg=centre, timeout=15000)
+        wait_highlight(r, sky, n)
+        st = r.store_get("sky") or {}
+        assert "beatView" not in st, st
+        assert st["fov"] == pytest.approx(fov, rel=1e-6)
+        h = canon(r)
+        assert h.get("beat") == "b4" and "ovl" not in h, h
+        assert [float(x) for x in h["sky"].split(",")] == pytest.approx([centre[0], centre[1], fov], abs=1e-6)
+    check(run)
+    reload_keeps(run, "() => /(^#|&)sky=/.test(location.hash) && /(^#|&)beat=b4(&|$)/.test(location.hash)", check)
+    assert run.errors() == []
 
 
 def test_legacy_gallery_index(e2e, request, portal, open_page):

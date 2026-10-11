@@ -19,8 +19,18 @@
 //     with `narrative:sync`.
 // Elements inside beat html that carry `data-ids` ("id1,id2", optional `data-ds`) highlight
 // those rows while hovered or after a click, keeping the view unchanged.
+//
+// Beat hash (port table msata "suppressView keeps user zoom; #beat= hash"; core/hash.js
+// header): the view and overlay set a beat applies are implied by `beat=` and stay out of the
+// hash. The `sky` value records them with `beatView` / `beatOvl` = the beat id ('' for the first
+// beat of a page opened without `beat=`, while no beat is written). A user pan/zoom or layer
+// change on the sky pane drops the marker, so `sky=` / `ovl=` are written from then on. The
+// beat activated at load, or through a hash change, keeps the parts of `sky` that are explicit
+// (`#sky=..&beat=b3` keeps the hash's view over b3's); a beat chosen in the pane (scroll, click,
+// go()) or by another pane applies its own view and overlays.
 
 import {fmtCount} from '../core/fmt.js';
+import {BEAT_VIEW, BEAT_OVL} from '../core/hash.js';
 
 export const meta = {type: 'narrative', caps: [], needs: []};
 
@@ -62,6 +72,87 @@ function idsOf(attr) {
   return String(attr || '').split(',').map((s) => s.trim()).filter(Boolean);
 }
 
+function hasView(s) {
+  return !!s && typeof s === 'object' && Number.isFinite(+s.ra) && Number.isFinite(+s.dec);
+}
+
+function ovlKey(list) {
+  return (Array.isArray(list) ? list : []).map((o) => (typeof o === 'string' ? o : `${o && o.id}:${o && Number.isFinite(o.opacity) ? o.opacity : ''}`)).sort().join(',');
+}
+
+/** Equal coordinates (deg, 1e-6 tolerance), or both missing. */
+function sameCoord(a, b) {
+  const fa = Number.isFinite(+a) && a !== null && a !== undefined, fb = Number.isFinite(+b) && b !== null && b !== undefined;
+  if (!fa || !fb) return fa === fb;
+  return Math.abs(+a - +b) <= 1e-6;
+}
+
+/** Equal fields of view (1e-6 relative), or both missing. */
+function sameFov(a, b) {
+  const fa = +a > 0, fb = +b > 0;
+  if (!fa || !fb) return fa === fb;
+  return Math.abs(+a - +b) <= 1e-6 * Math.max(+a, +b);
+}
+
+/**
+ * Which parts of a stored `sky` value are explicit, i.e. not implied by a beat: {view, ovl}.
+ * The view is explicit when it has a finite centre and no `beatView` marker, the overlays when
+ * they are a list without a `beatOvl` marker. While no beat is set (`beatSet` false: a page
+ * opened without `beat=`), a part equal to the page default (`pageSky`, the page's `state.sky`)
+ * is not explicit either: the first beat replaces a default view. With a beat set, the hash
+ * markers alone decide (`#sky=<default>&beat=b3` keeps the default view over b3's).
+ */
+export function explicitSky(sky, pageSky, {beatSet = false} = {}) {
+  const s = sky && typeof sky === 'object' ? sky : {};
+  const d = pageSky && typeof pageSky === 'object' ? pageSky : {};
+  const sameDefaultView = !beatSet && hasView(d) && +d.ra === +s.ra && +d.dec === +s.dec && (+d.fov || 0) === (+s.fov || 0);
+  const sameDefaultOvl = !beatSet && Array.isArray(d.overlays) && ovlKey(d.overlays) === ovlKey(s.overlays);
+  return {
+    view: hasView(s) && s[BEAT_VIEW] === undefined && !sameDefaultView,
+    ovl: Array.isArray(s.overlays) && s[BEAT_OVL] === undefined && !sameDefaultOvl,
+  };
+}
+
+/**
+ * The `sky` value after applying a beat: `cur` with the overlay list `ovlIds` (marked
+ * `beatOvl = mark`) unless `keepOvl`, and unless `keepView`, the beat's sky view: its centre and
+ * fov when it has a finite `view.sky` and no `suppress_view`, otherwise the view stays as it is.
+ * The view is marked `beatView = mark` only when loading `beat=` alone reproduces it: every part
+ * the beat does not set (the centre of a beat without a sky view, the fov of a sky view without
+ * one) equals the page default `home` (both missing counts as equal). `goto` says the sky pane
+ * centres on the beat's highlight (the centre is the beat's). Otherwise the marker is dropped
+ * and the view is written to the hash (`sky=`). Does not modify `cur`.
+ */
+export function beatSky(cur, view, ovlIds, {mark = '', keepView = false, keepOvl = false, home = null, goto = false} = {}) {
+  const sky = Object.assign({}, cur && typeof cur === 'object' ? cur : {});
+  const v = view || {};
+  if (!keepOvl) {
+    sky.overlays = (ovlIds || []).map((o) => ({id: o}));
+    sky[BEAT_OVL] = mark;
+  }
+  if (keepView) return sky;
+  const own = !v.suppress_view && !!v.sky && Number.isFinite(+v.sky.ra) && Number.isFinite(+v.sky.dec);
+  const ownFov = own && +v.sky.fov > 0;
+  if (own) {
+    sky.ra = +v.sky.ra;
+    sky.dec = +v.sky.dec;
+    if (ownFov) sky.fov = +v.sky.fov;
+  }
+  const h = home && typeof home === 'object' ? home : {};
+  const centre = own || goto || (sameCoord(sky.ra, h.ra) && sameCoord(sky.dec, h.dec));
+  if (centre && (ownFov || sameFov(sky.fov, h.fov))) sky[BEAT_VIEW] = mark;
+  else delete sky[BEAT_VIEW];
+  return sky;
+}
+
+/** Same `sky` value as far as the narrative and the hash are concerned. */
+export function sameSky(a, b) {
+  const x = a || {}, y = b || {};
+  for (const k of ['ra', 'dec', 'fov', BEAT_VIEW, BEAT_OVL]) if (x[k] !== y[k]) return false;
+  if (Array.isArray(x.overlays) !== Array.isArray(y.overlays)) return false;
+  return ovlKey(x.overlays) === ovlKey(y.overlays);
+}
+
 export function mount(el, ctx) {
   const {store, app, hub} = ctx;
   const cfg = ctx.config || {};
@@ -79,7 +170,7 @@ export function mount(el, ctx) {
 
   const S = {beats: [], sections: [], current: -1, defaults: [], io: null, hl: null, hover: null,
     stickyType: cfg.sticky === 'scatter' ? 'scatter' : 'sky', ovl: null,
-    pinK: -1, pinMax: null};
+    pinK: -1, pinMax: null, gotoSeq: 0};
 
   // ---- observer pause around programmatic scrolls: activate(k, {scroll: true}) pins beat k
   // until the band centre lies inside it (a smooth scroll toward its middle then keeps it there),
@@ -150,6 +241,9 @@ export function mount(el, ctx) {
     const tgt = targetPane(S.beats[S.current] && S.beats[S.current].view);
     const p = Object.assign({pane: tgt ? tgt.id : S.stickyType, ds: (hl && hl.ds) || null,
       ids: (hl && Array.isArray(hl.ids) ? hl.ids.map(String) : []), beat: beatId}, extra);
+    // each goto request carries a new `seq`: a target skips a replay (narrative:sync answer) of
+    // the goto it already applied, but follows a new request for the same beat (hash navigation)
+    if (p.goto) p.seq = ++S.gotoSeq;
     const prev = S.hl;
     // the highlight moves to another pane: clear the rings left on the previous target
     if (prev && prev.ids.length && prev.pane !== p.pane) {
@@ -159,7 +253,53 @@ export function mount(el, ctx) {
     store.emit('narrative:highlight', p);
   };
 
-  const activate = (k, {write = true, scroll = false} = {}) => {
+  const pageSky = () => (app && app.page && app.page.state && app.page.state.sky) || null;
+  /** The marker for beat k: its id once `beat` holds it, else '' (first beat, no beat=). */
+  const markFor = (k, beatAfter) => (beatAfter === S.beats[k].id ? S.beats[k].id : '');
+  const beatSet = () => {
+    const b = store.get('beat');
+    return typeof b === 'string' && b !== '';
+  };
+  const beatHighlight = (view) => (view.highlight && Array.isArray(view.highlight.ids) && view.highlight.ids.length ? view.highlight : null);
+  /** Does beat `view` centre the sky on its highlight (`narrative:highlight` goto to a sky pane)? */
+  const skyGoto = (view, tgtType) => !!beatHighlight(view) && !view.suppress_view && !view.sky && tgtType === 'sky';
+  const targetType = (view) => {
+    const tgt = targetPane(view);
+    return tgt ? tgt.type : (view.pane || S.stickyType);
+  };
+
+  /**
+   * Bring the parts of `sky` the current beat k implies (marker = beat id, '' or `alias`) in
+   * line with `beat`. After a hash change (`fromHash`) they are applied again: `#beat=b3` after
+   * `#sky=..&beat=b3` restores b3's view, and a beat that centres on its highlight asks for the
+   * goto again. After another write only the markers are renamed ('' becomes the beat id when
+   * `beat` is set to the first beat of a page opened without beat=), so a view another pane
+   * moved is not pulled back.
+   */
+  const reconcile = (k, {fromHash = false, alias = null} = {}) => {
+    const beat = S.beats[k];
+    const view = beat.view || {};
+    const cur = store.get('sky') || {};
+    const ours = (m) => typeof m === 'string' && (m === beat.id || m === '' || (alias !== null && m === alias));
+    const keepView = !ours(cur[BEAT_VIEW]);
+    const keepOvl = !ours(cur[BEAT_OVL]);
+    if (keepView && keepOvl) return;
+    const mark = markFor(k, store.get('beat'));
+    const goto = !keepView && skyGoto(view, targetType(view));
+    let next;
+    if (fromHash) {
+      next = beatSky(cur, view, beatOverlays(S.defaults, view), {mark, keepView, keepOvl, home: pageSky(), goto});
+    } else {
+      next = Object.assign({}, cur);
+      if (!keepView) next[BEAT_VIEW] = mark;
+      if (!keepOvl) next[BEAT_OVL] = mark;
+    }
+    if (!keepOvl) S.ovl = beatOverlays(S.defaults, view);
+    if (!sameSky(cur, next)) store.set({sky: next}, {source: id});
+    if (fromHash && goto && next[BEAT_VIEW] === mark) emitHighlight(beat.id, beatHighlight(view), {goto: true});
+  };
+
+  const activate = (k, {write = true, scroll = false, keep = null} = {}) => {
     if (k < 0 || k >= S.beats.length) return;
     if (scroll) {
       pin(k);
@@ -183,24 +323,24 @@ export function mount(el, ctx) {
     if (write && store.get('beat') !== beat.id) patch.beat = beat.id;
     const tgt = targetPane(view);
     const tgtType = tgt ? tgt.type : (view.pane || S.stickyType);
-    // overlays: computed from scratch for every beat (scene exit removes overlays)
+    // overlays: computed from scratch for every beat (scene exit removes overlays); the view and
+    // overlays are marked as implied by the beat, except the parts `keep` names (explicit ones)
+    const kp = keep || {view: false, ovl: false};
+    const hl = beatHighlight(view);
+    // an explicit view kept over the beat's (deep link) is not moved by the highlight either
+    const goto = !!hl && !view.suppress_view && !view.sky && !kp.view;
     const ovl = beatOverlays(S.defaults, view);
-    S.ovl = ovl;
     const cur = store.get('sky') || {};
-    const sky = Object.assign({}, cur, {overlays: ovl.map((o) => ({id: o}))});
-    if (!view.suppress_view && view.sky && Number.isFinite(+view.sky.ra) && Number.isFinite(+view.sky.dec)) {
-      sky.ra = +view.sky.ra;
-      sky.dec = +view.sky.dec;
-      if (+view.sky.fov > 0) sky.fov = +view.sky.fov;
-    }
+    const sky = beatSky(cur, view, ovl, {mark: markFor(k, write ? beat.id : store.get('beat')),
+      keepView: !!kp.view, keepOvl: !!kp.ovl, home: pageSky(), goto: goto && tgtType === 'sky'});
+    S.ovl = kp.ovl && Array.isArray(cur.overlays) ? cur.overlays.map((o) => (typeof o === 'string' ? o : o.id)) : ovl;
     patch.sky = sky;
     if (!view.suppress_view && view.axes && tgtType === 'scatter' && tgt) {
       const key = `axes:${tgt.id}`;
       patch[key] = Object.assign({}, store.get(key) || {}, view.axes);
     }
     store.set(patch, {source: id});
-    const hl = view.highlight && Array.isArray(view.highlight.ids) && view.highlight.ids.length ? view.highlight : null;
-    emitHighlight(beat.id, hl, hl && !view.suppress_view && !view.sky ? {goto: true} : {});
+    emitHighlight(beat.id, hl, goto ? {goto: true} : {});
     ctx.setStatus(`${k + 1} / ${S.beats.length}`);
   };
 
@@ -289,10 +429,29 @@ export function mount(el, ctx) {
     restoreBeatHighlight();
   });
 
-  offs.push(store.on(['beat'], (changed, st, sources) => {
+  offs.push(store.on(['beat', 'sky'], (changed, st, sources) => {
     if (sources.size === 1 && sources.has(id)) return;
-    const k = S.beats.findIndex((b) => b.id === st.get('beat'));
-    if (k >= 0 && k !== S.current) activate(k, {write: false, scroll: true});
+    if (!S.beats.length || S.current < 0) return;
+    const fromHash = sources.has('hash');
+    const want = st.get('beat');
+    const k = S.beats.findIndex((b) => b.id === want);
+    if (k < 0) {
+      // an unknown beat id: stay on the current beat and write its id, so the hash names the
+      // beat whose view and overlays the markers stand for
+      if (typeof want !== 'string' || !want || !changed.has('beat')) return;
+      store.set({beat: S.beats[S.current].id}, {source: id});
+      reconcile(S.current, {fromHash: true, alias: want});
+      return;
+    }
+    if (k !== S.current) {
+      // a hash change keeps what the hash makes explicit (sky= / ovl=); another pane choosing
+      // a beat gets the beat's own view and overlays
+      if (changed.has('beat')) {
+        activate(k, {write: false, scroll: true, keep: fromHash ? explicitSky(st.get('sky'), pageSky(), {beatSet: true}) : null});
+      }
+      return;
+    }
+    reconcile(k, {fromHash});
   }));
   offs.push(store.onEvent('narrative:sync', () => {
     if (S.hl) store.emit('narrative:highlight', S.hl);
@@ -315,8 +474,12 @@ export function mount(el, ctx) {
     if (!S.beats.length) return;
     ctx.setStatus(`${fmtCount(S.beats.length)} beats`);
     const want = store.get('beat');
-    const k0 = Math.max(0, S.beats.findIndex((b) => b.id === want));
-    activate(k0, {write: !!want && k0 > 0, scroll: k0 > 0});
+    const found = S.beats.findIndex((b) => b.id === want);
+    const k0 = Math.max(0, found);
+    // the beat in force at load keeps what is explicit in `sky` (deep link, or a user change
+    // made before the story loaded); an unknown beat id is replaced by the first beat's
+    activate(k0, {write: !!want && (k0 > 0 || found < 0), scroll: k0 > 0,
+      keep: explicitSky(store.get('sky'), pageSky(), {beatSet: beatSet()})});
     // let the scroll position settle before the observer starts choosing beats
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
     if (!destroyed) observe();

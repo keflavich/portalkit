@@ -6,8 +6,8 @@
 // rings ([arcsec] circles around the focused source), fits ([FITS ids]; default all).
 //
 // Store: reads and writes `sky` {ra, dec, fov, base, overlays, fits} (view writes are debounced
-// by SETTLE_MS; external writes such as the hash or a narrative beat move the view and set the
-// layers), reads `focus`/`hover` (rings, pan to a focused source that is out of view), writes
+// by SETTLE_MS; external writes such as the hash or a narrative beat move the view when they
+// change the stored view, and set the layers), reads `focus`/`hover` (rings, pan to a focused source that is out of view), writes
 // `focus`/`hover` from marker clicks, reacts to `vis:<ds>`, `sel:<ds>`, `color`, `tier:<pane>`
 // and `theme`.
 // Events (IMPLEMENTATION_NOTES 71): emits `brush:commit` (through sky/skybrush.js) and
@@ -18,6 +18,13 @@
 // {pos: true}, so a highlight from the URL gets coordinates before first paint.
 // Setup does not wait for the markers (their positions load after app.afterFirstPaint()): the
 // view listeners and `narrative:sync` are registered as soon as the viewer is ready.
+// View writes (settledSky): the pane tracks what last moved the viewer. Its initial view and
+// gotos to the stored view (deep link, narrative beat, another pane) are not written back, so
+// Aladin's rounding or aspect adjustment of them is not a change of `sky`; a highlight goto of
+// beat b is written as implied by b (`beatView: b`); pointer, wheel, touch or key input on the
+// viewer, a pan to the focused source and a bookmark are written as explicit views (the
+// `beatView` marker is dropped). A layer change from the panel drops `beatOvl` (core/hash.js
+// header: beat-implied parts stay out of the hash).
 // The Aladin library loads once per page and each sky pane owns one viewer (sky/aladin.js,
 // IMPLEMENTATION_NOTES 82); the viewer survives remounts. A failed load is retried once per page
 // by the first sky pane that mounts after it (IMPLEMENTATION_NOTES 109). When
@@ -31,6 +38,7 @@ import {SkyLayers, defaultBase} from '../sky/layers.js';
 import {SkyMarkers} from '../sky/markers.js';
 import {VectorOverlays, ShapeSet} from '../sky/overlays.js';
 import {SkyBrush, skyView} from '../sky/skybrush.js';
+import {BEAT_VIEW, BEAT_OVL} from '../core/hash.js';
 
 export const meta = {
   type: 'sky',
@@ -78,9 +86,91 @@ function sameView(a, b) {
     (!(+a.fov > 0) || !(+b.fov > 0) || Math.abs(+a.fov - +b.fov) <= 1e-3 * Math.max(+a.fov, +b.fov));
 }
 
+/** The view part {ra, dec, fov} of a stored `sky` value, or null without a finite centre. */
+export function storedView(sky) {
+  return finiteView(sky) ? {ra: +sky.ra, dec: +sky.dec, fov: +sky.fov} : null;
+}
+
+/** Same stored view: sameView, and a fov on both sides or on neither. */
+export function sameStoredView(a, b) {
+  return !!a && !!b && sameView(a, b) && (+a.fov > 0) === (+b.fov > 0);
+}
+
 function round(v, digits) {
   const k = 10 ** digits;
   return Math.round(v * k) / k;
+}
+
+/** Input events on the viewer that make the next settled view a user change. */
+export const USER_VIEW_EVENTS = Object.freeze(['pointerdown', 'wheel', 'touchstart', 'keydown', 'dblclick']);
+
+/**
+ * Does settled view `b` match the goto target `a`, allowing for Aladin's rounding and aspect
+ * adjustment (centre within 1% of the fov, fov within 2%)?
+ */
+export function nearView(a, b) {
+  if (!a || !b || ![a.ra, a.dec, b.ra, b.dec].every((x) => Number.isFinite(+x))) return false;
+  const fov = Math.min(+a.fov > 0 ? +a.fov : Infinity, +b.fov > 0 ? +b.fov : Infinity);
+  const tol = Number.isFinite(fov) ? Math.max(VIEW_EPS, 0.01 * fov) : VIEW_EPS;
+  let dra = Math.abs(+a.ra - +b.ra);
+  if (dra > 180) dra = 360 - dra;
+  dra *= Math.cos((+b.dec * Math.PI) / 180);
+  return dra <= tol && Math.abs(+a.dec - +b.dec) <= tol &&
+    (!(+a.fov > 0) || !(+b.fov > 0) || Math.abs(+a.fov - +b.fov) <= 0.02 * Math.max(+a.fov, +b.fov));
+}
+
+/**
+ * The `sky` value a sky pane writes for a settled viewer view `next` {ra, dec, fov}, or null
+ * when it writes nothing. `origin` says what last moved the viewer:
+ *   {kind: 'store'}           its initial view or a goto to the stored view: Aladin's rounding
+ *                             or aspect adjustment of it is not a change;
+ *   {kind: 'beat', beat}      a goto a narrative beat asked for (highlight centring): written as
+ *                             implied by that beat (`beatView: beat`) when the stored view
+ *                             already carries that marker (the narrative found the rest of the
+ *                             view reproducible from `beat=`), else as an explicit view;
+ *   {kind: 'explicit'}        a goto of the pane's own (pan to the focused source, bookmark);
+ *   {kind: 'user', prev?, target?}  input on the viewer since the last goto. Input that arrived
+ *                             while a programmatic goto (`prev`, to `target`) was still settling
+ *                             counts as that goto when the view settles on its target (nearView).
+ * Explicit and user views drop `beatView`. `seen` is the view at the previous settle: user
+ * input that left the view in place (a click) writes nothing. A view equal to the stored one
+ * (sameView) writes nothing. `cur` is not modified.
+ */
+export function settledSky(cur, next, origin, seen) {
+  const c = cur && typeof cur === 'object' ? cur : {};
+  let o = origin && typeof origin === 'object' ? origin : {kind: 'user'};
+  if (o.kind === 'user' && o.prev && o.target && nearView(o.target, next)) o = o.prev;
+  const kind = o.kind || 'user';
+  if (kind === 'store') return null;
+  if (kind === 'beat' && typeof o.beat === 'string' && c[BEAT_VIEW] === o.beat) {
+    if (sameView(c, next)) return null;
+    return Object.assign({}, c, next, {[BEAT_VIEW]: o.beat});
+  }
+  if (kind === 'user' && seen && sameView(seen, next)) return null;
+  if (sameView(c, next)) return null;
+  const out = Object.assign({}, c, next);
+  delete out[BEAT_VIEW];
+  return out;
+}
+
+function overlaysKey(list) {
+  return (Array.isArray(list) ? list : []).map((o) => `${o.id}:${Number.isFinite(o.opacity) ? o.opacity : ''}`).sort().join(',');
+}
+
+/**
+ * The `sky` value for a layer change from the panel. `prevOverlays` is the overlay list the
+ * layers held before the change: when the overlays (ids and opacities) are unchanged (a base
+ * survey or FITS change), the `beatOvl` marker is kept; otherwise the overlays are explicit
+ * (the marker is dropped).
+ */
+export function layersSky(cur, st, prevOverlays) {
+  const out = Object.assign({}, cur && typeof cur === 'object' ? cur : {}, {
+    base: st.base,
+    overlays: st.overlays.map((o) => (Number.isFinite(o.opacity) ? {id: o.id, opacity: o.opacity} : {id: o.id})),
+    fits: st.fits,
+  });
+  if (!Array.isArray(prevOverlays) || overlaysKey(prevOverlays) !== overlaysKey(st.overlays)) delete out[BEAT_OVL];
+  return out;
 }
 
 function localTier(n, rt) {
@@ -131,12 +221,40 @@ export function mount(el, ctx) {
 
   const S = {h: null, layers: null, vector: null, markers: null, brush: null, client: null,
     rings: null, highlight: null, hl: null, hlCount: 0, written: null, writeTimer: null, error: null,
-    hipsDoc: null};
+    hipsDoc: null,
+    origin: {kind: 'store'},   // what last moved the viewer (settledSky); the initial view
+    target: null,              // view the last programmatic goto asked for, until it settles
+    seen: null,                // view at the last settle
+    layerOvl: null,            // overlay list the layers hold (layersSky)
+    storeView: null,           // stored view the viewer last followed or wrote (store listener)
+    hlGotoSeq: undefined};     // `seq` of the narrative goto this pane applied
 
   const setNotice = (text) => {
     notice.hidden = !text;
     notice.textContent = text || '';
   };
+
+  const beatMark = (b) => {
+    const cur = store.get('beat');
+    return typeof cur === 'string' && cur ? b : '';
+  };
+
+  /** Move the viewer, recording what asked for it (settledSky origins). */
+  const gotoFrom = (v, origin) => {
+    const cv = S.h.view();
+    S.origin = origin;
+    S.target = {ra: +v.ra, dec: +v.dec, fov: +v.fov > 0 ? +v.fov : cv && cv.fov};
+    S.h.goto(v);
+  };
+
+  // Input on the viewer: the next settled view is the user's (capture phase, so Aladin's own
+  // handlers and controls inside the stage count too). Input while a programmatic goto is still
+  // settling keeps that goto as `prev`: a view that lands on its target is still the goto's.
+  const markUser = () => {
+    if (S.origin.kind === 'user') return;
+    S.origin = S.target ? {kind: 'user', prev: S.origin, target: S.target} : {kind: 'user'};
+  };
+  for (const ev of USER_VIEW_EVENTS) stage.addEventListener(ev, markUser, {capture: true, passive: true});
 
   // ------------------------------------------------------------- store writes
 
@@ -144,12 +262,19 @@ export function mount(el, ctx) {
     if (!S.h || S.h.state !== 'ready') return;
     const v = S.h.view();
     if (![v.ra, v.dec, v.fov].every(Number.isFinite)) return;
-    const cur = store.get('sky') || {};
     const next = {ra: round(v.ra, 6), dec: round(v.dec, 6), fov: round(v.fov, 6)};
     coord.textContent = `${fmtRA(v.ra)} ${fmtDec(v.dec)} · ${fmtAngle(v.fov)}`;
-    if (sameView(cur, next)) return;
+    const seen = S.seen;
+    S.seen = next;
+    const origin = S.origin;
+    // the goto has settled: later input is the user's alone
+    S.target = null;
+    if (origin.kind === 'user' && origin.prev) S.origin = {kind: 'user'};
+    const out = settledSky(store.get('sky'), next, origin, seen);
+    if (!out) return;
     S.written = next;
-    store.set({sky: Object.assign({}, cur, next)}, {source: id});
+    S.storeView = storedView(out);
+    store.set({sky: out}, {source: id});
   };
 
   const scheduleWrite = () => {
@@ -158,8 +283,14 @@ export function mount(el, ctx) {
   };
 
   const writeLayers = (st) => {
-    const cur = store.get('sky') || {};
-    store.set({sky: Object.assign({}, cur, {base: st.base, overlays: st.overlays.map((o) => (Number.isFinite(o.opacity) ? {id: o.id, opacity: o.opacity} : {id: o.id})), fits: st.fits})}, {source: id});
+    const prev = S.layerOvl;
+    S.layerOvl = st.overlays.map((o) => ({id: o.id, opacity: o.opacity}));
+    store.set({sky: layersSky(store.get('sky'), st, prev)}, {source: id});
+  };
+  /** Apply the stored layers and remember the overlay list they leave (layersSky). */
+  const applyLayers = (sky) => {
+    S.layers.apply(sky);
+    S.layerOvl = S.layers.state().overlays.map((o) => ({id: o.id, opacity: o.opacity}));
   };
 
   // ------------------------------------------------------------- focus / hover / highlight
@@ -199,7 +330,7 @@ export function mount(el, ctx) {
     if (!p) return;
     const px = S.h.world2pix(p[0], p[1]);
     const [w, hgt] = S.h.size();
-    if (!px || px[0] < 0 || px[1] < 0 || px[0] > w || px[1] > hgt) S.h.goto({ra: p[0], dec: p[1]});
+    if (!px || px[0] < 0 || px[1] < 0 || px[0] > w || px[1] > hgt) gotoFrom({ra: p[0], dec: p[1]}, {kind: 'explicit'});
   };
 
   const drawHighlight = async (p) => {
@@ -227,7 +358,9 @@ export function mount(el, ctx) {
     if (p.goto && pts.length && S.h) {
       const ra = pts.reduce((a, q) => a + q.ra, 0) / pts.length;
       const dec = pts.reduce((a, q) => a + q.dec, 0) / pts.length;
-      S.h.goto({ra, dec});
+      // the centring is the beat's view: written as implied by that beat ('' while no beat is
+      // in the store: the first beat of a page opened without beat=, as the narrative marks it)
+      gotoFrom({ra, dec}, typeof p.beat === 'string' && p.beat ? {kind: 'beat', beat: beatMark(p.beat)} : {kind: 'explicit'});
       // goto applies once: later redraws (zoom settle, theme, ready) keep the user's view
       if (S.hl === p) S.hl = Object.assign({}, p, {goto: false});
     }
@@ -275,7 +408,7 @@ export function mount(el, ctx) {
       fitsIds: Array.isArray(cfg.fits) ? cfg.fits : null,
       resolve: (u) => hub.resolve(u).toString(),
       onChange: writeLayers,
-      onGoto: (v) => hd.goto(v),
+      onGoto: (v) => gotoFrom(v, {kind: 'explicit'}),   // a bookmark the user picked
       toast: (t) => store.emit('toast', t),
     });
     S.rings = new ShapeSet(hd, `${id}:focus`);
@@ -321,11 +454,12 @@ export function mount(el, ctx) {
     // another pane), when the store listener could not reach the viewer. A remounted pane also
     // re-applies the stored view here (the viewer kept the old one).
     const cur = store.get('sky') || {};
+    S.storeView = storedView(cur);
     if (finiteView(cur)) {
       const want = initialView(cur, hips, client && client.manifest);
-      if (!sameView(hd.view(), want)) hd.goto(want);
+      if (!sameView(hd.view(), want)) gotoFrom(want, {kind: 'store'});
     }
-    S.layers.apply(cur);
+    applyLayers(cur);
 
     if (client) {
       if (!store.get(`tier:${id}`)) store.set({[`tier:${id}`]: localTier(client.n, app.runtime)}, {source: id});
@@ -351,7 +485,10 @@ export function mount(el, ctx) {
     }));
     offs.push(hd.on('resizeChanged', () => { if (S.markers) S.markers.viewChanged(); }));
     const v = hd.view();
-    if ([v.ra, v.dec, v.fov].every(Number.isFinite)) coord.textContent = `${fmtRA(v.ra)} ${fmtDec(v.dec)} · ${fmtAngle(v.fov)}`;
+    if ([v.ra, v.dec, v.fov].every(Number.isFinite)) {
+      coord.textContent = `${fmtRA(v.ra)} ${fmtDec(v.dec)} · ${fmtAngle(v.fov)}`;
+      S.seen = {ra: round(v.ra, 6), dec: round(v.dec, 6), fov: round(v.fov, 6)};
+    }
     if (S.hl) drawHighlight(S.hl).catch(highlightErr);
     store.emit('narrative:sync', {pane: id, type: 'sky'});
   };
@@ -382,11 +519,16 @@ export function mount(el, ctx) {
     if (sources.size === 1 && sources.has(id)) return;
     if (!S.h || S.h.state !== 'ready') return;
     const sky = st.get('sky') || {};
-    if (finiteView(sky)) {
+    // follow the stored view only when it changed: listeners are coalesced (next frame), so a
+    // write that kept the view (a beat that only changes overlays and centres on its highlight)
+    // is delivered after the highlight goto and must not pull the viewer back
+    const prevView = S.storeView;
+    S.storeView = storedView(sky);
+    if (finiteView(sky) && !sameStoredView(prevView, sky)) {
       const v = S.h.view();
-      if (!sameView(v, sky)) S.h.goto({ra: +sky.ra, dec: +sky.dec, fov: +sky.fov});
+      if (!sameView(v, sky)) gotoFrom({ra: +sky.ra, dec: +sky.dec, fov: +sky.fov}, {kind: 'store'});
     }
-    if (S.layers) S.layers.apply(sky);
+    if (S.layers) applyLayers(sky);
   }));
   if (ctx.dataset) {
     offs.push(store.on([`vis:${ctx.dataset}`, `tier:${id}`], () => {
@@ -411,7 +553,10 @@ export function mount(el, ctx) {
   }));
   offs.push(store.onEvent('narrative:highlight', (p) => {
     if (!p || typeof p !== 'object') return;
-    if (p.beat !== S.hlGotoBeat) S.hlGotoBeat = undefined;
+    if (p.beat !== S.hlGotoBeat) {
+      S.hlGotoBeat = undefined;
+      S.hlGotoSeq = undefined;
+    }
     const elsewhere = (p.pane && p.pane !== id && p.pane !== 'sky') ||
       (p.ds && ctx.dataset && p.ds !== ctx.dataset && !(app.page.datasets || {})[p.ds]);
     if (elsewhere) {
@@ -424,9 +569,14 @@ export function mount(el, ctx) {
     }
     S.hlHeld = p;
     if (p.goto) {
-      // a replay of the same beat (narrative:sync answer) does not move the view again
-      if (p.beat != null && p.beat === S.hlGotoBeat) p = Object.assign({}, p, {goto: false});
-      else S.hlGotoBeat = p.beat;
+      // a replay of the same beat (narrative:sync answer) does not move the view again; a new
+      // request for it (a new `seq`, e.g. after hash navigation) does
+      if (p.beat != null && p.beat === S.hlGotoBeat && (p.seq === undefined || p.seq === S.hlGotoSeq)) {
+        p = Object.assign({}, p, {goto: false});
+      } else {
+        S.hlGotoBeat = p.beat;
+        S.hlGotoSeq = p.seq;
+      }
     }
     drawHighlight(p).catch(highlightErr);
   }));

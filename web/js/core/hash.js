@@ -26,6 +26,18 @@
 // Cleared values: when the page default has a key and the current state is empty (colour-by
 // off, no template, no features, ...), the key is written with the CLEARED marker ('-'; 'none'
 // for `c`) so a reload or Back keeps the cleared state instead of restoring the default.
+//
+// Beat-implied sky (narrative pages; port table msata "suppressView keeps user zoom; #beat=
+// hash"): `sky.beatView` / `sky.beatOvl` name the beat whose view / overlay set the `sky` value
+// holds ('' = the first beat of a page opened without `beat=`). A part implied by the current
+// beat (marker === state.beat, or '' while no beat is set) is not written: `#beat=b3` stands for
+// b3's view and overlays. A user pan/zoom (sky pane) drops `beatView` and a layer change drops
+// `beatOvl`, so `sky=` / `ovl=` are written from then on. Reading a hash with `beat=` sets the
+// markers for the parts the hash leaves out; `sky=` / `ovl=` in the hash clear them, so
+// `#sky=..&beat=b3` keeps the hash's view over the beat's. On navigation the page defaults for
+// absent keys are merged into that `sky` keeping the markers (the narrative re-applies the
+// beat's parts). With a beat set, an explicit `sky=` / `ovl=` equal to the page default is still
+// written (`beat=` alone would stand for the beat's own view / overlays).
 
 import {HASH_DEBOUNCE_MS, HASH_MAX_CHARS} from './constants.js';
 import {b64urlEncode, b64urlDecode, utf8Encode, utf8Decode, encodeHashValue} from './selection.js';
@@ -193,6 +205,23 @@ function trimTail(parts) {
   return p;
 }
 
+/** Store `sky` fields naming the beat that implies the view / the overlay set (see header). */
+export const BEAT_VIEW = 'beatView';
+export const BEAT_OVL = 'beatOvl';
+
+/**
+ * Which parts of `state.sky` are implied by the current beat and therefore stay out of the
+ * hash: {view, ovl}. A marker implies its part when it equals `state.beat`, or when it is ''
+ * and no beat is set.
+ */
+export function skyImplied(state) {
+  const sky = state && state.sky;
+  if (!sky || typeof sky !== 'object') return {view: false, ovl: false};
+  const beat = typeof state.beat === 'string' ? state.beat : '';
+  const is = (m) => typeof m === 'string' && m === beat;
+  return {view: is(sky[BEAT_VIEW]), ovl: is(sky[BEAT_OVL])};
+}
+
 /** Is `key` a store key that bindHash mirrors into the hash for this primary dataset? */
 export function isHashStoreKey(key, primaryDs) {
   if (SIMPLE_STORE_KEYS.has(key)) return true;
@@ -264,12 +293,13 @@ export function stateToHash(state, opts = {}) {
   }
   const sky = state.sky;
   if (sky && typeof sky === 'object') {
-    if ([sky.ra, sky.dec, sky.fov].every(Number.isFinite)) {
+    const implied = skyImplied(state);
+    if (!implied.view && [sky.ra, sky.dec, sky.fov].every(Number.isFinite)) {
       out.sky = `${num(sky.ra)},${num(sky.dec)},${num(sky.fov)}`;
     }
     if (sky.base) out.base = String(sky.base);
     // overlays: absent/undefined = the layout default (no `ovl`); [] = explicitly none (`ovl=-`).
-    if (Array.isArray(sky.overlays)) {
+    if (!implied.ovl && Array.isArray(sky.overlays)) {
       const toks = sky.overlays.filter((o) => o !== null && o !== undefined && (typeof o === 'string' ? o : o.id !== undefined && o.id !== null && o.id !== ''))
         .map((o) => {
           if (typeof o === 'string') return o;
@@ -295,7 +325,9 @@ export function stateToHash(state, opts = {}) {
 /**
  * Canonical hash record -> store patch.
  * @param {object} h  parseHash output
- * @param {{primaryDs?: string, state?: object}} opts  state = current snapshot (for merges)
+ * @param {{primaryDs?: string, state?: object, markers?: boolean}} opts  state = current snapshot
+ *   (for merges); markers false leaves the beat markers of `sky` as they are (page defaults
+ *   merged under a hash, bindHash)
  * @returns {{patch: object, sel: string|undefined}}
  */
 export function hashToPatch(h, opts = {}) {
@@ -304,11 +336,15 @@ export function hashToPatch(h, opts = {}) {
   const patch = {};
   const cur = (k) => (Object.prototype.hasOwnProperty.call(patch, k) ? patch[k] : state[k]);
   let sel;
+  // beat-implied sky (header): which sky parts this hash gives, and the beat it names
+  let viewGiven = false, ovlGiven = false, beatGiven = null;
 
   for (const key of Object.keys(h)) {
     const v = h[key];
     const pm = PANE_KEY_RE.exec(key);
     if (v === CLEARED) {
+      if (key === 'sky') viewGiven = true;
+      else if (key === 'ovl') ovlGiven = true;
       if (pm) {
         if (pm[2] !== 'frame') {
           const prev = Object.assign({}, cur(`axes:${pm[1]}`) || {});
@@ -423,6 +459,7 @@ export function hashToPatch(h, opts = {}) {
           prev.dec = parts[1];
           if (parts[2] !== undefined) prev.fov = parts[2];
           patch.sky = prev;
+          viewGiven = true;
         }
         break;
       }
@@ -443,10 +480,14 @@ export function hashToPatch(h, opts = {}) {
           return {id: tok};
         }) : [];
         patch.sky = prev;
+        ovlGiven = true;
         break;
       }
-      case 'rung':
       case 'beat':
+        beatGiven = v || null;
+        patch[key] = v || null;
+        break;
+      case 'rung':
       case 'role':
         patch[key] = v || null;
         break;
@@ -478,6 +519,16 @@ export function hashToPatch(h, opts = {}) {
       default:
         break;
     }
+  }
+  if (opts.markers !== false && (viewGiven || ovlGiven || beatGiven)) {
+    // `sky=` / `ovl=` make their part explicit; with `beat=`, a part the hash leaves out is
+    // implied by that beat (the narrative pane applies the beat's view / overlays)
+    const s = Object.assign({}, cur('sky') || {});
+    if (viewGiven) delete s[BEAT_VIEW];
+    else if (beatGiven) s[BEAT_VIEW] = beatGiven;
+    if (ovlGiven) delete s[BEAT_OVL];
+    else if (beatGiven) s[BEAT_OVL] = beatGiven;
+    patch.sky = s;
   }
   return {patch, sel};
 }
@@ -542,6 +593,19 @@ function pick(obj, filter) {
   return out;
 }
 
+/** Structural equality of store values (object key order ignored; undefined fields = absent). */
+function sameValue(a, b) {
+  if (a === b) return true;
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') {
+    return (a === null || a === undefined) && (b === null || b === undefined) ? true : Number.isNaN(a) && Number.isNaN(b);
+  }
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a)) return a.length === b.length && a.every((v, i) => sameValue(v, b[i]));
+  const ka = Object.keys(a).filter((k) => a[k] !== undefined);
+  const kb = Object.keys(b).filter((k) => b[k] !== undefined);
+  return ka.length === kb.length && ka.every((k) => Object.prototype.hasOwnProperty.call(b, k) && sameValue(a[k], b[k]));
+}
+
 /** Keys whose absence from the hash means "cleared" even without defaults. */
 const CLEAR_ON_ABSENT = {id: 'focus', lb: 'lightbox', view: 'layout'};
 
@@ -566,7 +630,9 @@ const QUIET_FOCUS_SOURCES = new Set(['broadcast']);
  *   defaults    store snapshot of page defaults; hash values equal to the defaults are omitted,
  *               keys absent from the hash restore the default on navigation, and values cleared
  *               relative to a default are written with the CLEARED marker
- *   applyInitial  apply the current location.hash on bind (default true)
+ *   applyInitial  apply the current location.hash on bind (default true). When false (the caller
+ *               applied it), a store that no longer holds what the hash gives (a write made
+ *               before binding) schedules a debounced write; otherwise the hash is left as is
  *   win         window-like object {location, history, addEventListener, removeEventListener,
  *               setTimeout, clearTimeout} (tests)
  *   debounceMs  default HASH_DEBOUNCE_MS
@@ -606,16 +672,23 @@ export function bindHash(store, opts = {}) {
   /** Pure: the hash string for the current state, and whether `sel` had to be left out. */
   function compute() {
     let selStr = '';
-    const obj = pick(stateToHash(store.snapshot(), {
+    const snap = store.snapshot();
+    const obj = pick(stateToHash(snap, {
       primaryDs,
       serializeSel: selection ? () => { selStr = selection.serialize() || ''; return selStr; } : undefined,
     }), filter);
     if (defaultsHash) {
+      // a view implied by the beat is left out, not cleared relative to a default view
+      const implied = skyImplied(snap);
       for (const k of Object.keys(defaultsHash)) {
-        if (k in obj || NO_CLEAR_KEYS.has(k) || k.endsWith('.frame')) continue;
+        if (k in obj || NO_CLEAR_KEYS.has(k) || k.endsWith('.frame') || (k === 'sky' && implied.view)) continue;
         obj[k] = k === 'c' ? 'none' : CLEARED;
       }
-      for (const k of Object.keys(obj)) if (defaultsHash[k] === obj[k]) delete obj[k];
+      // with a beat set, an explicit view / overlay set equal to the page default is still
+      // written: `beat=` alone would stand for the beat's own
+      const beatSet = typeof snap.beat === 'string' && snap.beat !== '';
+      const keepExplicit = (k) => beatSet && ((k === 'sky' && !implied.view) || (k === 'ovl' && !implied.ovl));
+      for (const k of Object.keys(obj)) if (defaultsHash[k] === obj[k] && !keepExplicit(k)) delete obj[k];
     }
     let str = formatHash(obj);
     let dropped = false;
@@ -700,8 +773,11 @@ export function bindHash(store, opts = {}) {
     if (defaultsHash) {
       for (const k of Object.keys(defaultsHash)) if (!(k in h)) absentDefaults[k] = defaultsHash[k];
     }
-    const fromDefaults = hashToPatch(absentDefaults, {primaryDs, state: Object.assign({}, snap, patch)}).patch;
-    for (const k of Object.keys(fromDefaults)) if (!(k in patch)) patch[k] = fromDefaults[k];
+    // the defaults are merged on top of the hash's patch (state below) without touching the beat
+    // markers, so `sky` from the defaults adds the default view / base / overlays the hash leaves
+    // out to the hash's own `sky` and keeps the parts the hash gives
+    const fromDefaults = hashToPatch(absentDefaults, {primaryDs, state: Object.assign({}, snap, patch), markers: false}).patch;
+    for (const k of Object.keys(fromDefaults)) if (!(k in patch) || k === 'sky') patch[k] = fromDefaults[k];
     // `ovl` absent (and no page default for it): the sky overlays return to the layout default,
     // i.e. the store holds no `overlays` list at all.
     if (filter('ovl') && !('ovl' in h) && !(defaultsHash && 'ovl' in defaultsHash)) {
@@ -745,9 +821,21 @@ export function bindHash(store, opts = {}) {
     }
   }
 
+  /**
+   * Bound after the hash was applied (applyInitial false): true when the store no longer holds
+   * what location.hash gives, i.e. a pane wrote a hash key before the binding existed (that
+   * write never reached the hash; e.g. the narrative replacing an unknown `beat=` id).
+   */
+  function divergedFromHash() {
+    const snap = store.snapshot();
+    const {patch} = hashToPatch(pick(parseHash(win.location.hash), filter), {primaryDs, state: snap});
+    return Object.keys(patch).some((k) => isHashStoreKey(k, primaryDs) && !sameValue(patch[k], snap[k]));
+  }
+
   win.addEventListener('hashchange', onNav);
   win.addEventListener('popstate', onNav);
   if (opts.applyInitial !== false) onNav();
+  else if (divergedFromHash()) timer = setT(() => { timer = null; write(false); }, debounceMs);
 
   const unbind = () => {
     off();
