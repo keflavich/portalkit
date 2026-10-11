@@ -282,3 +282,13 @@ starting.
     pages with the same resources `build._page_refs` attaches (one shared helper, not a hand-picked tuple).
 111. **HiPS attachment.** Pages with sky, skycat, fits or wavelength panes whose legacy caps include
     `hips_layer_stacking` carry a HiPS document; adapters attach one (the synthetic fixture does so by flag).
+112. **Pane first paint.** A pane's `data-state` stays `loading` until its first data-backed paint: layout sets
+    `ready` only after `mount()` resolves AND, when the handle exposes `firstPaint` (a Promise), after it settles
+    (bounded by the 30 s guard of note 100; a rejection marks `error`). Catalog readers expose it: list (first screen of
+    `client.rows()` drawn), table, gallery, scatter/manifold/hist (density grid or first points drawn). Panes whose data
+    arrives later by design (sky/wavelength markers, note 99; spectrum/detail with no focus) resolve it at mount. So
+    `app.afterFirstPaint()` releases deferred reads only after the first screen is on screen. After first paint the list
+    reads per-row values from the row records it already holds (hover columns, class colours); a whole column loads only
+    for sort, filter or colour-by, or at idle after a quiet period. `__pk.firstPaintAt()` returns a Promise of the
+    epoch-ms time `afterFirstPaint` resolved; DevServer `RequestRecord.t` is the epoch-ms time the response finished.
+    The Level 3 byte budget counts responses finished before `firstPaintAt`; bytes up to the quiet settle are reported.

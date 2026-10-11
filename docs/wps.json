@@ -873,5 +873,29 @@
    "tests/e2e/test_caps_matrix.py"
   ],
   "description": "Implement IMPLEMENTATION_NOTES 110. Add extinction_vectors_on_ccd -> 'extinction' to caps.NEEDS. Factor the resource-attachment rule of build._page_refs into one public helper (e.g. caps.attachable_resources(page, caps) or build.page_resources) that make_synthetic.resolve_page and test_caps_matrix._collect_pairs call instead of a hand-picked resources tuple. Wavelength/narrative overlay documents with a 'reddening' dim are listed in their pane's default overlays when the cap is on. The 3 failing caps-matrix cases test_capability[hist|wavelength|narrative-extinction_vectors_on_ccd] must pass (each either draws a vector or the cap is disabled with a reason), and test_parity_inventory must stay green."
+ },
+ {
+  "id": "WPD1",
+  "title": "Wave D: pane first-paint state, list deferred column reads, first-paint byte measurement",
+  "depends_on": [],
+  "files": [
+   "web/js/layout/layout.js",
+   "web/js/panes/list.js",
+   "web/js/panes/table.js",
+   "web/js/panes/gallery.js",
+   "web/js/panes/scatter.js",
+   "web/js/panes/manifold.js",
+   "web/js/panes/hist.js",
+   "web/js/core/testhooks.js",
+   "web/js/core/boot.js",
+   "portalkit/deploy/devserver.py",
+   "tests/perf/test_perf_budget.py",
+   "tests/conftest_browser.py",
+   "tests/js/listpanes.test.mjs",
+   "tests/js/layout.test.mjs",
+   "tests/py/test_devserver.py",
+   "docs/js.md"
+  ],
+  "description": "Implement IMPLEMENTATION_NOTES 112. Measured on the 1M synthetic explorer (WPB3 probe): the list pane reports data-state=ready when mount() resolves, before rows/r0000 is fetched, so app.afterFirstPaint() resolves with only app JS + manifest loaded (973 kB) and the deferred reads (cls c000+c001, good, f115w c000+c001 = 2.1 MB from pickHoverColumns/class colouring; pos dra+ddec 2.9 MB) race the first screen. Fix: (1) layout awaits handle.firstPaint before 'ready' (guarded); list/table/gallery/scatter/manifold/hist expose it; (2) list hover columns and class colours read from the rows it holds (row records carry exact values; quantized fallback rows carry them too), full-column values() only on sort/filter/colour-by or idle after a quiet period; (3) testhooks __pk.firstPaintAt(); DevServer RequestRecord.t; test_perf_budget counts bytes finished before firstPaintAt and also reports bytes to quiet settle; wait_panes_settled unchanged in meaning (now correct because panes hold loading). Prove with a 1M and 50k probe: report bytes before first paint, first-paint time, and the order of requests (r0000 must finish before any deferred column/pos read starts)."
  }
 ]
