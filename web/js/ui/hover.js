@@ -12,6 +12,7 @@
 import {T1_MAX} from '../core/constants.js';
 import {fmtQuant, fmtNum, fmtValue, MISSING} from '../core/fmt.js';
 import {sedPoints} from '../data/filters.js';
+import {itemUrl} from './lightbox.js';
 
 const SKIP_ROLES = new Set(['id', 'ra', 'dec', 'text', 'url', 'image', 'limit', 'error']);
 const ROLE_RANK = {category: 0, flag: 1, mag: 2, color: 3, flux: 4, value: 5};
@@ -276,7 +277,7 @@ export function install(app) {
         if (Number.isInteger(it.row)) byRow.set(it.row, k);
         if (it.id !== undefined) byId.set(String(it.id), k);
       });
-      // Item URLs resolve against the page URL (section 4.3).
+      // Item URLs resolve against the page URL (section 4.3, IMPLEMENTATION_NOTES 81).
       const base = typeof document !== 'undefined' ? document.baseURI : undefined;
       return {doc, items, byRow, byId, base};
     });
@@ -292,8 +293,8 @@ export function install(app) {
     const r = rk ? item.roles[rk] : null;
     if (!r) return null;
     const u = r.thumb || r.url;
-    if (!u) return null;
-    return new URL(app.hub.resolve(u), base).toString();
+    // Item URLs resolve against the page URL with {res}/{assets} substituted (IMPLEMENTATION_NOTES 81).
+    return itemUrl(u, page, base);
   }
 
   function addThumb(body, url, alt) {

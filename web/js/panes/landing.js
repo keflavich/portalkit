@@ -4,9 +4,14 @@
 // Cards for the portal's pages (portal.json `pages`, the current page left out) and related
 // portals (login-required badge for auth "secure"), with row counts read from the manifests
 // listed in portal.json `search` (option counts). A global search box (option search) looks
-// an id, alias or position up in every searchable catalog of the portal (DataClient.find,
-// clients opened on first use) and links each hit to its page with `#id=<id>`. Below the cards
-// the page readme and the provenance section are rendered (panes/readme.js).
+// an id, alias or position up in every searchable catalog of the portal (DataClient.find) and
+// links each hit to its page with `#id=<id>`. Below the cards the page readme and the provenance
+// section are rendered (panes/readme.js).
+//
+// Search workers (IMPLEMENTATION_NOTES 85): one DataClient per distinct search manifest URL,
+// opened lazily on the first keystroke in the search box (or on submit), never at mount. A
+// manifest that is one of this page's own catalog datasets reuses the page's client. Typing runs
+// a debounced search; Enter / the Search button runs it at once.
 
 import {fmtCount, plural} from '../core/fmt.js';
 import {fetchJSON, FetchError} from '../data/fetch.js';
@@ -17,6 +22,7 @@ import {renderReadme} from './readme.js';
 export const meta = {type: 'landing', caps: ['cross_page_nav', 'readme_provenance', 'source_list_search'], needs: []};
 
 const SEARCH_LIMIT = 20;
+const SEARCH_DEBOUNCE_MS = 300;
 const ARCHETYPE_LABELS = {
   explorer: 'Explorer', manifold: 'Manifold', gallery: 'Gallery', spectra: 'Spectra',
   wavelength: 'Wavelength tour', narrative: 'Story', landing: 'Overview',
@@ -72,6 +78,28 @@ export function sourceHref(pageHref, id) {
   return `${u}#id=${encodeURIComponent(String(id))}`;
 }
 
+/**
+ * Searchable entries of portal.json `search` grouped by resolved manifest URL:
+ * [{url, targets: [entry, ...]}] in first-seen order. Entries need `manifest` and `page`;
+ * manifests resolve against `base` (the portal.json URL). Unresolvable manifests are skipped.
+ */
+export function searchManifests(search, base) {
+  const groups = new Map();
+  for (const s of Array.isArray(search) ? search : []) {
+    if (!s || typeof s !== 'object' || !s.manifest || !s.page) continue;
+    let url;
+    try {
+      url = new URL(String(s.manifest), base || undefined).toString();
+    } catch (err) {
+      if (!(err instanceof TypeError)) throw err;
+      continue;
+    }
+    if (!groups.has(url)) groups.set(url, {url, targets: []});
+    groups.get(url).targets.push(s);
+  }
+  return Array.from(groups.values());
+}
+
 function el(tag, cls, text) {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
@@ -102,8 +130,10 @@ export function mount(root, ctx) {
 
   let destroyed = false;
   let portal = null;
-  const opened = new Map();     // search entry key -> Promise<DataClient>
+  const opened = new Map();     // manifest URL -> Promise<{client, mine}>
+  const failedOpen = new Set(); // manifest URLs whose open failed (reopened only on submit)
   let searchSeq = 0;
+  let searchTimer = 0;
 
   function report(err) {
     if (!(err instanceof Error)) throw err;
@@ -185,28 +215,50 @@ export function mount(root, ctx) {
 
   // ------------------------------------------------------------------ global search
 
-  function searchTargets() {
-    return portal && Array.isArray(portal.search) ? portal.search.filter((s) => s && s.manifest && s.page) : [];
+  function searchGroups() {
+    return portal ? searchManifests(portal.search, portal._url) : [];
   }
 
-  function clientFor(s) {
-    const key = `${s.page}\u0000${s.ds}\u0000${s.manifest}`;
-    if (opened.has(key)) return opened.get(key);
-    const url = new URL(s.manifest, portal._url).toString();
+  /**
+   * Client for one manifest URL, opened on first use (one worker per manifest). A failed open
+   * stays cached for the life of the pane, so typing does not start a new worker per keystroke;
+   * `retry` (an explicit submit) opens a failed manifest again.
+   */
+  function clientFor(url, {retry = false} = {}) {
+    if (retry && failedOpen.has(url)) {
+      failedOpen.delete(url);
+      opened.delete(url);
+    }
+    if (opened.has(url)) return opened.get(url);
     // Reuse this page's own client when the manifest is one of its datasets.
     const own = Object.entries(page.datasets || {}).find(([, r]) => r && r.kind === 'catalog'
       && new URL(app.hub && app.hub.resolve ? app.hub.resolve(r.url) : r.url, document.baseURI).toString() === url);
     const p = own ? app.catalog(own[0]).then((c) => ({client: c, mine: false}))
       : DataClient.open(url).then((c) => ({client: c, mine: true}));
-    p.catch(() => opened.delete(key));
-    opened.set(key, p);
+    p.then(null, (err) => {
+      if (!(err instanceof Error)) throw err;
+      if (opened.get(url) === p) failedOpen.add(url);
+    });
+    opened.set(url, p);
     return p;
+  }
+
+  /**
+   * Open every search manifest's client (first keystroke, or submit with `retry` to reopen the
+   * failed ones); failures surface in the search.
+   */
+  function warm(retry = false) {
+    for (const g of searchGroups()) {
+      clientFor(g.url, {retry}).then(null, (err) => {
+        if (!(err instanceof Error)) throw err;
+      });
+    }
   }
 
   function renderSearch() {
     searchBox.textContent = '';
-    const targets = searchTargets();
-    if (!searchOn || !targets.length) {
+    const groups0 = searchGroups();
+    if (!searchOn || !groups0.length) {
       searchBox.hidden = true;
       return;
     }
@@ -232,18 +284,20 @@ export function mount(root, ctx) {
       out.textContent = '';
       if (!q) return;
       out.append(el('p', 'pk-muted', 'Searching…'));
-      const groups = await Promise.all(targets.map(async (s) => {
+      // One find per manifest; entries sharing a manifest (several pages) share its hits.
+      const perManifest = await Promise.all(searchGroups().map(async (mg) => {
         try {
-          const {client} = await clientFor(s);
+          const {client} = await clientFor(mg.url);
           const idx = await client.find(q, {limit: SEARCH_LIMIT});
           const ids = await Promise.all(Array.from(idx || []).slice(0, SEARCH_LIMIT).map((i) => client.id(i)));
-          return {s, ids, error: null};
+          return mg.targets.map((s) => ({s, ids, error: null}));
         } catch (err) {
           if (!(err instanceof Error)) throw err;
-          if (err.name === 'AbortError') return {s, ids: [], error: null};
-          return {s, ids: [], error: err};
+          if (err.name === 'AbortError') return mg.targets.map((s) => ({s, ids: [], error: null}));
+          return mg.targets.map((s) => ({s, ids: [], error: err}));
         }
       }));
+      const groups = perManifest.flat();
       if (my !== searchSeq || destroyed) return;
       out.textContent = '';
       let total = 0;
@@ -279,7 +333,16 @@ export function mount(root, ctx) {
     };
     form.addEventListener('submit', (ev) => {
       ev.preventDefault();
+      clearTimeout(searchTimer);
+      warm(true);
       run().catch(report);
+    });
+    // Workers start on the first keystroke, not at mount (note 85). Later input reuses them
+    // (a paste without a keydown opens them through run()).
+    input.addEventListener('keydown', () => warm(), {once: true});
+    input.addEventListener('input', () => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => { run().catch(report); }, SEARCH_DEBOUNCE_MS);
     });
   }
 
@@ -302,6 +365,7 @@ export function mount(root, ctx) {
     resize() {},
     destroy() {
       destroyed = true;
+      clearTimeout(searchTimer);
       for (const p of opened.values()) {
         p.then(({client, mine}) => { if (mine) client.terminate(); }, (err) => {
           // A failed open was already reported by the search that triggered it.
@@ -309,6 +373,10 @@ export function mount(root, ctx) {
         });
       }
       opened.clear();
+      failedOpen.clear();
+    },
+    stats() {
+      return {searchClients: opened.size};
     },
   };
 }

@@ -18,7 +18,7 @@ import {placeCard, pickHoverColumns, hoverValueText} from '../../web/js/ui/hover
 import {parseCSV} from '../../web/js/workers/ops/export.js';
 import {createStore} from '../../web/js/core/store.js';
 import {stepIndex} from '../../web/js/ui/lightbox.js';
-import {parseSort, sortIndices} from '../../web/js/panes/list.js';
+import {parseSort} from '../../web/js/panes/list.js';
 import {barFraction, buildSections, propertyText, substituteLink, TEMPLATES} from '../../web/js/panes/detail.js';
 import {
   facetCounts, filterItems, gridGeometry, parseSortKey, passesFacets, roleFor, tagValues,
@@ -464,39 +464,6 @@ test('parseSort: strings, signs, arrays, objects and empty values', () => {
   assert.equal(parseSort([]), null);
 });
 
-test('sortIndices: NaN last in both directions, ties keep stored order, infinities', () => {
-  const vals = Float32Array.from([3, NaN, 1, Infinity, -Infinity, 1, NaN]);
-  const asc = sortIndices(Int32Array.from([0, 1, 2, 3, 4, 5, 6]), vals, 1);
-  assert.deepEqual(Array.from(asc), [4, 2, 5, 0, 3, 1, 6]);
-  const desc = sortIndices(Int32Array.from([0, 1, 2, 3, 4, 5, 6]), vals, -1);
-  assert.deepEqual(Array.from(desc), [3, 0, 2, 5, 4, 1, 6]);
-  assert.deepEqual(Array.from(sortIndices(new Int32Array(0), vals)), []);
-  assert.deepEqual(Array.from(sortIndices(Int32Array.from([1]), vals)), [1]);
-});
-
-test('sortIndices: 50k rows stay a permutation in order', () => {
-  const n = 50000;
-  const vals = new Float32Array(n);
-  for (let i = 0; i < n; i++) vals[i] = i % 97 === 0 ? NaN : ((i * 7919) % 10007) / 3;
-  const idx = new Int32Array(n);
-  for (let i = 0; i < n; i++) idx[i] = i;
-  sortIndices(idx, vals);
-  const seen = new Uint8Array(n);
-  let prev = -Infinity;
-  let nanStarted = false;
-  for (const i of idx) {
-    seen[i] = 1;
-    const v = vals[i];
-    if (Number.isNaN(v)) nanStarted = true;
-    else {
-      assert.equal(nanStarted, false);
-      assert.ok(v >= prev);
-      prev = v;
-    }
-  }
-  assert.equal(seen.reduce((a, b) => a + b, 0), n);
-});
-
 // ------------------------------------------------------------------ detail
 
 const MAN = {
@@ -690,35 +657,6 @@ test('sourceHref: replaces any existing hash and encodes the id', () => {
 });
 
 // ------------------------------------------------------------------ review fixes
-
-test('sortIndices: radix sort matches a comparator reference (dups, negatives, -0, inf, NaN)', () => {
-  const n = 20000;
-  let seed = 12345;
-  const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
-  const vals = new Float64Array(n);
-  for (let i = 0; i < n; i++) {
-    const r = rnd();
-    vals[i] = r < 0.05 ? NaN : r < 0.07 ? -0 : r < 0.08 ? 0 : r < 0.085 ? Infinity : r < 0.09 ? -Infinity
-      : r < 0.3 ? Math.round((rnd() - 0.5) * 20) : (rnd() - 0.5) * 1e6 * Math.pow(10, Math.round(rnd() * 20 - 10));
-  }
-  for (const dir of [1, -1]) {
-    const ref = Array.from({length: n}, (_, i) => i).sort((a, b) => {
-      const va = vals[a], vb = vals[b];
-      const na = va !== va, nb = vb !== vb;
-      if (na || nb) return na === nb ? a - b : na ? 1 : -1;
-      if (va < vb) return -dir;
-      if (va > vb) return dir;
-      return a - b;
-    });
-    const idx = Int32Array.from({length: n}, (_, i) => i);
-    sortIndices(idx, vals, dir);
-    assert.deepEqual(Array.from(idx), ref);
-  }
-  // A subset of rows (filtered list) is sorted in place.
-  const sub = Int32Array.from([9, 3, 7, 1]);
-  sortIndices(sub, Float32Array.from([0, 5, 0, 2, 0, 0, 0, 2, 0, 1]), 1);
-  assert.deepEqual(Array.from(sub), [9, 3, 7, 1]);
-});
 
 test('parseImportText: one-column list with an id header, headerless multi-column lines', () => {
   const a = parseImportText('id\nA\nB');

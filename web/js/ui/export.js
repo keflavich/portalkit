@@ -320,6 +320,27 @@ export function importSummary(res, total) {
   return parts.join('; ');
 }
 
+/**
+ * Dialog status line and toast level for an import outcome: an app.importCsv result
+ * ({summary, missing, skipped, ...}, IMPLEMENTATION_NOTES 93) or {res, total, skipped} from
+ * resolveImport. Returns {text, level: 'info'|'warn'}.
+ */
+export function importResultText(out) {
+  if (!out || typeof out !== 'object') return {text: '', level: 'info'};
+  let text, missing;
+  if (out.res && Array.isArray(out.res.matched)) {
+    text = importSummary(out.res, out.total ?? out.res.matched.length + out.res.missing.length);
+    missing = out.res.missing.length;
+  } else {
+    missing = Number.isFinite(+out.missing) ? +out.missing : 0;
+    text = typeof out.summary === 'string' && out.summary ? out.summary
+      : `Matched ${fmtCount(+out.matched || 0)} of ${plural(+out.entries || 0, 'entry', 'entries')}`;
+  }
+  const skipped = Number.isFinite(+out.skipped) ? +out.skipped : 0;
+  if (skipped > 0) text += `; ${plural(skipped, 'unreadable line', 'unreadable lines')}`;
+  return {text, level: missing ? 'warn' : 'info'};
+}
+
 /** File name for an export: <base>_<scope>.<ext>, keeping letters and digits of any script. */
 export function exportFileName(base, format, scope) {
   const f = EXPORT_FORMATS.find((x) => x.key === format) || EXPORT_FORMATS[0];
@@ -604,17 +625,25 @@ export async function openImportDialog(app, ds) {
     go.disabled = true;
     status.textContent = `Matching ${plural(parsed.entries.length, 'entry', 'entries')}…`;
     const r = Number(radIn.value);
-    resolveImport(parsed.entries, {
-      n: client.n,
-      radiusArcsec: Number.isFinite(r) && r > 0 ? r : IMPORT_RADIUS_ARCSEC,
-      resolveIds: (ids) => app.resolveIds(ds, ids),
-      crossmatch: client.manifest.pos ? (ra, dec, rad) => client.crossmatch(ra, dec, rad) : null,
-    }).then((res) => {
-      const op = opSel.value;
-      sel.setIndices(Array.from(res.indices), op);
-      const text = importSummary(res, parsed.entries.length);
-      status.textContent = text + (parsed.skipped ? `; ${plural(parsed.skipped, 'unreadable line', 'unreadable lines')}` : '');
-      toast(app, res.missing.length ? 'warn' : 'info', text.length > 160 ? text.slice(0, 157) + '…' : text);
+    const radiusArcsec = Number.isFinite(r) && r > 0 ? r : IMPORT_RADIUS_ARCSEC;
+    const op = opSel.value;
+    // app.importCsv is the runtime entry (IMPLEMENTATION_NOTES 93); the local path serves hosts
+    // without it.
+    const job = typeof app.importCsv === 'function'
+      ? app.importCsv(ta.value, {mode: op, ds, radiusArcsec})
+      : resolveImport(parsed.entries, {
+        n: client.n,
+        radiusArcsec,
+        resolveIds: (ids) => app.resolveIds(ds, ids),
+        crossmatch: client.manifest.pos ? (ra, dec, rad) => client.crossmatch(ra, dec, rad) : null,
+      }).then((res) => {
+        sel.setIndices(Array.from(res.indices), op);
+        return {res, total: parsed.entries.length, skipped: parsed.skipped};
+      });
+    job.then((out) => {
+      const {text, level} = importResultText(out);
+      status.textContent = text;
+      toast(app, level, text.length > 160 ? text.slice(0, 157) + '…' : text);
     }, (err) => {
       status.textContent = '';
       reportError(app, 'Import', err);

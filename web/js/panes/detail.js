@@ -10,10 +10,15 @@
 // `rows`; otherwise the quantized values are shown with step-aware digits and a ±step/2 tooltip.
 // Clicking a numeric property (clickToAxis) puts it on the Y axis of the first scatter pane on
 // this dataset; Shift-click sets X and Alt-click sets the colour column.
+//
+// URLs (IMPLEMENTATION_NOTES 81): figure URLs from images.json resolve against the page URL;
+// product links resolve against the products records index URL; both substitute {res}/{assets}.
+// Rows are read on the record channel `detail:<pane id>` (note 73), so another pane's record
+// request does not cancel this one.
 
 import {fmtBytes, fmtDec, fmtNum, fmtQuant, fmtRA, fmtValue, MISSING} from '../core/fmt.js';
 import {carryTo, loginBadge} from '../ui/nav.js';
-import {openLightbox, registerSet} from '../ui/lightbox.js';
+import {itemUrl, openLightbox, productUrl, registerSet} from '../ui/lightbox.js';
 
 export const meta = {type: 'detail', caps: ['detail_panel', 'static_sed_png'], needs: ['catalog']};
 
@@ -162,11 +167,6 @@ function el(tag, cls, text) {
   return e;
 }
 
-function absUrl(hub, url) {
-  const u = hub && typeof hub.resolve === 'function' ? hub.resolve(url) : url;
-  return new URL(String(u), document.baseURI).toString();
-}
-
 function isPortalRelative(href) {
   const u = new URL(href, document.baseURI);
   return u.origin === location.origin && !/^[a-z][a-z0-9+.-]*:/i.test(String(href).trim());
@@ -272,10 +272,11 @@ export function mount(root, ctx) {
     for (const it of items) {
       for (const [role, img] of Object.entries(it.roles || {})) {
         if (!img || !img.url) continue;
-        const src = absUrl(hub, img.url);
+        const src = itemUrl(img.url, app.page);
+        if (!src) continue;
         out.push({
           src,
-          thumb: img.thumb ? absUrl(hub, img.thumb) : src,
+          thumb: (img.thumb && itemUrl(img.thumb, app.page)) || src,
           w: img.w, h: img.h,
           title: roleLabel.get(role) || role,
           caption: it.caption || String(it.id ?? id),
@@ -501,10 +502,12 @@ export function mount(root, ctx) {
     box.append(el('h4', 'pk-detail-subtitle', 'Products'));
     const ul = el('ul', 'pk-products');
     for (const it of items) {
-      if (!it || !it.url) continue;
+      if (!it || typeof it.url !== 'string' || !it.url) continue;
+      const href = productUrl(it.url, rs.url || ref.url, app.page);
+      if (!href) continue;
       const li = el('li', 'pk-product');
       const a = el('a', 'pk-product-link', it.label || it.url.split('/').pop());
-      a.href = rs.resolve ? rs.resolve(it.url) : absUrl(hub, it.url);
+      a.href = href;
       a.target = '_blank';
       a.rel = 'noopener';
       if (it.kind === 'fits') a.setAttribute('download', '');
@@ -558,7 +561,7 @@ export function mount(root, ctx) {
     // already discards superseded responses.
     let row;
     try {
-      row = await client.record(i);
+      row = await client.record(i, {channel: `detail:${ctx.id}`});
     } catch (err) {
       if (my === token) wanted = -1;
       throw err;

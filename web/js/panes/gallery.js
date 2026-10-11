@@ -12,35 +12,23 @@
 // Double-click or Enter opens the lightbox over the filtered, sorted set. Annotate mode
 // (option `annotate`) stores per-viewer codes (default y/n/g/w/l/e) in localStorage through
 // ui/annotate.js and exports them as CSV with the checklist key columns; nothing is written to
-// the server. Collapsed companion panes (sky, scatter, detail) are opened from the mini-pane
-// buttons through the layout API.
+// the server (`annotate: true` uses the default codes and key). Collapsed companion panes (sky,
+// scatter, detail) are opened from the mini-pane buttons through the layout API.
+//
+// Sorting (IMPLEMENTATION_NOTES 74): a sort key naming a column of the joined catalog (and
+// `id` when the set is joined) is ordered by the worker through DataClient.order(key, dir);
+// the items follow the rank of their catalog row, items without a row go last. Tag, caption
+// and unjoined id sorts run locally over the items. Item image URLs resolve against the page
+// URL (note 81); category colours come from ui/legend.js (note 76).
 
 import {fmtCount, plural} from '../core/fmt.js';
 import {MOBILE_BREAK_PX} from '../core/constants.js';
-import {openLightbox, refreshSet, registerSet} from '../ui/lightbox.js';
+import {itemUrl, openLightbox, refreshSet, registerSet} from '../ui/lightbox.js';
 import {
   annotationsFor, checklistFields, codeForKey, CODE_LABELS, downloadAnnotations,
 } from '../ui/annotate.js';
 import {mountSelectionTools} from '../ui/export.js';
-
-// Category colouring helpers. These mirror ui/legend.js (WP08) and are kept local so this pane
-// does not depend on exports outside the contract.
-const FALLBACK_CAT = ['#3b82c4', '#e0812f', '#3f9b4a', '#c8463d', '#8a64b5', '#8c5a48', '#d36fb0', '#7b818a', '#b1b235', '#2fb3c4'];
-
-/** True when a column meta describes a category column with levels. */
-function isCategory(meta) {
-  if (!meta) return false;
-  if (!(meta.role === 'category' || meta.enc === 'cat8' || meta.enc === 'cat16')) return false;
-  return Array.isArray(meta.levels) && meta.levels.length > 0;
-}
-
-/** CSS colour per level: manifest colors{level: hex}, else the theme category palette. */
-function levelColors(meta, tokens) {
-  const levels = (meta && meta.levels) || [];
-  const pal = (tokens && Array.isArray(tokens.cat) && tokens.cat.some(Boolean)) ? tokens.cat : FALLBACK_CAT;
-  const named = (meta && meta.colors) || {};
-  return levels.map((lv, i) => named[lv] || pal[i % pal.length] || FALLBACK_CAT[i % FALLBACK_CAT.length]);
-}
+import {isCategory, plotLevelColors} from '../ui/legend.js';
 
 export const meta = {
   type: 'gallery',
@@ -54,6 +42,7 @@ const CAPTION_H = 46;
 const MIN_CARD = 96;
 const MAX_CARD = 640;
 const MINI_TYPES = ['sky', 'scatter', 'detail', 'sed', 'spectrum1d', 'list'];
+const RANK_CACHE = 2;
 
 // ------------------------------------------------------------------ pure helpers
 
@@ -152,6 +141,58 @@ export function filterItems(items, {facets = {}, text = '', sort = null, pass = 
   return out;
 }
 
+/**
+ * Rank of every row in a DataClient.order permutation: rank[row] = position (Int32Array of
+ * length n, -1 for rows the permutation does not list). Entries outside [0, n) are ignored.
+ */
+export function rankOf(order, n) {
+  const N = Number.isInteger(n) && n > 0 ? n : 0;
+  const rank = new Int32Array(N).fill(-1);
+  const m = order ? order.length : 0;
+  for (let p = 0; p < m; p++) {
+    const r = order[p];
+    if (r >= 0 && r < N && rank[r] < 0) rank[r] = p;
+  }
+  return rank;
+}
+
+/**
+ * Item indices `idx` reordered by the rank of their catalog row (items[k].row): ranked items
+ * first in rank order, then items without a row or rank in their current order (stable).
+ */
+export function orderByRank(idx, items, rank) {
+  const ranked = [];
+  const rest = [];
+  for (const k of idx) {
+    const it = items[k];
+    const r = it && Number.isInteger(it.row) ? it.row : -1;
+    const q = r >= 0 && rank && r < rank.length ? rank[r] : -1;
+    if (q >= 0) ranked.push([q, k]);
+    else rest.push(k);
+  }
+  ranked.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  return ranked.map((x) => x[1]).concat(rest);
+}
+
+/**
+ * Key to pass to DataClient.order for a gallery sort key, or null for a local sort: tag keys
+ * (facets or item tags) and `caption` sort locally; `id` and catalog columns use the joined
+ * catalog when there is one (`col(key)` is the catalog's column lookup).
+ */
+export function catalogSortKey(key, {joined = false, col = null, tagKeys = null} = {}) {
+  if (!joined || !key) return null;
+  if (key === 'caption') return null;
+  if (tagKeys && tagKeys.has(key)) return null;
+  if (key === 'id' || key === '__id') return '__id';   // the item / catalog id ('__id' is id-only)
+  return typeof col === 'function' && col(key) ? key : null;
+}
+
+/** Gallery `annotate` option -> {codes?, key?} | null (`true` means the defaults). */
+export function annotateOptions(opt) {
+  if (opt === true) return {};
+  return opt && typeof opt === 'object' && !Array.isArray(opt) ? opt : null;
+}
+
 /** Grid geometry for a width: {cols, cardW, imgH, rowH}. */
 export function gridGeometry(width, cardSize) {
   const size = Math.max(MIN_CARD, Math.min(MAX_CARD, Number.isFinite(+cardSize) && +cardSize > 0 ? +cardSize : 220));
@@ -188,7 +229,7 @@ export function mount(root, ctx) {
   const imgDs = cfg.images || ctx.dataset;
   const ref = datasets[imgDs];
   const setId = ctx.id;
-  const annotCfg = cfg.annotate && typeof cfg.annotate === 'object' ? cfg.annotate : null;
+  const annotCfg = annotateOptions(cfg.annotate);
   const sortKeys = Array.isArray(cfg.sort) ? cfg.sort.map(parseSortKey).filter(Boolean) : [];
 
   root.classList.add('pk-gallery');
@@ -239,6 +280,9 @@ export function mount(root, ctx) {
   let colorVals = null;           // catalog level indices for color.by (category columns)
   let colorPal = null;
   let offTools = null;
+  let tagKeys = new Set();        // facet and item tag keys (sorted locally)
+  const ranks = new Map();        // `${key}\u0000${dir}` -> Int32Array | Promise (pending)
+  let failedNow = null;           // sort key whose request just failed, during its one recompute
 
   // ------------------------------------------------------------------ helpers
 
@@ -254,7 +298,7 @@ export function mount(root, ctx) {
 
   function urlOf(u) {
     // Item URLs resolve against the page URL (section 4.3), with {res}/{assets} substituted.
-    return u ? new URL(hub.resolve(u), document.baseURI).toString() : null;
+    return itemUrl(u, app.page);
   }
 
   function imageOf(item, full = false) {
@@ -494,7 +538,12 @@ export function mount(root, ctx) {
     const r = it ? rowOfItem(ks[0]) : -1;
     if (client && r >= 0) {
       if (!catRows) catRows = new Map();
-      if (!catRows.has(r)) catRows.set(r, await client.record(r));
+      // An untokened default-channel read: never superseded, never cancels another pane's read
+      // (note 73). A null row is not cached.
+      if (!catRows.has(r)) {
+        const got = await client.record(r);
+        if (got) catRows.set(r, got);
+      }
       const row = catRows.get(r);
       if (row) sources.push(row);
     }
@@ -576,10 +625,70 @@ export function mount(root, ctx) {
 
   // ------------------------------------------------------------------ order + grid
 
+  /**
+   * Row ranks of the worker sort for (key, dir): the Int32Array when ready, 'failed' while the
+   * recompute that follows a failed request runs, else null (the request is started and
+   * recompute() runs again when it lands). A failed request is dropped from the cache, so the
+   * next sort or recompute asks the worker again (as list.js does).
+   */
+  function rankFor(key, dir) {
+    const ck = `${key}\u0000${dir}`;
+    if (failedNow === ck) return 'failed';
+    const have = ranks.get(ck);
+    if (have instanceof Int32Array) {
+      ranks.delete(ck);
+      ranks.set(ck, have);
+      return have;
+    }
+    if (have) return null;
+    if (!client || typeof client.order !== 'function') return 'failed';
+    let failed = false;
+    const p = Promise.resolve(client.order(key, dir)).then((o) => {
+      const arr = o instanceof Int32Array ? o : Int32Array.from(o && (o.order || o.idx) ? (o.order || o.idx) : (o || []));
+      ranks.set(ck, rankOf(arr, client.n));
+      while (ranks.size > RANK_CACHE) ranks.delete(ranks.keys().next().value);
+    }, (err) => {
+      if (!(err instanceof Error)) throw err;
+      failed = true;
+      if (ranks.get(ck) === p) ranks.delete(ck);
+      if (err.name !== 'AbortError') {
+        console.warn(`gallery ${ctx.id}: sort by ${key}`, err);
+        store.emit('toast', {level: 'warn', text: `Sorting by ${key} failed: ${err.message}`});
+      }
+    }).then(() => {
+      if (destroyed || !sort || !sort.key || `${catalogSortKey(sort.key, sortCtx())}\u0000${sort.dir < 0 ? -1 : 1}` !== ck) return;
+      // After a failure this one recompute shows the local order without asking again.
+      failedNow = failed ? ck : null;
+      try {
+        recompute();
+      } finally {
+        failedNow = null;
+      }
+    });
+    ranks.set(ck, p);
+    return null;
+  }
+
+  function sortCtx() {
+    return {joined: !!(catDs && client), col: client ? (k) => client.col(k) : null, tagKeys};
+  }
+
+  function displayOrder() {
+    const pass = vis ? passVis : null;
+    // The local sort also orders the items the worker sort cannot rank (no catalog row).
+    const list = filterItems(items, {facets: facets(), text, sort, pass});
+    const ck = sort && sort.key ? catalogSortKey(sort.key, sortCtx()) : null;
+    if (!ck) return {list, pending: false};
+    const rank = rankFor(ck, sort.dir < 0 ? -1 : 1);
+    if (rank === 'failed') return {list, pending: false};
+    return rank ? {list: orderByRank(list, items, rank), pending: false} : {list, pending: true};
+  }
+
   function recompute() {
     if (!doc) return;
     const keepId = focusPos >= 0 && focusPos < order.length ? order[focusPos] : -1;
-    order = filterItems(items, {facets: facets(), text, sort, pass: vis ? passVis : null});
+    const shown = displayOrder();
+    order = shown.list;
     posOf = new Map(order.map((k, p) => [k, p]));
     focusPos = keepId >= 0 && posOf.has(keepId) ? posOf.get(keepId) : -1;
     const parts = [order.length === items.length ? plural(items.length, 'image') : `${fmtCount(order.length)} of ${plural(items.length, 'image')}`];
@@ -592,7 +701,8 @@ export function mount(root, ctx) {
     renderPresets();
     layoutGrid();
     refreshSet(setId);
-    ctx.setStatus(order.length === items.length ? '' : `${fmtCount(order.length)} shown`);
+    if (shown.pending) ctx.setStatus('sorting…');
+    else ctx.setStatus(order.length === items.length ? '' : `${fmtCount(order.length)} shown`);
   }
 
   function layoutGrid() {
@@ -919,6 +1029,8 @@ export function mount(root, ctx) {
       doc = await hub.json(imgDs);
       if (destroyed) return;
       items = Array.isArray(doc && doc.items) ? doc.items : [];
+      tagKeys = new Set(((doc && doc.facets) || []).map((f) => f && f.key).filter(Boolean));
+      for (const it of items) if (it && it.tags) for (const k of Object.keys(it.tags)) tagKeys.add(k);
       rowToItems = new Map();
       idToItems = new Map();
       items.forEach((it, k) => {
@@ -985,7 +1097,7 @@ export function mount(root, ctx) {
           const m = cc && cc.by ? client.col(cc.by) : null;
           if (isCategory(m)) {
             colorVals = await client.values(cc.by);
-            colorPal = levelColors(m, ctx.theme ? ctx.theme() : null);
+            colorPal = plotLevelColors(m, ctx.theme ? ctx.theme() : null);
           } else {
             colorVals = null;
             colorPal = null;

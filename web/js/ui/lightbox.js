@@ -49,6 +49,63 @@ export function openLightbox(store, set, index, source = 'lightbox') {
   store.set({lightbox: {set: set === null || set === undefined ? null : String(set), index: Math.max(0, index | 0)}}, {source, history: true});
 }
 
+// ---------------------------------------------------------------------------- image URLs
+//
+// IMPLEMENTATION_NOTES 81: images.json item URLs (roles[role].url / .thumb) resolve against the
+// page URL (section 4.3) after `{res}` / `{assets}` substitution; per-source product links of a
+// products record set resolve against that set's index URL. Both helpers are pure: `base` is the
+// page URL (document.baseURI in the browser) and `indexUrl` the absolute records index URL.
+
+/** Replace `{assets}` and `{res}` in `url` with page.assets / page.res (when set). */
+export function substituteRefs(url, page) {
+  let s = String(url);
+  if (page && typeof page.assets === 'string') s = s.split('{assets}').join(page.assets);
+  if (page && typeof page.res === 'string') s = s.split('{res}').join(page.res);
+  return s;
+}
+
+function pageBase() {
+  if (typeof document !== 'undefined' && document.baseURI) return document.baseURI;
+  if (typeof location !== 'undefined' && location.href) return location.href;
+  return undefined;
+}
+
+function resolveAgainst(url, base) {
+  try {
+    return new URL(url, base).toString();
+  } catch (err) {
+    if (err instanceof TypeError) return null;   // invalid URL, or relative without a base
+    throw err;
+  }
+}
+
+/**
+ * Absolute URL of an images.json item URL: `{res}`/`{assets}` substituted, then resolved
+ * against the page URL `base` (default document.baseURI). Absolute URLs pass through.
+ * Returns null for empty, non-string or unresolvable input.
+ */
+export function itemUrl(url, page = null, base = pageBase()) {
+  if (typeof url !== 'string' || !url.trim()) return null;
+  return resolveAgainst(substituteRefs(url.trim(), page), base ?? undefined);
+}
+
+/**
+ * Absolute URL of a product link of a records set. A link containing `{res}`/`{assets}` is
+ * substituted and resolved against the page URL `base`; any other relative link resolves against
+ * the records index URL `indexUrl` (itself resolved against the page URL when relative).
+ * Returns null for empty or unresolvable input.
+ */
+export function productUrl(url, indexUrl, page = null, base = pageBase()) {
+  if (typeof url !== 'string' || !url.trim()) return null;
+  const raw = url.trim();
+  const s = substituteRefs(raw, page);
+  // page.res / page.assets are page-relative (e.g. './res/'), so a link built from them resolves
+  // against the page like an images.json item URL; plain relative paths use the index URL.
+  if (s !== raw) return resolveAgainst(s, base ?? undefined);
+  const idx = indexUrl ? resolveAgainst(substituteRefs(String(indexUrl), page), base ?? undefined) : null;
+  return resolveAgainst(s, idx || (base ?? undefined));
+}
+
 /** Index after a step of `dir` in a list of `count` (wraps around); -1 for an empty list. */
 export function stepIndex(index, dir, count) {
   if (!(count > 0)) return -1;

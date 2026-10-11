@@ -2,9 +2,15 @@
 //
 // A virtualized list for any N: only the visible rows exist in the DOM, and very tall lists
 // map the scroll position onto rows proportionally so the browser's element height limit is
-// never reached. Rows follow the filtered (vis:<ds>) order, optionally sorted by a column
-// (NaN last), restricted to the selection ("selection only") or to search results from
-// DataClient.find (id, alias, case-insensitive, prefix, substring, coordinates).
+// never reached. Rows follow the filtered (vis:<ds>) order, optionally sorted by a column or
+// the id (missing values last), restricted to the selection ("selection only") or to search
+// results from DataClient.find (id, alias, case-insensitive, prefix, substring, coordinates).
+//
+// Sorting (IMPLEMENTATION_NOTES 74) runs in the data worker: DataClient.order(key, dir) returns
+// an argsort of every row (key '__id' sorts the catalog ids), and the list keeps the rows of that
+// permutation that pass the filters, the selection-only switch and the search. The main thread
+// never sorts. Category colours come from ui/legend.js plotLevelColors (note 76), so rows match
+// the plotted points for every level.
 //
 // Store: writes focus {ds, i, id} and hover {ds, i}; reads sel:<ds>, vis:<ds>, filters:<ds>
 // and focus. Handles the `nav:step` offer, so arrow keys walk the filtered, sorted order.
@@ -13,25 +19,7 @@
 import {fmtCount, fmtQuant, fmtValue, MISSING} from '../core/fmt.js';
 import {pickHoverColumns} from '../ui/hover.js';
 import {mountSelectionTools} from '../ui/export.js';
-
-// Category colouring helpers. These mirror ui/legend.js (WP08) and are kept local so this pane
-// does not depend on exports outside the contract.
-const FALLBACK_CAT = ['#3b82c4', '#e0812f', '#3f9b4a', '#c8463d', '#8a64b5', '#8c5a48', '#d36fb0', '#7b818a', '#b1b235', '#2fb3c4'];
-
-/** True when a column meta describes a category column with levels. */
-function isCategory(meta) {
-  if (!meta) return false;
-  if (!(meta.role === 'category' || meta.enc === 'cat8' || meta.enc === 'cat16')) return false;
-  return Array.isArray(meta.levels) && meta.levels.length > 0;
-}
-
-/** CSS colour per level: manifest colors{level: hex}, else the theme category palette. */
-function levelColors(meta, tokens) {
-  const levels = (meta && meta.levels) || [];
-  const pal = (tokens && Array.isArray(tokens.cat) && tokens.cat.some(Boolean)) ? tokens.cat : FALLBACK_CAT;
-  const named = (meta && meta.colors) || {};
-  return levels.map((lv, i) => named[lv] || pal[i % pal.length] || FALLBACK_CAT[i % FALLBACK_CAT.length]);
-}
+import {isCategory, plotLevelColors} from '../ui/legend.js';
 
 export const meta = {
   type: 'list',
@@ -41,9 +29,10 @@ export const meta = {
 
 const MAX_SCROLL_PX = 4000000;   // below every browser's element height limit
 const SEARCH_LIMIT = 5000;
-const SORT_MAX = 2000000;
-const ID_SORT_MAX = 500000;
 const DEFAULT_ROW_H = 24;
+const ORDER_CACHE = 2;           // worker argsorts kept on the main thread (key + dir)
+/** Header key of the id column (a catalog column may itself be called "id"). */
+export const ID_SORT = '__id';
 
 /** Parse the `sort` option: "key", "-key", {key, dir} or [key, dir] -> {key, dir: 1|-1} | null. */
 export function parseSort(s) {
@@ -60,69 +49,72 @@ export function parseSort(s) {
   return null;
 }
 
-const LITTLE_ENDIAN = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1;
+/**
+ * Sort spec with the id sort spelled ID_SORT: a key `id` (or `__id`) means the catalog id unless
+ * the catalog has a column of that name (`hasCol(key)` true).
+ */
+export function normalizeSortSpec(spec, hasCol = () => false) {
+  if (!spec || !spec.key) return null;
+  const dir = spec.dir < 0 ? -1 : 1;
+  if (spec.key === ID_SORT || (spec.key === 'id' && !hasCol('id'))) return {key: ID_SORT, dir};
+  return {key: String(spec.key), dir};
+}
 
 /**
- * Sort row indices `idx` (Int32Array, modified in place) by numeric `vals` (NaN last in both
- * directions); ties keep their order in `idx`. A stable LSD radix sort over the float64 bit
- * patterns (four 16-bit passes, O(n)) keeps 2M rows well under a second on the main thread.
+ * Key passed to DataClient.order for a sort spec key: ID_SORT ('__id') for the catalog id, so a
+ * stored column called `id` keeps its own key (the worker's id-only alias is '__id').
  */
-export function sortIndices(idx, vals, dir = 1) {
-  const n = idx.length;
-  const neg = dir < 0;
+export function orderKey(key) {
+  return key === ID_SORT ? ID_SORT : key;
+}
+
+/** DataClient.order result -> Int32Array ({order}/{idx} wrappers and plain arrays accepted). */
+export function asOrder(result) {
+  if (result instanceof Int32Array) return result;
+  const wrapped = result && typeof result === 'object' && !Array.isArray(result) && !ArrayBuffer.isView(result);
+  const src = wrapped ? (result.order || result.idx) : result;
+  if (!src || typeof src.length !== 'number') throw new TypeError('DataClient.order returned no row permutation');
+  return Int32Array.from(src);
+}
+
+/**
+ * Rows of the permutation `full` (row indices in sorted order) that pass `keep`, in that order.
+ * keep: Uint8Array mask over rows (truthy = keep), or null to keep every row (returns `full`).
+ * Entries outside the mask's range are dropped.
+ */
+export function subsetInOrder(full, keep) {
+  if (!keep) return full;
+  const n = full.length;
+  const len = keep.length;
   let m = 0;
   for (let p = 0; p < n; p++) {
-    const v = +vals[idx[p]];
-    if (v === v) m++;
+    const r = full[p];
+    if (r >= 0 && r < len && keep[r]) m++;
   }
-  const keys = new Float64Array(m);
-  let rows = new Int32Array(m);
-  const nan = new Int32Array(n - m);
-  let a = 0, b = 0;
+  const out = new Int32Array(m);
+  let k = 0;
   for (let p = 0; p < n; p++) {
-    const r = idx[p];
-    const v = +vals[r];
-    if (v === v) {
-      keys[a] = (neg ? -v : v) + 0;   // + 0 folds -0 into +0
-      rows[a++] = r;
-    } else nan[b++] = r;
+    const r = full[p];
+    if (r >= 0 && r < len && keep[r]) out[k++] = r;
   }
-  if (m > 1) {
-    const u = new Uint32Array(keys.buffer);
-    let lo = new Uint32Array(m);
-    let hi = new Uint32Array(m);
-    const iLo = LITTLE_ENDIAN ? 0 : 1, iHi = 1 - iLo;
-    for (let q = 0; q < m; q++) {
-      let h = u[2 * q + iHi], l = u[2 * q + iLo];
-      // Map the IEEE bits to an unsigned order: flip everything for negatives, else the sign.
-      if (h & 0x80000000) { h = ~h >>> 0; l = ~l >>> 0; } else h = (h | 0x80000000) >>> 0;
-      hi[q] = h;
-      lo[q] = l;
-    }
-    let lo2 = new Uint32Array(m), hi2 = new Uint32Array(m), rows2 = new Int32Array(m);
-    const cnt = new Uint32Array(65536);
-    for (let pass = 0; pass < 4; pass++) {
-      const src = pass < 2 ? lo : hi;
-      const shift = pass % 2 ? 16 : 0;
-      cnt.fill(0);
-      for (let q = 0; q < m; q++) cnt[(src[q] >>> shift) & 0xffff]++;
-      if (cnt[(src[0] >>> shift) & 0xffff] === m) continue;   // every key shares this digit
-      let sum = 0;
-      for (let d = 0; d < 65536; d++) { const c = cnt[d]; cnt[d] = sum; sum += c; }
-      for (let q = 0; q < m; q++) {
-        const t = cnt[(src[q] >>> shift) & 0xffff]++;
-        lo2[t] = lo[q];
-        hi2[t] = hi[q];
-        rows2[t] = rows[q];
-      }
-      [lo, lo2] = [lo2, lo];
-      [hi, hi2] = [hi2, hi];
-      [rows, rows2] = [rows2, rows];
-    }
+  return out;
+}
+
+/**
+ * Membership mask of the rows the list shows over n rows, or null for every row: the search
+ * hits `found` (row indices) and/or the rows passing both `vis` and `selMask` (Uint8Arrays,
+ * null = no restriction).
+ */
+export function keepMask(n, {found = null, vis = null, selMask = null} = {}) {
+  if (!found && !vis && !selMask) return null;
+  const keep = new Uint8Array(n);
+  const ok = (i) => (!vis || vis[i]) && (!selMask || selMask[i]);
+  if (found) {
+    for (const i of found) if (i >= 0 && i < n && ok(i)) keep[i] = 1;
+  } else {
+    for (let i = 0; i < n; i++) if (ok(i)) keep[i] = 1;
   }
-  idx.set(rows, 0);
-  idx.set(nan, m);
-  return idx;
+  return keep;
 }
 
 function el(tag, cls, text) {
@@ -190,6 +182,8 @@ export function mount(root, ctx) {
   let query = '';
   let found = null;              // Int32Array of search hits (rank order) | null
   let orderToken = 0;
+  const orderCache = new Map();  // `${key}\u0000${dir}` -> Promise<Int32Array> (worker argsort)
+  let identityRows = null;       // Int32Array 0..n-1, reused for unsorted subsets
   let visible = true;
   let viewH = 0;
   let pool = [];
@@ -199,7 +193,6 @@ export function mount(root, ctx) {
   let rafPaint = 0;
   const offs = [];
   let offTools = null;
-  let idSortCache = null;
   let colorVals = null;          // Float32Array of level indices for color.by (category)
   let colorPal = null;           // CSS colour per level
 
@@ -265,7 +258,7 @@ export function mount(root, ctx) {
       if (on) b.append(el('span', 'pk-sort-ind', sortSpec.dir > 0 ? ' ▲' : ' ▼'));
       head.append(b);
     };
-    mk('__id', 'id', client && client.n > ID_SORT_MAX ? `Sorting by id is limited to ${fmtCount(ID_SORT_MAX)} rows` : 'Sort by id');
+    mk(ID_SORT, 'id', client && typeof client.order !== 'function' ? 'Sorting is unavailable for this catalog' : 'Sort by id');
     for (const c of cols) mk(c.key, c.label || c.key, `${c.label || c.key}${c.unit ? ` [${c.unit}]` : ''}: sort`);
     root.style.setProperty('--pk-list-cols', String(cols.length));
   }
@@ -283,36 +276,28 @@ export function mount(root, ctx) {
 
   // ------------------------------------------------------------------ order
 
-  async function idValues() {
-    if (idSortCache) return idSortCache;
-    const blob = await client.export({mask: 'all', format: 'ids'});
-    const text = await blob.text();
-    const ids = text.split('\n');
-    if (ids.length && ids[ids.length - 1] === '') ids.pop();
-    const ranks = new Float32Array(client.n);
-    const k = Array.from(ids.keys());
-    const coll = new Intl.Collator('en', {numeric: true});
-    k.sort((a, b) => coll.compare(ids[a], ids[b]) || a - b);
-    k.forEach((i, r) => { ranks[i] = r; });
-    idSortCache = ranks;
-    return ranks;
+  /** Worker argsort of every row for (key, dir), cached here for the last ORDER_CACHE specs. */
+  function fullOrder(key, dir) {
+    const ck = `${key}\u0000${dir}`;
+    const hit = orderCache.get(ck);
+    if (hit) {
+      orderCache.delete(ck);
+      orderCache.set(ck, hit);
+      return hit;
+    }
+    const p = Promise.resolve(client.order(orderKey(key), dir)).then(asOrder);
+    p.then(null, () => { if (orderCache.get(ck) === p) orderCache.delete(ck); });
+    orderCache.set(ck, p);
+    while (orderCache.size > ORDER_CACHE) orderCache.delete(orderCache.keys().next().value);
+    return p;
   }
 
-  async function sortValues(key) {
-    if (key === '__id') return idValues();
-    const meta = client.col(key);
-    const v = colVals.get(key) || await client.values(key);
-    if (meta && Array.isArray(meta.levels)) {
-      // categories sort by label
-      const lv = meta.levels.map((l, j) => ({l: String(l), j}));
-      lv.sort((a, b) => (a.l < b.l ? -1 : a.l > b.l ? 1 : 0));
-      const rank = new Float32Array(meta.levels.length);
-      lv.forEach((o, r) => { rank[o.j] = r; });
-      const out = new Float32Array(v.length);
-      for (let i = 0; i < v.length; i++) out[i] = Number.isFinite(v[i]) && v[i] < rank.length ? rank[v[i] | 0] : NaN;
-      return out;
+  function identity(n) {
+    if (!identityRows || identityRows.length !== n) {
+      identityRows = new Int32Array(n);
+      for (let i = 0; i < n; i++) identityRows[i] = i;
     }
-    return v;
+    return identityRows;
   }
 
   async function recompute() {
@@ -320,36 +305,33 @@ export function mount(root, ctx) {
     const my = ++orderToken;
     const n = client.n;
     const selMask = selOnly && sel ? sel.mask : null;
-    let idx = null;
-    if (found) {
-      const keep = [];
-      for (const i of found) if ((!vis || vis[i]) && (!selMask || selMask[i])) keep.push(i);
-      idx = Int32Array.from(keep);
-    } else if (vis || selMask) {
-      let m = 0;
-      for (let i = 0; i < n; i++) if ((!vis || vis[i]) && (!selMask || selMask[i])) m++;
-      idx = new Int32Array(m);
-      let k = 0;
-      for (let i = 0; i < n; i++) if ((!vis || vis[i]) && (!selMask || selMask[i])) idx[k++] = i;
-    }
     let note = '';
+    let idx = null;
     if (sortSpec) {
-      const len = idx ? idx.length : n;
-      const limit = sortSpec.key === '__id' ? ID_SORT_MAX : SORT_MAX;
-      if (len > limit || (sortSpec.key === '__id' && n > ID_SORT_MAX)) {
-        note = `sort needs ≤ ${fmtCount(limit)} rows`;
-      } else if (sortSpec.key !== '__id' && !client.col(sortSpec.key)) {
-        note = `unknown sort column ${sortSpec.key}`;
-      } else {
+      if (typeof client.order !== 'function') note = 'sorting is unavailable for this catalog';
+      else if (sortSpec.key !== ID_SORT && !client.col(sortSpec.key)) note = `unknown sort column ${sortSpec.key}`;
+      else {
         ctx.setStatus('sorting…');
-        const vals = await sortValues(sortSpec.key);
-        if (my !== orderToken || destroyed) return;
-        if (!idx) {
-          idx = new Int32Array(n);
-          for (let i = 0; i < n; i++) idx[i] = i;
+        let full = null;
+        try {
+          full = await fullOrder(sortSpec.key, sortSpec.dir);
+        } catch (err) {
+          if (!(err instanceof Error)) throw err;
+          if (err.name === 'AbortError') return;
+          console.warn(`list ${ctx.id}: sort by ${sortSpec.key}`, err);
+          note = `sort failed: ${err.message}`;
         }
-        sortIndices(idx, vals, sortSpec.dir);
+        if (my !== orderToken || destroyed) return;
+        if (full) idx = subsetInOrder(full, keepMask(n, {found, vis, selMask}));
       }
+    }
+    if (!idx && found) {
+      // Unsorted search results keep their rank order.
+      const keep = [];
+      for (const i of found) if (i >= 0 && i < n && (!vis || vis[i]) && (!selMask || selMask[i])) keep.push(i);
+      idx = Int32Array.from(keep);
+    } else if (!idx && (vis || selMask)) {
+      idx = subsetInOrder(identity(n), keepMask(n, {vis, selMask}));
     }
     if (my !== orderToken || destroyed) return;
     order = idx;
@@ -694,7 +676,7 @@ export function mount(root, ctx) {
       colorPal = null;
     } else {
       colorVals = await client.values(c.by);
-      colorPal = levelColors(m, ctx.theme ? ctx.theme() : null);
+      colorPal = plotLevelColors(m, ctx.theme ? ctx.theme() : null);
     }
     root.classList.toggle('pk-list-colored', !!colorVals);
     paint(true);
@@ -733,6 +715,7 @@ export function mount(root, ctx) {
       client = await app.catalog(ds);
       sel = await app.selectionFor(ds);
       if (destroyed) return;
+      sortSpec = normalizeSortSpec(sortSpec, (k) => !!client.col(k));
       const metaCols = client.manifest.cols || [];
       if (Array.isArray(cfg.columns) && cfg.columns.length) {
         const missingKeys = [];
@@ -787,6 +770,7 @@ export function mount(root, ctx) {
     },
     destroy() {
       destroyed = true;
+      orderCache.clear();
       clearTimeout(searchTimer);
       if (rafPaint) cancelAnimationFrame(rafPaint);
       for (const off of offs) off();
