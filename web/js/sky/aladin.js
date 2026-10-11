@@ -14,6 +14,13 @@
 //   viewer and a layout with two (e.g. sky + wavelength) has two, since one Aladin canvas shows
 //   one view. A failed library load is also kept for the page: later panes get the same
 //   rejection without another download attempt (loadAladin(page, {retry: true}) starts over).
+// - IMPLEMENTATION_NOTES 109: a failed fire-and-forget prefetch does not poison later loads.
+//   retryAladinOnce(page) is what a sky pane calls when it mounts: when the page's load has
+//   failed and no retry was made yet, it starts the one retry (loadAladin(page, {retry: true}));
+//   otherwise it returns the current load. aladinFor() calls it too, so a wavelength pane (or
+//   any other viewer owner) that is the first to need Aladin after a failure also retries, and
+//   it restarts a handle that failed on an earlier load once a retry is under way, so a
+//   remounted pane gets a viewer from the retry.
 // - Feature detection for the API drift between Aladin v3 builds: layer opacity
 //   (setOpacity / setAlpha / setOptions / opacity property), HiPS construction (A.HiPS /
 //   createImageSurvey / newImageSurvey), base layer (setBaseImageLayer / setImageSurvey),
@@ -29,6 +36,7 @@ export const DEFAULT_MIRROR = 'https://data.rc.ufl.edu/pub/adamginsburg/jwst-gc/
 const D2R = Math.PI / 180;
 
 let lib = null;                       // {promise, state, url, index, source, error}
+let retried = false;                  // the page's one retry after a failed load was used
 const handles = new Map();            // owner -> AladinHandle
 
 /** [cdn, mirror] for a page.json (defaults when the page has no `aladin`). */
@@ -109,6 +117,32 @@ export function loadAladin(page, opts = {}) {
   });
   lib = st;
   return st.promise;
+}
+
+/**
+ * The load a mounting sky pane waits on (IMPLEMENTATION_NOTES 109). When the page's library load
+ * has failed and the page has not retried yet, starts the one retry (loadAladin(page,
+ * {retry: true}) with `opts`); otherwise loadAladin(page, opts). Later failures are kept for the
+ * page like any other load, so a page with a blocked CDN and mirror makes at most two attempts.
+ */
+export function retryAladinOnce(page, opts = {}) {
+  if (lib && lib.state === 'error' && !retried) {
+    retried = true;
+    return loadAladin(page, Object.assign({}, opts, {retry: true}));
+  }
+  return loadAladin(page, opts);
+}
+
+/** True once the page has used its one retry after a failed load. */
+export function aladinRetried() {
+  return retried;
+}
+
+/** Forget the page's library load, its retry and every handle (unit tests). */
+export function resetAladin() {
+  lib = null;
+  retried = false;
+  handles.clear();
 }
 
 /** {state: 'idle'|'loading'|'ready'|'error', source, url, error} of the page's library load. */
@@ -309,13 +343,30 @@ class AladinHandle {
     this._queue = [];
     this._listeners = new Map();      // event -> Set(fn)
     this._bound = new Set();          // events registered on the Aladin instance
+    this._load = null;                // the library load promise this handle waited on
     this.ready = this._start();
     this.ready.catch(() => {});
   }
 
+  /**
+   * Start over after a failed load (the viewer was never created): wait on the page's current
+   * library load with `opts` (the remounting pane's view and survey). No-op unless in 'error'.
+   */
+  restart(opts) {
+    if (this.state !== 'error') return this.ready;
+    if (opts) this.opts = opts;
+    this.initialSurvey = this.opts.survey || null;
+    this.state = 'loading';
+    this.error = null;
+    this.ready = this._start();
+    this.ready.catch(() => {});
+    return this.ready;
+  }
+
   async _start() {
     try {
-      const r = await loadAladin(this.opts.page, {timeout: this.opts.timeout});
+      this._load = loadAladin(this.opts.page, {timeout: this.opts.timeout});
+      const r = await this._load;
       this.A = r.A;
       this.source = r.source;
       const o = this.opts.view || {};
@@ -426,14 +477,24 @@ class AladinHandle {
 }
 
 /**
- * The Aladin handle owned by `owner` (a pane id), created on first call.
+ * The Aladin handle owned by `owner` (a pane id), created on first call. Every pane that hosts a
+ * viewer (sky, wavelength) comes through here, so this is where the page's one retry after a
+ * failed load starts (retryAladinOnce, IMPLEMENTATION_NOTES 109): the first call after a failed
+ * load, from whichever pane type, retries before creating or restarting its handle. A handle
+ * that failed on an earlier library load is restarted with `opts` when the page has since
+ * started a new load that is not in error (a retry is loading or has succeeded).
  * opts: {page, view: {ra, dec, fov}, survey, aladinOptions, timeout}.
  */
 export function aladinFor(owner, opts = {}) {
+  if (lib && lib.state === 'error' && !retried) {
+    retryAladinOnce(opts.page, {timeout: opts.timeout}).catch(() => {});
+  }
   let h = handles.get(owner);
   if (!h) {
     h = new AladinHandle(owner, opts);
     handles.set(owner, h);
+  } else if (h.state === 'error' && lib && lib.state !== 'error' && lib.promise !== h._load) {
+    h.restart(opts);
   }
   return h;
 }

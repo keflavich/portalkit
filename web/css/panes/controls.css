@@ -49,10 +49,12 @@
 .pk-brush-modes .pk-btn { min-width: 26px; }
 .pk-preset-select { max-width: 16em; }
 
-/* ---------------------------------------------------------------- controls bar */
+/* ---------------------------------------------------------------- controls bar
+   The widget groups (.pk-ctl-group), template picker (.pk-ctl-template, .pk-template-grid,
+   .pk-template-scale) and feature chips (.pk-feat-toggles, .pk-feat-chip) are styled by
+   css/panes/ui.css (IMPLEMENTATION_NOTES 108). */
 .pk-controls { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--pk-sp-1) var(--pk-sp-3); min-width: 0; max-width: 100%; }
 .pk-controls[hidden] { display: none; }
-.pk-ctl-group { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--pk-sp-1) var(--pk-sp-2); min-width: 0; max-width: 100%; }
 .pk-ctl { display: inline-flex; align-items: center; gap: var(--pk-sp-1); white-space: nowrap; color: var(--pk-fg-2); }
 .pk-ctl-name { color: var(--pk-fg-2); }
 .pk-ctl-range { width: 7em; min-width: 4em; accent-color: var(--pk-accent); }
@@ -61,10 +63,6 @@
 .pk-ctl-expr { width: 10em; min-width: 6em; }
 .pk-ctl-chips, .pk-features, .pk-ctl-features { display: inline-flex; flex-wrap: wrap; gap: 2px; min-width: 0; max-width: 100%; }
 .pk-ctl-chips .pk-chip[aria-pressed="false"], .pk-features .pk-chip[aria-pressed="false"] { opacity: .65; }
-/* feature family chips (ui/controls.js featureToggles; same rules in sed.css / spectrum.css) */
-.pk-feat-toggles[hidden], .pk-ctl-template[hidden] { display: none; }
-.pk-feat-chip { border-left: 3px solid var(--pk-feat-color, var(--pk-accent)); }
-.pk-feat-chip[aria-pressed="false"] { opacity: .7; }
 .pk-color-by { max-width: 12em; }
 .pk-cmap { display: inline-flex; align-items: center; gap: var(--pk-sp-1); }
 .pk-cmap-swatch {
@@ -72,7 +70,6 @@
   border: 1px solid var(--pk-border); vertical-align: middle;
 }
 .pk-template, .pk-templates { display: inline-flex; align-items: center; gap: var(--pk-sp-1); }
-.pk-template-grid, .pk-template-scale { max-width: 9em; }
 .pk-invalid, input.pk-invalid { border-color: var(--pk-danger) !important; box-shadow: 0 0 0 1px var(--pk-danger); }
 
 /* ---------------------------------------------------------------- axis picker */

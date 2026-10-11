@@ -7,6 +7,8 @@ import {
 } from '../../web/js/core/hash.js';
 import {createStore} from '../../web/js/core/store.js';
 import {HASH_DEBOUNCE_MS, HASH_MAX_CHARS} from '../../web/js/core/constants.js';
+import {withDefaultOff} from '../../web/js/data/hub.js';
+import {toggleLevel} from '../../web/js/ui/legend.js';
 
 // ---------------------------------------------------------------- fake window with manual timers
 
@@ -721,4 +723,108 @@ test('bindHash + Selection: the sel= form written before a reload is written aga
     win2.advance(HASH_DEBOUNCE_MS);
     assert.equal(parseHash(win2.location.hash).sel, written, `form kept: ${written.slice(0, 12)}`);
   }
+});
+
+// ---------------------------------------------------------------- default_off round trip (note 104)
+
+const DO_MANIFEST = {cols: [
+  {key: 'cls', role: 'category', enc: 'cat8', levels: ['star', 'yso', 'agb'], default_off: ['agb']},
+  {key: 'kind', role: 'category', enc: 'cat8', levels: ['x', 'y'], default_off: []},
+  {key: 'ψ', role: 'category', enc: 'cat8', levels: ['é', 'ψ star', '1'], default_off: ['ψ star', '1']},
+]};
+const doCol = (key) => DO_MANIFEST.cols.find((c) => c.key === key);
+const reload = (filters) => {
+  const h = parseHash('#' + formatHash(stateToHash({'filters:src': filters}, {primaryDs: 'src'})));
+  return {h, filters: hashToPatch(h, {primaryDs: 'src', state: {}}).patch['filters:src']};
+};
+
+test('stateToHash keeps cats entries equal to [] (f= carries "all levels on")', () => {
+  const h = stateToHash({'filters:src': {cats: {cls: []}}}, {primaryDs: 'src'});
+  assert.ok(h.f, 'f written for a lone cats: {key: []}');
+  assert.deepEqual(decodeJSONParam(h.f), {cats: {cls: []}});
+  // mixed: an empty-array entry beside an off-list and other (empty) filter parts
+  const f = {cats: {cls: [], 'ψ': ['é']}, ranges: {}};
+  assert.deepEqual(decodeJSONParam(stateToHash({'filters:src': f}, {primaryDs: 'src'}).f), f);
+  // still omitted: no filters, an empty cats object, empty parts only
+  for (const empty of [undefined, null, {}, {cats: {}}, {cats: {}, ranges: {}, flags: {}}, {ranges: {a: []}}, {cats: []}]) {
+    assert.equal(stateToHash({'filters:src': empty}, {primaryDs: 'src'}).f, undefined, JSON.stringify(empty));
+  }
+  // no primary dataset: filters never reach the hash
+  assert.equal(stateToHash({'filters:src': {cats: {cls: []}}}, {}).f, undefined);
+});
+
+test('cats: {key: []} round-trips through stateToHash / hashToPatch and is a fixed point', () => {
+  for (const f of [{cats: {cls: []}}, {cats: {cls: [], kind: ['y']}}, {cats: {'ψ': []}, text: 'G0.1−0.2'},
+    {cats: {cls: [], 'ψ': [], kind: []}}]) {
+    const {h, filters} = reload(f);
+    assert.deepEqual(filters, f);
+    assert.equal(formatHash(stateToHash({'filters:src': filters}, {primaryDs: 'src'})), formatHash(h), 'second trip');
+  }
+});
+
+test('default_off: un-hiding the level survives a reload; the hub does not re-apply it', () => {
+  // page open: the hub applies default_off to the empty page filters
+  const opened = withDefaultOff({}, DO_MANIFEST);
+  assert.deepEqual(opened.cats, {cls: ['agb'], 'ψ': ['ψ star', '1']});
+  // the hash of the opened page carries the default_off levels as an ordinary off-list
+  assert.deepEqual(reload(opened).filters, opened);
+  // the user shows 'agb' again (legend / chips click) on a default_off column
+  const shown = toggleLevel(opened, 'cls', 'agb', {levels: doCol('cls').levels, defaultOff: doCol('cls').default_off});
+  assert.deepEqual(shown.cats, {cls: [], 'ψ': ['ψ star', '1']});
+  const {filters: back} = reload(shown);
+  assert.deepEqual(back, shown);
+  // the hub at reload keeps the explicit [] (returns the same object: nothing to fill in)
+  assert.equal(withDefaultOff(back, DO_MANIFEST), back);
+  // all default_off columns shown: f= still written and still respected
+  const allOn = toggleLevel(toggleLevel(shown, 'ψ', 'ψ star', {levels: doCol('ψ').levels, defaultOff: true}),
+    'ψ', '1', {levels: doCol('ψ').levels, defaultOff: true});
+  assert.deepEqual(allOn, {cats: {cls: [], 'ψ': []}});
+  const r2 = reload(allOn);
+  assert.ok(r2.h.f);
+  assert.equal(withDefaultOff(r2.filters, DO_MANIFEST), r2.filters);
+});
+
+test('default_off: a caller without the flag (ui/chips.js) also keeps [] and survives a reload', () => {
+  const opened = withDefaultOff({}, {cols: [doCol('cls')]});
+  // chips.js call shape: {only, levels}, no defaultOff
+  const shown = toggleLevel(opened, 'cls', 'agb', {only: false, levels: doCol('cls').levels});
+  assert.deepEqual(shown, {cats: {cls: []}});
+  const {h, filters} = reload(shown);
+  assert.ok(h.f);
+  assert.equal(withDefaultOff(filters, {cols: [doCol('cls')]}), filters, 'hub keeps the explicit all-on list');
+  // a wrong defaultOff: false drops the key and the hub re-hides the level (the bug note 104 fixes)
+  const dropped = toggleLevel(opened, 'cls', 'agb', {levels: doCol('cls').levels, defaultOff: false});
+  assert.deepEqual(dropped, {});
+  const r2 = reload(dropped);
+  assert.equal(r2.h.f, undefined);
+  assert.deepEqual(withDefaultOff(r2.filters, {cols: [doCol('cls')]}).cats, {cls: ['agb']});
+  // a column without default_off still drops its key when every level is on
+  assert.deepEqual(toggleLevel({cats: {kind: ['y']}}, 'kind', 'y', {levels: ['x', 'y'], defaultOff: doCol('kind').default_off}), {});
+});
+
+test('default_off survives bindHash: write, reload into a fresh store, hub at open', () => {
+  const win = fakeWindow('');
+  const store = makeStore();
+  bindHash(store, {primaryDs: 'src', defaults: DEF, win});
+  const opened = withDefaultOff(store.get('filters:src'), DO_MANIFEST);
+  store.set({'filters:src': opened}, {source: 'hub'});
+  win.advance(HASH_DEBOUNCE_MS);
+  const shown = toggleLevel(store.get('filters:src'), 'cls', 'agb', {levels: doCol('cls').levels, defaultOff: true});
+  store.set({'filters:src': shown}, {source: 'legend'});
+  win.advance(HASH_DEBOUNCE_MS);
+  assert.deepEqual(decodeJSONParam(parseHash(win.location.hash).f), {cats: {cls: [], 'ψ': ['ψ star', '1']}});
+  const store2 = makeStore();
+  bindHash(store2, {primaryDs: 'src', defaults: DEF, win: fakeWindow(win.location.hash)});
+  const f2 = store2.get('filters:src');
+  assert.deepEqual(f2, shown);
+  assert.equal(withDefaultOff(f2, DO_MANIFEST), f2, 'hub keeps the explicit all-on list');
+  // Back to the page-open entry restores the default_off off-list
+  const store3 = makeStore();
+  const win3 = fakeWindow('');
+  bindHash(store3, {primaryDs: 'src', defaults: DEF, win: win3});
+  store3.set({'filters:src': opened}, {source: 'hub'});
+  win3.advance(HASH_DEBOUNCE_MS);
+  store3.set({'filters:src': {cats: {...opened.cats, cls: []}}}, {history: true});
+  win3.back();
+  assert.deepEqual(store3.get('filters:src'), opened);
 });

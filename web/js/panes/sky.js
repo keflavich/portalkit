@@ -16,13 +16,14 @@
 // circles around those rows (centring on them with `goto`). A highlight received while Aladin is
 // still loading is kept and drawn when the viewer is ready.
 // The Aladin library loads once per page and each sky pane owns one viewer (sky/aladin.js,
-// IMPLEMENTATION_NOTES 82); the viewer survives remounts. When
+// IMPLEMENTATION_NOTES 82); the viewer survives remounts. A failed load is retried once per page
+// by the first sky pane that mounts after it (IMPLEMENTATION_NOTES 109). When
 // Aladin cannot be loaded from the CDN or the mirror, the pane shows an error note and the rest
 // of the page keeps working.
 
 import {T0_MAX, T1_MAX, SETTLE_MS} from '../core/constants.js';
 import {fmtCount, fmtRA, fmtDec, fmtAngle} from '../core/fmt.js';
-import {aladinFor, errorNote, errorText, libState, loadAladin} from '../sky/aladin.js';
+import {aladinFor, errorNote, errorText, libState, retryAladinOnce} from '../sky/aladin.js';
 import {SkyLayers, defaultBase} from '../sky/layers.js';
 import {SkyMarkers} from '../sky/markers.js';
 import {VectorOverlays, ShapeSet} from '../sky/overlays.js';
@@ -120,8 +121,10 @@ export function mount(el, ctx) {
   root.append(stage, panelWrap, notice, coord);
   el.append(root);
 
-  // Start the library download right away (shared by every sky pane of the page).
-  loadAladin(app.page).catch(() => {});
+  // Start the library download right away (shared by every sky pane of the page). After a
+  // failed load (e.g. an earlier pane's prefetch), the first pane that mounts retries once
+  // (IMPLEMENTATION_NOTES 109); aladinFor() then restarts this pane's viewer on that retry.
+  retryAladinOnce(app.page).catch(() => {});
 
   const S = {h: null, layers: null, vector: null, markers: null, brush: null, client: null,
     rings: null, highlight: null, hl: null, hlCount: 0, written: null, writeTimer: null, error: null,

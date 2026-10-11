@@ -20,11 +20,13 @@
   min-height: 24px; padding-top: 1px; padding-bottom: 1px; font-size: var(--pk-fs-0);
 }
 .pk-spec-bar .pk-btn { padding-left: var(--pk-sp-2); padding-right: var(--pk-sp-2); }
-.pk-spec-bar select { max-width: 11em; }
+/* :where keeps this below `.pk-models select` (ui.css) whichever sheet loads last, so the model
+   control selects keep their shared width */
+.pk-spec-bar :where(select) { max-width: 11em; }
 .pk-spec-bar label { display: inline-flex; align-items: center; gap: var(--pk-sp-1); white-space: nowrap; color: var(--pk-fg-2); }
 .pk-spec-bar [hidden] { display: none !important; }
 
-.pk-spec-segs, .pk-spec-bands, .pk-spec-pins, .pk-spec-toggles, .pk-feat-toggles {
+.pk-spec-segs, .pk-spec-bands, .pk-spec-pins, .pk-spec-toggles {
   display: inline-flex; flex-wrap: wrap; gap: 2px; min-width: 0; max-width: 100%;
 }
 .pk-spec-seg[aria-pressed="false"] { opacity: .55; text-decoration: line-through; }
@@ -57,20 +59,9 @@
   padding: var(--pk-sp-1) 0;
 }
 
-/* feature family chips (ui/controls.js featureToggles) */
-.pk-feat-chip { border-left: 3px solid var(--pk-feat-color, var(--pk-accent)); }
-.pk-feat-chip[aria-pressed="false"] { opacity: .7; }
-
-/* model controls (ui/controls.js modelControls; same rules in sed.css). The widget groups
-   inside .pk-models flow as one wrapped row. */
-.pk-models .pk-ctl-group { display: contents; }
-.pk-models .pk-models-bands input, .pk-models .pk-template-scale { width: 6em; }
-.pk-models { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--pk-sp-1) var(--pk-sp-2); min-width: 0; max-width: 100%; }
-.pk-models label { display: inline-flex; align-items: center; gap: var(--pk-sp-1); white-space: nowrap; color: var(--pk-fg-2); }
-.pk-models input[type="range"] { width: 8em; min-width: 5em; }
-.pk-models .pk-models-num { width: 4.5em; }
-.pk-models select { max-width: 12em; }
-.pk-models [hidden] { display: none !important; }
+/* The feature chips (.pk-feat-toggles, .pk-feat-chip) and model controls (.pk-models) in the
+   "Overlays" disclosure are styled by css/panes/ui.css (IMPLEMENTATION_NOTES 108); the
+   narrow-screen select widths below are the spectrum bar's own. */
 
 /* ---------------------------------------------------------------- plot area */
 .pk-spec-wrap {
@@ -98,12 +89,11 @@
 /* ---------------------------------------------------------------- narrow screens */
 @media (max-width: 899px) {
   .pk-spec-bar { gap: 2px var(--pk-sp-1); padding: 2px var(--pk-sp-1); }
-  .pk-spec-bar select { max-width: 8.5em; }
-  .pk-models input[type="range"] { width: 6em; }
+  .pk-spec-bar select, .pk-spec-bar .pk-models select { max-width: 8.5em; }
   .pk-spec-readout { left: 4px; max-width: calc(100% - 8px); }
   .pk-spec-wrap { min-height: 220px; }
 }
 @media (max-width: 420px) {
   .pk-spec-pinchip { max-width: 9em; }
-  .pk-models select { max-width: 9em; }
+  .pk-spec-bar .pk-models select { max-width: 9em; }
 }

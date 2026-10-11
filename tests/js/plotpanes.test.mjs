@@ -13,6 +13,7 @@ import * as feat from '../../web/js/spec/features.js';
 import * as sed from '../../web/js/panes/sed.js';
 import * as chips from '../../web/js/ui/chips.js';
 import * as aladin from '../../web/js/sky/aladin.js';
+import * as reg from '../../web/js/core/registry.js';
 import {createStore} from '../../web/js/core/store.js';
 import {Budget} from '../../web/js/gl/budget.js';
 import {makeView} from '../../web/js/plot/axes.js';
@@ -539,4 +540,257 @@ test('loadAladin loads once per page, a failure included; retry starts over', as
   const p3 = aladin.loadAladin(page, {timeout: 50, retry: true});
   assert.notEqual(p3, p1);
   await assert.rejects(p3);
+});
+
+// ------------------------------------------------------------------ legend default_off (note 104)
+
+test('toggleLevel keeps cats[key] = [] for a default_off column, drops it otherwise', () => {
+  const levels = ['star', 'yso', 'agb'];
+  // plain toggles
+  assert.deepEqual(leg.toggleLevel({}, 'cls', 'yso', {levels}), {cats: {cls: ['yso']}});
+  assert.deepEqual(leg.toggleLevel({cats: {cls: ['yso']}}, 'cls', 'yso', {levels, defaultOff: false}), {});
+  // defaultOff left out (a caller that does not know the column, e.g. ui/chips.js): keep the safe []
+  assert.deepEqual(leg.toggleLevel({cats: {cls: ['yso']}}, 'cls', 'yso', {levels}), {cats: {cls: []}});
+  assert.deepEqual(leg.toggleLevel({cats: {cls: ['yso']}}, 'cls', 'yso'), {cats: {cls: []}});
+  assert.deepEqual(leg.toggleLevel({cats: {cls: ['yso']}}, 'cls', 'yso', {levels, defaultOff: ['agb']}), {cats: {cls: []}});
+  assert.deepEqual(leg.toggleLevel({cats: {cls: ['agb']}}, 'cls', 'agb', {levels, defaultOff: true}), {cats: {cls: []}});
+  // an empty default_off list or false behaves like a plain column
+  assert.deepEqual(leg.toggleLevel({cats: {cls: ['agb']}}, 'cls', 'agb', {levels, defaultOff: []}), {});
+  assert.deepEqual(leg.toggleLevel({cats: {cls: ['agb']}}, 'cls', 'agb', {levels, defaultOff: false}), {});
+  // other filter parts and other columns are kept, input not mutated
+  const f0 = {cats: {cls: ['agb'], kind: ['x']}, ranges: {f410m: [1, 2]}};
+  const f1 = leg.toggleLevel(f0, 'cls', 'agb', {levels, defaultOff: ['agb']});
+  assert.deepEqual(f1, {cats: {cls: [], kind: ['x']}, ranges: {f410m: [1, 2]}});
+  assert.deepEqual(f0, {cats: {cls: ['agb'], kind: ['x']}, ranges: {f410m: [1, 2]}});
+  // hiding a level from the explicit all-on list
+  assert.deepEqual(leg.toggleLevel(f1, 'cls', 'star', {levels, defaultOff: ['agb']}).cats.cls, ['star']);
+  // alt-click: only this level, then all again (kept as [] for default_off)
+  const only = leg.toggleLevel({cats: {cls: ['agb']}}, 'cls', 'yso', {only: true, levels, defaultOff: ['agb']});
+  assert.deepEqual(only.cats.cls, ['star', 'agb']);
+  assert.deepEqual(leg.toggleLevel(only, 'cls', 'yso', {only: true, levels, defaultOff: ['agb']}), {cats: {cls: []}});
+  assert.deepEqual(leg.toggleLevel(only, 'cls', 'yso', {only: true, levels, defaultOff: false}), {});
+  assert.deepEqual(leg.toggleLevel(only, 'cls', 'yso', {only: true, levels}), {cats: {cls: []}});
+  // unicode levels; a one-level column
+  assert.deepEqual(leg.toggleLevel({cats: {'ψ': ['é']}}, 'ψ', 'é', {levels: ['é'], defaultOff: ['é']}), {cats: {'ψ': []}});
+  assert.deepEqual(leg.toggleLevel({}, 'ψ', 'é', {only: true, levels: ['é'], defaultOff: ['é']}), {cats: {'ψ': []}});
+  assert.equal(leg.hasDefaultOff({default_off: ['a']}), true);
+  for (const m of [null, {}, {default_off: []}, {default_off: 'a'}]) assert.equal(leg.hasDefaultOff(m), false);
+});
+
+test('legend chip click on a default_off column writes cats[key] = [] (not a deleted key)', () => withDom(async () => {
+  const meta = {key: 'cls', role: 'category', enc: 'cat8', levels: ['star', 'yso', 'agb'], default_off: ['agb']};
+  const client = {
+    n: 3, col: (k) => (k === 'cls' ? meta : null), baseKeys: (e) => [e],
+    hist: async () => ({counts: new Float64Array([1, 1, 1])}),
+  };
+  const store = createStore({color: {by: 'cls', cmap: 'viridis'}, 'filters:src': {cats: {cls: ['agb']}}, 'vis:src': {}, 'sel:src': {}});
+  const host = new FakeEl('div');
+  const lg = leg.createLegend(host, {store, client, ds: 'src', pane: 'sc1', config: {}});
+  await tick();
+  const chipFor = (lv) => lg.el.find((e) => e.classList.contains('pk-legend-level') && e.textContent.startsWith(lv));
+  assert.equal(chipFor('agb').getAttribute('aria-pressed'), 'false');
+  chipFor('agb').fire('click');
+  await tick();
+  assert.deepEqual(store.get('filters:src'), {cats: {cls: []}});
+  assert.equal(chipFor('agb').getAttribute('aria-pressed'), 'true');
+  chipFor('yso').fire('click');
+  await tick();
+  assert.deepEqual(store.get('filters:src'), {cats: {cls: ['yso']}});
+  lg.destroy();
+}));
+
+test('filter chip click (ui/chips.js) on a default_off column also writes cats[key] = []', () => withDom(async () => {
+  const meta = {key: 'cls', role: 'category', enc: 'cat8', levels: ['star', 'yso', 'agb'], default_off: ['agb']};
+  const client = {n: 3, manifest: {cols: [meta]}, hist: async () => ({counts: new Float64Array([1, 1, 1])})};
+  const store = createStore({'filters:src': {cats: {cls: ['agb']}}, 'sel:src': {}});
+  const host = new FakeEl('div');
+  const ch = chips.createChips(host, {store, client, ds: 'src', pane: 'chips1',
+    show: {cats: true, flags: false, snr: false, presets: false, saved: false}});
+  await tick();
+  const chipFor = (lv) => ch.el.find((e) => e.classList.contains('pk-chip') && e.textContent.startsWith(lv));
+  chipFor('agb').fire('click');
+  await tick();
+  assert.deepEqual(store.get('filters:src'), {cats: {cls: []}});
+  ch.destroy();
+}));
+
+// ------------------------------------------------------------------ Aladin prefetch retry (note 109)
+
+const DEAD_PAGE = {aladin: {cdn: 'https://127.0.0.1:9/none.js', mirror: 'https://127.0.0.1:9/none2.js'}};
+
+function fakeAladinLib() {
+  const made = [];
+  const A = {
+    init: Promise.resolve(),
+    aladin(host, init) {
+      const al = {host, init, on() {}, getRaDec: () => [1, 2], getFov: () => [0.5, 0.5]};
+      made.push(al);
+      return al;
+    },
+  };
+  return {A, made};
+}
+
+async function withWindow(win, fn) {
+  const had = Object.prototype.hasOwnProperty.call(globalThis, 'window');
+  const prev = globalThis.window;
+  globalThis.window = win;
+  try {
+    return await fn();
+  } finally {
+    if (had) globalThis.window = prev;
+    else delete globalThis.window;
+  }
+}
+
+test('retryAladinOnce: a failed prefetch is retried once per page, then the failure is kept', async () => {
+  aladin.resetAladin();
+  assert.equal(aladin.aladinRetried(), false);
+  const pre = aladin.loadAladin(DEAD_PAGE, {timeout: 50});       // the fire-and-forget prefetch
+  pre.catch(() => {});
+  // while the prefetch is still loading, a mounting pane shares it (no retry)
+  assert.equal(aladin.retryAladinOnce(DEAD_PAGE, {timeout: 50}), pre);
+  await assert.rejects(pre);
+  await tick();
+  assert.equal(aladin.libState().state, 'error');
+  const r1 = aladin.retryAladinOnce(DEAD_PAGE, {timeout: 50});   // first pane after the failure
+  assert.notEqual(r1, pre);
+  assert.equal(aladin.aladinRetried(), true);
+  assert.equal(aladin.libState().state, 'loading');
+  await assert.rejects(r1);
+  await tick();
+  assert.equal(aladin.libState().state, 'error');
+  assert.equal(aladin.retryAladinOnce(DEAD_PAGE, {timeout: 50}), r1, 'second pane: no further attempt');
+  assert.equal(aladin.loadAladin(DEAD_PAGE, {timeout: 50}), r1);
+  aladin.resetAladin();
+  assert.equal(aladin.libState().state, 'idle');
+  assert.equal(aladin.aladinRetried(), false);
+});
+
+test('retryAladinOnce: the retry can succeed; a ready library is never reloaded', async () => {
+  aladin.resetAladin();
+  const pre = aladin.loadAladin(DEAD_PAGE, {timeout: 50});
+  await assert.rejects(pre);
+  await tick();
+  const {A} = fakeAladinLib();
+  await withWindow({A}, async () => {
+    const r = await aladin.retryAladinOnce(DEAD_PAGE, {timeout: 50});
+    assert.equal(r.source, 'preloaded');
+    assert.equal(r.A, A);
+    assert.equal(aladin.libState().state, 'ready');
+    const again = aladin.retryAladinOnce(DEAD_PAGE, {timeout: 50});
+    assert.equal(again, aladin.loadAladin(DEAD_PAGE), 'ready load is shared');
+  });
+  aladin.resetAladin();
+});
+
+test('aladinFor: a remount after a failed load retries once, then keeps the failure', () => withDom(async () => {
+  aladin.resetAladin();
+  const h1 = aladin.aladinFor('skyA', {page: DEAD_PAGE, timeout: 50, view: {ra: 10, dec: 20, fov: 1}});
+  await assert.rejects(h1.ready);
+  await tick();
+  assert.equal(h1.state, 'error');
+  assert.equal(aladin.aladinRetried(), false, 'the first load is not a retry');
+  // the next mount starts the page's one retry itself and restarts the failed handle on it
+  const ready1 = h1.ready;
+  assert.equal(aladin.aladinFor('skyA', {page: DEAD_PAGE, timeout: 50}), h1);
+  assert.equal(aladin.aladinRetried(), true);
+  assert.equal(h1.state, 'loading');
+  assert.notEqual(h1.ready, ready1);
+  await assert.rejects(h1.ready);
+  await tick();
+  assert.equal(h1.state, 'error');
+  // retry used: a further remount keeps the failure without another attempt
+  const ready2 = h1.ready;
+  assert.equal(aladin.aladinFor('skyA', {page: DEAD_PAGE, timeout: 50}), h1);
+  assert.equal(h1.ready, ready2);
+  assert.equal(h1.state, 'error');
+  assert.equal(aladin.libState().state, 'error');
+  aladin.resetAladin();
+}));
+
+test('aladinFor restarts a viewer that failed on the prefetch once the retry is under way', () => withDom(async () => {
+  aladin.resetAladin();
+  const h1 = aladin.aladinFor('skyA', {page: DEAD_PAGE, timeout: 50, view: {ra: 10, dec: 20, fov: 1}});
+  await assert.rejects(h1.ready);
+  await tick();
+  assert.equal(h1.state, 'error');
+  const {A, made} = fakeAladinLib();
+  await withWindow({A}, async () => {
+    const queued = [];
+    const h2 = aladin.aladinFor('skyA', {page: DEAD_PAGE, timeout: 50, view: {ra: 30, dec: -5, fov: 2}});
+    assert.equal(h2, h1, 'the pane keeps its handle');
+    assert.equal(h2.state, 'loading');
+    h2.run((al) => queued.push(al));
+    await h2.ready;
+    assert.equal(h2.state, 'ready');
+    assert.equal(made.length, 1);
+    assert.equal(made[0].init.target, '30 -5', 'restart uses the remounting pane view');
+    assert.deepEqual(queued, [made[0]], 'commands queued during the retry run once ready');
+    // a ready handle is never restarted
+    assert.equal(aladin.aladinFor('skyA', {page: DEAD_PAGE}).ready, h2.ready);
+    // a pane mounting for the first time after the retry gets its own viewer from it
+    const h3 = aladin.aladinFor('skyB', {page: DEAD_PAGE, timeout: 50});
+    await h3.ready;
+    assert.equal(made.length, 2);
+  });
+  aladin.resetAladin();
+}));
+
+test('aladinFor: a wavelength-style pane (no retryAladinOnce at mount) also retries a failed prefetch', () => withDom(async () => {
+  aladin.resetAladin();
+  const pre = aladin.loadAladin(DEAD_PAGE, {timeout: 50});      // the fire-and-forget prefetch
+  await assert.rejects(pre);
+  await tick();
+  const {A, made} = fakeAladinLib();
+  await withWindow({A}, async () => {
+    // panes/wavelength.js mount: loadAladin(page) returns the cached rejection, no retry
+    assert.equal(aladin.loadAladin(DEAD_PAGE), pre);
+    const hw = aladin.aladinFor('wl1', {page: DEAD_PAGE, timeout: 50, view: {ra: 1, dec: 2, fov: 3}});
+    assert.equal(aladin.aladinRetried(), true);
+    await hw.ready;
+    assert.equal(hw.state, 'ready');
+    assert.equal(made.length, 1);
+    // a sky pane mounting next shares the successful retry
+    assert.notEqual(aladin.retryAladinOnce(DEAD_PAGE), pre);
+    assert.equal(aladin.libState().state, 'ready');
+  });
+  aladin.resetAladin();
+}));
+
+// ------------------------------------------------------------------ widget CSS before mount (note 108)
+
+test('registry.load attaches ui.css before the pane sheets of a widget pane, once', async () => {
+  const {existsSync} = await import('node:fs');
+  const {fileURLToPath} = await import('node:url');
+  const regUrl = new URL('../../web/js/core/registry.js', import.meta.url);
+  assert.ok(existsSync(fileURLToPath(new URL(reg.WIDGET_CSS, regUrl))));
+  for (const t of reg.WIDGET_PANES) assert.ok(reg.PANE_TYPES.includes(t), t);
+  for (const t of ['hist', 'spectrum2d', 'list', 'sky']) assert.equal(reg.WIDGET_PANES.includes(t), false, t);
+  const links = [];
+  const prev = globalThis.document;
+  globalThis.document = {
+    baseURI: regUrl.href,
+    querySelectorAll: () => links.slice(),
+    createElement: () => ({}),
+    head: {appendChild(l) { links.push(l); queueMicrotask(() => l.onload && l.onload()); }},
+  };
+  const name = (l) => l.href.split('/').slice(-2).join('/');
+  try {
+    // modules already imported by this file, so load() only adds the sheets and resolves
+    const s = await reg.load('sed');
+    assert.equal(typeof s.mount, 'function');
+    assert.deepEqual(links.map(name), ['panes/ui.css', 'panes/sed.css'], 'ui.css first, before the pane mounts');
+    await reg.load('scatter');
+    await reg.load('spectrum1d');
+    assert.deepEqual(links.map(name),
+      ['panes/ui.css', 'panes/sed.css', 'panes/scatter.css', 'panes/controls.css', 'panes/spectrum.css'],
+      'one ui.css link for every widget pane');
+    // boot's own later loadCSS of the same href reuses the link
+    const {loadCSS} = await import('../../web/js/core/loadscript.js');
+    assert.equal(await loadCSS(new URL('../../css/panes/ui.css', regUrl).href), true);
+    assert.equal(links.length, 5);
+  } finally {
+    globalThis.document = prev;
+  }
 });

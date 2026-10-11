@@ -17,7 +17,12 @@ export const PANE_MODULES = Object.freeze(Object.fromEntries(PANE_TYPES.map((t) 
  * (IMPLEMENTATION_NOTES 69). Plot panes load [<pane>.css, controls.css]; the hist pane has no
  * stylesheet of its own (its rules live in controls.css), so it loads controls.css only. Every
  * listed file exists in web/css/panes/ (tests/js/store.test.mjs checks it), so no pane CSS
- * request 404s. UI widget styles all live in css/panes/ui.css, which boot loads.
+ * request 404s. UI widget styles all live in css/panes/ui.css, which boot loads on every page;
+ * that includes the ui/controls.js widget rules the plot, SED and spectrum panes share
+ * (.pk-models, .pk-ctl-group, .pk-ctl-template, .pk-template-scale, .pk-feat-chip,
+ * .pk-feat-toggles; IMPLEMENTATION_NOTES 108), so no entry here lists ui.css and no pane sheet
+ * repeats those rules. Boot attaches ui.css after mountLayout, so load() also attaches it
+ * (WIDGET_CSS) before a pane in WIDGET_PANES mounts; loadCSS reuses the one <link> by href.
  */
 export const PANE_CSS = Object.freeze({
   list: ['../../css/panes/list.css'],
@@ -36,6 +41,13 @@ export const PANE_CSS = Object.freeze({
   readme: ['../../css/panes/landing.css'],
   landing: ['../../css/panes/landing.css'],
 });
+
+/** The shared ui/controls.js widget sheet (relative to this file), attached by load() before a
+ * pane that mounts those widgets, so its controls never paint unstyled (IMPLEMENTATION_NOTES 108). */
+export const WIDGET_CSS = '../../css/panes/ui.css';
+
+/** Pane types that mount ui/controls.js widgets (controls bar, model controls, feature chips). */
+export const WIDGET_PANES = Object.freeze(['scatter', 'manifold', 'spectrum1d', 'sed']);
 
 /** Human titles used by fold headers and mobile tabs when a leaf has no options.title. */
 export const PANE_TITLES = Object.freeze({
@@ -73,7 +85,8 @@ export function load(type) {
     p = Promise.resolve(typeof o === 'function' ? o() : o);
   } else {
     const url = modulePath(type);
-    const css = (PANE_CSS[type] || []).map((c) => loadCSS(new URL(c, import.meta.url).href));
+    const sheets = (WIDGET_PANES.includes(type) ? [WIDGET_CSS] : []).concat(PANE_CSS[type] || []);
+    const css = sheets.map((c) => loadCSS(new URL(c, import.meta.url).href));
     p = Promise.all(css).then(() => import(url));
   }
   p = p.then((mod) => {

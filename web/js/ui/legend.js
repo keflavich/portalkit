@@ -8,7 +8,10 @@
 // value by: '' is an explicit "none" that overrides the option.
 //   category column -> one toggle chip per level (swatch, label, count); clicking a chip hides
 //                      or shows the level through filters:<ds>.cats[key] (off-level list);
-//                      alt-click shows only that level, a second alt-click shows all again
+//                      alt-click shows only that level, a second alt-click shows all again;
+//                      a default_off column keeps cats[key] = [] when all levels are shown
+//                      (IMPLEMENTATION_NOTES 104; toggleLevel keeps [] unless the caller says
+//                      the column has no default_off levels)
 //   numeric column  -> colormap gradient with the lo / hi values
 //   none            -> nothing but the counts line
 // The counts line reads "<shown> of <N> shown · <k> selected" from vis:<ds> and sel:<ds>.
@@ -143,8 +146,25 @@ function el(tag, cls, text) {
   return e;
 }
 
-/** Toggle `level` in a filters object's cats[key] off-list (returns a new filters object). */
-export function toggleLevel(filters, key, level, {only = false, levels = []} = {}) {
+/** True when a column meta lists category `default_off` levels. */
+export function hasDefaultOff(meta) {
+  return !!meta && Array.isArray(meta.default_off) && meta.default_off.length > 0;
+}
+
+/**
+ * Toggle `level` in a filters object's cats[key] off-list (returns a new filters object).
+ * opts: {only (alt-click: show only `level`; again shows all), levels (all levels of the column),
+ * defaultOff (the column has manifest `default_off` levels: a true value or a non-empty array;
+ * false or an empty array: it has none; left out: unknown)}.
+ * When every level ends up shown, cats[key] is kept as [] (explicit "all levels on",
+ * IMPLEMENTATION_NOTES 104) so the hash and the filter owner do not re-apply the default_off
+ * levels on reload. Only a caller that states the column has no default_off levels (defaultOff
+ * false / []) gets the key removed; a caller that leaves defaultOff out gets the safe [] (an
+ * empty off-list filters nothing, so the only cost is a longer f= in the URL).
+ */
+export function toggleLevel(filters, key, level, {only = false, levels = [], defaultOff} = {}) {
+  const keepEmpty = defaultOff === undefined
+    || (Array.isArray(defaultOff) ? defaultOff.length > 0 : !!defaultOff);
   const f = {...(filters || {})};
   const cats = {...(f.cats || {})};
   const off = new Set(cats[key] || []);
@@ -159,7 +179,7 @@ export function toggleLevel(filters, key, level, {only = false, levels = []} = {
     off.add(level);
     cats[key] = Array.from(off);
   }
-  if (!cats[key].length) delete cats[key];
+  if (!cats[key].length && !keepEmpty) delete cats[key];
   if (Object.keys(cats).length) f.cats = cats;
   else delete f.cats;
   return f;
@@ -234,7 +254,9 @@ export function createLegend(host, opts) {
           b.append(el('span', 'pk-legend-n pk-num', fmtCount(levelCounts.counts[i] || 0)));
         }
         b.addEventListener('click', (e) => {
-          const f = toggleLevel(store.get(`filters:${ds}`) || {}, c.by, lv, {only: e.altKey, levels: meta.levels});
+          const f = toggleLevel(store.get(`filters:${ds}`) || {}, c.by, lv, {
+            only: e.altKey, levels: meta.levels, defaultOff: hasDefaultOff(meta),
+          });
           store.set({[`filters:${ds}`]: f}, {source: pane});
           renderBody();
         });

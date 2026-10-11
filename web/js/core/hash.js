@@ -6,7 +6,9 @@
 //   id=<id>                       focus.id (focus.ds = primary dataset; boot resolves focus.i)
 //   sel=ids:..|bits:..|r:..       Selection.serialize() of the primary dataset (the form is
 //                                 chosen by the Selection alone; see selection.js)
-//   f=<b64url(JSON)>              filters:<primaryDs>  (raw JSON starting with '{' also accepted)
+//   f=<b64url(JSON)>              filters:<primaryDs>  (raw JSON starting with '{' also accepted;
+//                                 cats entries equal to [] are kept: "all levels on" for a
+//                                 default_off column, IMPLEMENTATION_NOTES 104)
 //   <pane>.x=<expr>, <pane>.y=<expr>   axes:<pane>.x / .y
 //   <pane>.frame=<preset>|b64:<b64url(f32 LE F)>   frame:<pane>
 //   c=<by>[~<cmap>[~<lo>~<hi>]]   color
@@ -150,6 +152,24 @@ function isEmptyValue(v) {
   return false;
 }
 
+/**
+ * True when a `filters:<ds>` value carries something for `f=`. Like isEmptyValue, except that a
+ * `cats` entry whose value is an array counts even when the array is empty: `cats: {key: []}`
+ * records "all levels on" for a column with manifest `default_off` (IMPLEMENTATION_NOTES 104).
+ */
+function filtersCarry(f) {
+  if (!f || typeof f !== 'object' || Array.isArray(f)) return false;
+  for (const k of Object.keys(f)) {
+    const v = f[k];
+    if (k === 'cats' && v && typeof v === 'object' && !Array.isArray(v)) {
+      if (Object.keys(v).some((ck) => Array.isArray(v[ck]))) return true;
+      continue;
+    }
+    if (!isEmptyValue(v)) return true;
+  }
+  return false;
+}
+
 function encodeF32(arr) {
   const f = Float32Array.from(arr);
   const b = new Uint8Array(f.length * 4);
@@ -197,7 +217,7 @@ export function stateToHash(state, opts = {}) {
   }
   if (ds) {
     const f = state[`filters:${ds}`];
-    if (f && !isEmptyValue(f)) out.f = encodeJSONParam(f);
+    if (filtersCarry(f)) out.f = encodeJSONParam(f);
   }
   for (const key of Object.keys(state)) {
     if (key.startsWith('axes:')) {

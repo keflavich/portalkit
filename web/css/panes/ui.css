@@ -1,5 +1,7 @@
 /* UI widgets (web/js/ui/*.js): hover card, toasts, lightbox, help dialog, portal navigation,
-   import/export dialogs and annotation chips. Loaded by boot before the widgets install. */
+   import/export dialogs, annotation chips, and the widget rules shared by every pane that mounts
+   ui/controls.js widgets (model controls, template picker, feature toggles; IMPLEMENTATION_NOTES
+   108). Loaded by boot before the widgets install, on every page. */
 
 /* ---------------------------------------------------------------- hover card (ui/hover.js) */
 .pk-hovercard {
@@ -177,6 +179,42 @@ html.pk-lb-open { overflow: hidden; }
 .pk-io-file { font-size: var(--pk-fs-0); max-width: 100%; }
 .pk-io-status { margin: 0; font-size: var(--pk-fs-1); min-height: 1.4em; overflow-wrap: anywhere; }
 .pk-io-buttons { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--pk-sp-2); margin-top: var(--pk-sp-2); }
+
+/* ---------------------------------------------------------------- shared control widgets (ui/controls.js)
+   The only copy of these rules (IMPLEMENTATION_NOTES 108): the plot panes (controls.css), the SED
+   pane (sed.css) and the spectrum panes (spectrum.css) all rely on them. Pane sheets may load
+   before or after this one, so a pane that needs a different value uses a more specific selector
+   (e.g. `.pk-sed-bar .pk-models select`) rather than a same-specificity rule. */
+
+/* widget groups (extinction, colour, template, features) */
+.pk-ctl-group { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--pk-sp-1) var(--pk-sp-2); min-width: 0; max-width: 100%; }
+/* template picker in the plot-pane controls bar (was a controls.css rule): scoped to .pk-controls
+   so the SED / spectrum model controls keep their own widths, and specific enough to beat
+   `.pk-ctl-select` (controls.css) whichever sheet loads last */
+.pk-controls .pk-template-grid, .pk-controls .pk-template-scale { max-width: 9em; }
+
+/* feature family chips (featureToggles); after .pk-ctl-group so a features group keeps a 2px gap */
+.pk-feat-toggles { display: inline-flex; flex-wrap: wrap; gap: 2px; min-width: 0; max-width: 100%; }
+.pk-feat-chip { border-left: 3px solid var(--pk-feat-color, var(--pk-accent)); }
+.pk-feat-chip[aria-pressed="false"] { opacity: .7; }
+
+/* model controls (modelControls: sed, spectrum1d). The widget groups inside .pk-models flow as one
+   wrapped row. */
+.pk-models { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--pk-sp-1) var(--pk-sp-2); min-width: 0; max-width: 100%; }
+.pk-models .pk-ctl-group { display: contents; }
+.pk-models .pk-models-bands input, .pk-models .pk-template-scale { width: 6em; }
+.pk-models label { display: inline-flex; align-items: center; gap: var(--pk-sp-1); white-space: nowrap; color: var(--pk-fg-2); }
+.pk-models input[type="range"] { width: 8em; min-width: 5em; }
+.pk-models .pk-models-num { width: 4.5em; }
+.pk-models select { max-width: 12em; }
+
+/* hidden widgets (after the display rules above) */
+.pk-feat-toggles[hidden], .pk-ctl-template[hidden] { display: none; }
+.pk-models [hidden] { display: none !important; }
+
+@media (max-width: 899px) {
+  .pk-models input[type="range"] { width: 6em; }
+}
 
 @media (max-width: 899px) {
   .pk-toasts { left: var(--pk-sp-4); right: var(--pk-sp-4); bottom: calc(var(--pk-sp-4) + 36px); align-items: stretch; max-width: none; }
