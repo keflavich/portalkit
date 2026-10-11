@@ -197,6 +197,31 @@ function readStored(key, version) {
   }
 }
 
+/** The media query below which the layout runs in mobile tab mode (one pane shown). */
+export function tabModeQuery() {
+  return `(max-width: ${MOBILE_BREAK_PX - 0.02}px)`;
+}
+
+/**
+ * Ids of the panes mountLayout shows, and so mounts, at load: the saved fold state
+ * (localStorage, same key and version as mountLayout) over the spec's `collapsed`, and in tab
+ * mode only the initial active tab (the first unfolded pane). `tabMode` defaults to the current
+ * tabModeQuery() match. Boot uses it to start fetching those panes' modules early
+ * (core/boot.js warmPaneModules). Reads only; `norm` (normalizeTree) is not modified.
+ */
+export function shownAtLoad(norm, {portalId = 'portal', pageId = 'page', tabMode} = {}) {
+  if (!norm || !Array.isArray(norm.order) || !norm.panes) return [];
+  const saved = readStored(layoutStorageKey(portalId, pageId), `${LAYOUT_VERSION}:${norm.signature}`);
+  const savedFold = saved ? saved.collapsed : {};
+  const folded = (id) => (Object.prototype.hasOwnProperty.call(savedFold, id) ? !!savedFold[id] : !!norm.panes.get(id).collapsed);
+  const tabs = tabMode === undefined ? (typeof matchMedia === 'function' && matchMedia(tabModeQuery()).matches) : !!tabMode;
+  if (tabs) {
+    const first = norm.order.find((id) => !folded(id)) || norm.order[0];
+    return first === undefined ? [] : [first];
+  }
+  return norm.order.filter((id) => !folded(id));
+}
+
 function writeStored(key, value) {
   try {
     if (typeof localStorage !== 'undefined') localStorage.setItem(key, JSON.stringify(value));
@@ -271,6 +296,9 @@ export function mountLayout(root, tree, ctx) {
 
   function buildLeaf(leaf) {
     const pane = h('section', 'pk-pane', {'data-pane-id': leaf.id, 'data-pane-type': leaf.type});
+    // Folded from the start (updateVisibility keeps it in sync): set before the first style
+    // resolution so the chevron does not run its rotate transition at load.
+    if (leaf.collapsed) pane.classList.add('pk-collapsed');
     const head = h('header', 'pk-pane-head');
     const fold = h('button', 'pk-fold', {type: 'button', 'aria-expanded': String(!leaf.collapsed), 'aria-controls': `pk-body-${leaf.id}`});
     const chev = h('span', 'pk-chev', {'aria-hidden': 'true'});
@@ -378,6 +406,12 @@ export function mountLayout(root, tree, ctx) {
   }
 
   function applySizes(split) {
+    applySizeClasses(split);
+    applySplitterAria(split);
+  }
+
+  /** Flex sizes, collapsed cells and inert splitters of one split (no layout reads). */
+  function applySizeClasses(split) {
     const vis = split.children.filter((c) => !nodeCollapsed(c));
     const anyFlex = vis.some((c) => c.fixedPx === null);
     let filler = null;
@@ -395,9 +429,13 @@ export function mountLayout(root, tree, ctx) {
       else if (c.fixedPx !== null) cell.style.flex = `0 1 ${c.fixedPx}px`;
       else cell.style.flex = `${Math.max(1e-6, c.grow * growK)} 1 0px`;
     }
+    split.splitters.forEach((sp, k) => sp.classList.toggle('pk-splitter-inert', !neighbours(split, k)));
+  }
+
+  /** aria-valuenow of the splitters of one split (reads geometry). */
+  function applySplitterAria(split) {
     split.splitters.forEach((sp, k) => {
       const ends = neighbours(split, k);
-      sp.classList.toggle('pk-splitter-inert', !ends);
       if (ends) {
         const a = split.children[ends[0]];
         const total = split.el.getBoundingClientRect()[split.dir === 'row' ? 'width' : 'height'] || 0;
@@ -410,7 +448,11 @@ export function mountLayout(root, tree, ctx) {
   }
 
   function applyAllSizes() {
-    for (const s of splits.values()) applySizes(s);
+    // Every class first, then the geometry reads: a read between two splits would resolve
+    // styles mid-update, and the next class change would then start a CSS transition
+    // (splitter background) that repaints frames during startup.
+    for (const s of splits.values()) applySizeClasses(s);
+    for (const s of splits.values()) applySplitterAria(s);
   }
 
   /** Nearest non-collapsed child indices on each side of splitter k, or null. */
@@ -777,7 +819,7 @@ export function mountLayout(root, tree, ctx) {
     }
   }
 
-  const mql = typeof matchMedia === 'function' ? matchMedia(`(max-width: ${MOBILE_BREAK_PX - 0.02}px)`) : null;
+  const mql = typeof matchMedia === 'function' ? matchMedia(tabModeQuery()) : null;
   const onMql = () => setTabMode(mql.matches);
   if (mql) {
     if (mql.addEventListener) mql.addEventListener('change', onMql);

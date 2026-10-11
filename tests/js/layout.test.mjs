@@ -4,8 +4,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import {firstPaintLatch, LAYOUT_TIMING, mountLayout, PANE_FIRST_PAINT_MAX_WAIT_MS} from '../../web/js/layout/layout.js';
+import {readFileSync} from 'node:fs';
+
+import {
+  firstPaintLatch, LAYOUT_TIMING, LAYOUT_VERSION, layoutStorageKey, mountLayout, normalizeTree,
+  PANE_FIRST_PAINT_MAX_WAIT_MS, shownAtLoad,
+} from '../../web/js/layout/layout.js';
 import {createTestHooks} from '../../web/js/core/testhooks.js';
+import {warmPaneModules} from '../../web/js/core/boot.js';
 
 function tick(ms = 0) {
   return new Promise((r) => setTimeout(r, ms));
@@ -79,7 +85,10 @@ class FakeEl {
     const pool = sel.startsWith(':scope') ? this.children : this.all();
     return pool.find((e) => e.classList.contains(m[1])) || null;
   }
-  querySelectorAll() { return []; }
+  querySelectorAll(sel) {
+    const m = /^\.([\w-]+)$/.exec(sel);
+    return m ? this.all().filter((e) => e.classList.contains(m[1])) : [];
+  }
 }
 
 async function withDom(fn) {
@@ -261,6 +270,97 @@ test('layout: a pane folded while mounting starts paused', () => withDom(async (
   }
   assert.equal(state('list'), 'error');
   lay.destroy();
+}));
+
+test('base.css: the .pk-skeleton placeholder is static (no animation or transition)', () => {
+  const css = readFileSync(new URL('../../web/css/base.css', import.meta.url), 'utf8');
+  const rules = Array.from(css.matchAll(/([^{}]*\.pk-skeleton[^{}]*)\{([^}]*)\}/g));
+  assert.ok(rules.length >= 1, '.pk-skeleton rule present');
+  for (const [, sel, body] of rules) assert.doesNotMatch(body, /animation|transition/, `${sel.trim()} animates`);
+  assert.doesNotMatch(css, /@keyframes\s+pk-shimmer/);
+});
+
+test('layout: a pane folded at load carries pk-collapsed when it enters the tree (no chevron transition)', () => withDom(async () => {
+  const registry = {load: async () => ({mount() { return {resize() {}, destroy() {}}; }})};
+  const root = new FakeEl('div');
+  // Class list of each pane section at the moment it is first inserted under a parent: style
+  // resolution (and so any transition start) can only happen after that.
+  const atInsert = new Map();
+  const append = FakeEl.prototype.append;
+  FakeEl.prototype.append = function (...cs) {
+    for (const c of cs) {
+      if (c && c.tagName === 'SECTION' && c.attrs['data-pane-id'] && !atInsert.has(c.attrs['data-pane-id'])) {
+        atInsert.set(c.attrs['data-pane-id'], c.className);
+      }
+    }
+    return append.apply(this, cs);
+  };
+  let lay;
+  try {
+    lay = mountLayout(root, {row: [{pane: 'list', collapsed: true}, {pane: 'sky'}]}, {app: {page: {}}, registry});
+  } finally {
+    FakeEl.prototype.append = append;
+  }
+  assert.ok(atInsert.has('list') && atInsert.has('sky'), 'both panes inserted');
+  assert.match(atInsert.get('list'), /\bpk-collapsed\b/, 'folded pane already has pk-collapsed when inserted');
+  assert.doesNotMatch(atInsert.get('sky'), /\bpk-collapsed\b/);
+  assert.ok(lay.info('list').el.classList.contains('pk-collapsed'));
+  await settle();
+  lay.destroy();
+}));
+
+async function withStorage(store, fn) {
+  const saved = {localStorage: globalThis.localStorage, matchMedia: globalThis.matchMedia};
+  globalThis.localStorage = {getItem: (k) => (Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null), setItem() {}};
+  delete globalThis.matchMedia;
+  try {
+    return await fn();
+  } finally {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete globalThis[k];
+      else globalThis[k] = v;
+    }
+  }
+}
+
+test('shownAtLoad: spec folds, saved folds win, tab mode shows the first unfolded pane only', () => withStorage({}, () => {
+  const tree = {row: [{pane: 'list', collapsed: true}, {col: [{pane: 'sky'}, {pane: 'hist'}]}, {pane: 'detail'}]};
+  const norm = normalizeTree(tree);
+  assert.deepEqual(shownAtLoad(norm), ['sky', 'hist', 'detail'], 'no matchMedia: desktop mode');
+  assert.deepEqual(shownAtLoad(norm, {tabMode: true}), ['sky']);
+  const key = layoutStorageKey('pt', 'pg');
+  const value = JSON.stringify({v: `${LAYOUT_VERSION}:${norm.signature}`, sizes: {}, collapsed: {list: false, sky: true}});
+  return withStorage({[key]: value}, () => {
+    assert.deepEqual(shownAtLoad(norm, {portalId: 'pt', pageId: 'pg'}), ['list', 'hist', 'detail']);
+    assert.deepEqual(shownAtLoad(norm, {portalId: 'pt', pageId: 'pg', tabMode: true}), ['list']);
+    assert.deepEqual(shownAtLoad(norm, {portalId: 'other', pageId: 'pg'}), ['sky', 'hist', 'detail'], 'other page key');
+    const stale = JSON.stringify({v: `${LAYOUT_VERSION}:deadbeef`, sizes: {}, collapsed: {sky: true}});
+    return withStorage({[key]: stale}, () => {
+      assert.deepEqual(shownAtLoad(norm, {portalId: 'pt', pageId: 'pg'}), ['sky', 'hist', 'detail'], 'stale layout version ignored');
+      assert.deepEqual(shownAtLoad(null), []);
+    });
+  });
+}));
+
+test('warmPaneModules: imports each shown pane type once; skips folded, unknown, overridden and in-memory', () => withStorage({}, () => {
+  const norm = normalizeTree({row: [{pane: 'list'}, {pane: 'list', id: 'list2'}, {pane: 'sky', collapsed: true}, {pane: 'nope'}, {pane: 'hist'}]});
+  const asked = [];
+  const reg = {
+    has: (t) => t !== 'nope',
+    modulePath: (t) => { asked.push(t); return 'data:text/javascript,export const meta={};export function mount(){}'; },
+  };
+  assert.deepEqual(warmPaneModules(norm, reg), ['list', 'hist']);
+  assert.deepEqual(asked, ['list', 'hist']);
+  asked.length = 0;
+  assert.deepEqual(warmPaneModules(norm, reg, {tabMode: true}), ['list'], 'tab mode: the initial active tab only');
+  assert.deepEqual(asked, ['list']);
+  asked.length = 0;
+  const withOverride = Object.assign({}, reg, {isOverridden: (t) => t === 'list'});
+  assert.deepEqual(warmPaneModules(norm, withOverride), ['hist'], 'an overridden built-in is not fetched');
+  assert.deepEqual(asked, ['hist']);
+  const memOnly = {has: (t) => t !== 'nope', modulePath: () => { throw new Error('unknown pane type'); }};
+  assert.deepEqual(warmPaneModules(norm, memOnly), [], 'in-memory panes are skipped without throwing');
+  assert.deepEqual(warmPaneModules(null, reg), []);
 }));
 
 async function withTestWindow(fn) {

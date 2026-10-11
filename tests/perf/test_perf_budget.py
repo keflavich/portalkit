@@ -8,8 +8,8 @@ SwiftShader against the DevServer:
     1M    <= 10 s       <= 1.5 s       <= 2 s             <= 2 MB
     5M    <= 25 s       <= 6 s         <= 6 s             <= 6 MB
 
-* first paint: wall time from navigation to ``__pk.ready`` plus the visible panes leaving the
-  ``loading`` state;
+* first paint: wall time from navigation (``page.goto``, after the browser context and page
+  exist) to ``__pk.ready`` plus the visible panes leaving the ``loading`` state;
 * brush commit: in-page time of ``__pk.brush('scatter', rect)`` (worker brush + selection
   apply + ``brush:commit``);
 * settle after pan: time from a wheel event on the scatter canvas until ``__pk.stats()`` stops
@@ -18,7 +18,15 @@ SwiftShader against the DevServer:
   at or before ``__pk.firstPaintAt()``, the time ``app.afterFirstPaint()`` resolved
   (IMPLEMENTATION_NOTES 112). Deferred reads (whole columns, pos) start after that time.
 
-Also reported, not budgeted: ``first_paint_at_s`` (navigation to ``firstPaintAt``),
+Before the first timed page of the session the browser loads one untimed warm-up page (another
+page of the same synthetic portal, in its own context), waits until it has been quiet for
+``QUIET_SETTLE_MS`` and closes it, so the first timed run measures the page, not Chromium
+start-up (GPU process, SwiftShader initialisation). Timed runs still start from a fresh browser
+context (cold HTTP cache).
+
+Also reported, not budgeted: ``open_s`` (context and page creation before the navigation),
+``first_paint_from_open_s`` (first paint counted from before the context was created),
+``first_paint_at_s`` (navigation to ``firstPaintAt``),
 ``bytes_to_quiet_settle`` (responses finished once the page has been quiet for
 ``QUIET_SETTLE_MS``, before the brush) and ``request_order`` (data requests in finish order,
 with bytes and finish time relative to ``firstPaintAt``).
@@ -82,6 +90,12 @@ SETTLE_JS = """async ([quiet, limit]) => {
   return {settled: Math.max(lastChange, lastBusy), timedOut, end: performance.now()};
 }"""
 SETTLE_LIMIT_MS = 60000
+#: PK_PERF_WARMUP=0 skips the warm-up page (to compare against a cold browser)
+WARMUP = os.environ.get("PK_PERF_WARMUP", "1") != "0"
+#: pages tried, in order, for the untimed warm-up load (the first one the portal has)
+WARMUP_PAGES = ("cmd", "hist", "explorer")
+#: browsers already warmed in this session (id of the session browser object)
+_WARMED: set[int] = set()
 
 
 def _finished_bytes(records, t_ms: float) -> tuple[int, int]:
@@ -97,6 +111,29 @@ def _request_order(records, t_ref: float, limit: int = ORDER_REPORT_MAX) -> list
         tail = r.path.split("/data/", 1)[-1] if "/data/" in r.path else r.path.rsplit("/", 1)[-1]
         out.append([tail, int(r.bytes or 0), round(r.t - t_ref, 1)])
     return out[:limit]
+
+
+def _warm_up(browser, open_page, portal) -> dict | None:
+    """Load one untimed page in ``browser`` (once per browser) and close it.
+
+    Returns {page, s} for the report, or None when this browser was already warmed.
+    """
+    if not WARMUP or id(browser) in _WARMED:
+        return None
+    _WARMED.add(id(browser))
+    page = next((p for p in WARMUP_PAGES if p in portal.pages), "explorer")
+    t0 = time.perf_counter()
+    run = open_page(portal.url_path(page), wait=False)
+    try:
+        status = run.wait_ready()
+        assert status == "ok", f"warm-up page {page}: {status}"
+        run.wait_panes_settled(timeout_ms=120000)
+        # Let the deferred reads (whole columns, positions) and their decode finish, so the
+        # timed run does not share the DevServer and the CPUs with the warm-up page's tail.
+        quiet = run.ev(SETTLE_JS, [QUIET_SETTLE_MS, SETTLE_LIMIT_MS])
+    finally:
+        run.close()
+    return {"page": page, "s": round(time.perf_counter() - t0, 3), "quiet_timed_out": quiet["timedOut"]}
 
 
 def _report_path(synth_root: Path) -> Path:
@@ -118,21 +155,31 @@ def _write_report(path: Path, key: str, entry: dict) -> None:
 
 
 @pytest.mark.parametrize("n", [50000, 1000000, pytest.param(5000000, marks=pytest.mark.slow)])
-def test_perf_budget(e2e, request, synth, synth_root, server, open_page, n):
+def test_perf_budget(e2e, request, synth, synth_root, server, browser, open_page, n):
     portal = synth(n)
     budget = BUDGETS[n]
     e2e.xfail_unless_panes(request, e2e.page_pane_types(portal, "explorer"))
+    warmup = _warm_up(browser, open_page, portal)
 
     server.clear_requests()
-    t0 = time.perf_counter()
-    t0_epoch_ms = time.time() * 1000.0
+    t_open = time.perf_counter()
+    t_open_epoch_ms = time.time() * 1000.0
     run = open_page(portal.url_path("explorer"), wait=False)
+    # Timed from the navigation (page.goto; run.t_start), as the first-paint definition above
+    # says: creating the browser context and page is Chromium work, not the page's.
+    t0 = run.t_start
+    t0_epoch_ms = t_open_epoch_ms + (t0 - t_open) * 1000.0
     status = run.wait_ready()
     assert status == "ok", status
     t_ready = time.perf_counter() - t0
     run.wait_panes_settled(timeout_ms=120000)
     first_paint = time.perf_counter() - t0
+    first_paint_from_open = time.perf_counter() - t_open
     fp_at = run.first_paint_at(timeout_ms=120000)
+    # reported only: when the browser started the navigation and when the page's HTML had
+    # arrived, relative to t0 (page.goto)
+    nav = run.ev("() => ({origin: performance.timeOrigin, "
+                 "html: (performance.getEntriesByType('navigation')[0] || {}).responseEnd || null})")
     nbytes, nreq = _finished_bytes(list(server.requests), fp_at)
     # reported only: what the page reads until it has been quiet for QUIET_SETTLE_MS
     quiet = run.ev(SETTLE_JS, [QUIET_SETTLE_MS, SETTLE_LIMIT_MS])
@@ -182,6 +229,9 @@ def test_perf_budget(e2e, request, synth, synth_root, server, open_page, n):
         "bytes_to_quiet_settle": quiet_bytes, "requests_to_quiet_settle": quiet_req,
         "quiet_settle_timed_out": quiet["timedOut"], "request_order": order,
         "stats": stats, "tiers": tiers, "budget": budget, "time_scale": TIME_SCALE, "runtime": run.ev("() => window.__pk.app.runtime"),
+        "warmup": warmup, "open_s": round(t0 - t_open, 3), "first_paint_from_open_s": round(first_paint_from_open, 3),
+        "nav_start_s": round((nav["origin"] - t0_epoch_ms) / 1000.0, 3),
+        "html_done_s": None if nav["html"] is None else round((nav["origin"] + nav["html"] - t0_epoch_ms) / 1000.0, 3),
     }
     _write_report(_report_path(synth_root), f"explorer@{n}", entry)
 

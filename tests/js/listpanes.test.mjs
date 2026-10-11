@@ -671,6 +671,30 @@ test('list: first screen from rows(), no values() or id() until idle after after
   h.pane.destroy();
 })));
 
+test('list: the first-screen rows() read does not wait for an animation frame', () => withIdle(Infinity, () => withDom(async () => {
+  // A busy compositor (software GL) can hold animation frames back: queue them by hand.
+  const frames = [];
+  globalThis.requestAnimationFrame = (f) => { frames.push(f); return frames.length; };
+  globalThis.cancelAnimationFrame = (k) => { frames[k - 1] = null; };
+  const h = listHarness();
+  let painted = false;
+  h.pane.firstPaint.then(() => { painted = true; });
+  await settle();
+  assert.ok(frames.length > 0, 'a paint frame is queued');
+  assert.deepEqual(h.client.calls.rows, [[0, ROW_BLOCK]], 'rows requested before any frame ran');
+  assert.deepEqual(h.client.calls.values, []);
+  assert.equal(painted, false, 'the latch waits for the frame that draws the rows (note 112)');
+  while (frames.length) {
+    const f = frames.shift();
+    if (f) f(0);
+    await settle();
+  }
+  assert.equal(painted, true);
+  assert.deepEqual(h.client.calls.rows, [[0, ROW_BLOCK]], 'the frame reuses the read in flight');
+  assert.deepEqual(listedIds(h.root).slice(0, 2), ['s0', 's1']);
+  h.pane.destroy();
+})));
+
 test('list: firstPaint waits for the rows; scrolling defers the idle column load', () => withIdle(60, () => withDom(async () => {
   const rowsGate = gate();
   const client = fakeClient();

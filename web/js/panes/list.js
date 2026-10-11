@@ -769,34 +769,42 @@ export function mount(root, ctx) {
     });
   }
 
-  function paintNow() {
-    if (!client) return;
+  /** Window of rows the view shows now: {first, nRows, full, frac} (reads layout, no writes). */
+  function windowRange() {
     viewH = view.clientHeight || viewH;
-    const {ratio} = scrollGeometry();
     // virtual:false (section 6.10) renders every row in place for lists up to 5000 rows.
     const full = !virtualOn && total <= 5000;
-    let k;
-    if (full) {
-      first = 0;
-      k = total;
-      rowsEl.style.transform = 'translateY(0px)';
-    } else {
-      const pos = view.scrollTop * ratio;
-      first = Math.max(0, Math.min(Math.max(0, total - 1), Math.floor(pos / rowH)));
-      const frac = pos - first * rowH;
-      k = Math.min(total - first, Math.ceil(viewH / rowH) + 2);
-      rowsEl.style.transform = `translateY(${Math.round(view.scrollTop - frac)}px)`;
-    }
-    const nRows = Math.max(0, k);
+    if (full) return {first: 0, nRows: Math.max(0, total), full, frac: 0};
+    const {ratio} = scrollGeometry();
+    const pos = view.scrollTop * ratio;
+    const f0 = Math.max(0, Math.min(Math.max(0, total - 1), Math.floor(pos / rowH)));
+    return {first: f0, nRows: Math.max(0, Math.min(total - f0, Math.ceil(viewH / rowH) + 2)), full, frac: pos - f0 * rowH};
+  }
+
+  /**
+   * In stored order the window [a, a + nRows) is one rows() read (row chunks or the head
+   * chunks); its payload gives the ids and, until the columns load, the cells. Startup calls
+   * this directly so the first read does not wait for an animation frame, which a busy
+   * compositor (software GL) can hold back for hundreds of ms.
+   */
+  function requestWindow(a, nRows) {
+    if (order || nRows <= 0 || rowsFailed) return;
+    // Every row of the window must fit in the cache at once (virtual:false shows up to 5000).
+    rowCache.reserve(nRows + 2 * ROW_BLOCK);
+    const miss = rowCache.missing(a, a + nRows);
+    if (miss) for (const [lo, hi] of rowBlocks(miss[0], miss[1], client.n)) if (rowCache.missing(lo, hi)) requestRows(lo, hi);
+  }
+
+  function paintNow() {
+    if (!client) return;
+    const win = windowRange();
+    first = win.first;
+    const nRows = win.nRows;
+    rowsEl.style.transform = win.full ? 'translateY(0px)' : `translateY(${Math.round(view.scrollTop - win.frac)}px)`;
     // Every row of the window must fit in the cache at once (virtual:false shows up to 5000).
     rowCache.reserve(nRows + 2 * ROW_BLOCK);
     ensurePool(nRows);
-    // In stored order the window [first, first + nRows) is one rows() read (row chunks or the
-    // head chunks); its payload gives the ids and, until the columns load, the cells.
-    if (!order && nRows > 0 && !rowsFailed) {
-      const miss = rowCache.missing(first, first + nRows);
-      if (miss) for (const [a, b] of rowBlocks(miss[0], miss[1], client.n)) if (rowCache.missing(a, b)) requestRows(a, b);
-    }
+    requestWindow(first, nRows);
     const f = store.get('focus');
     const fi = f && f.ds === ds && Number.isInteger(f.i) ? f.i : -1;
     const selMask = sel ? sel.mask : null;
@@ -1192,6 +1200,11 @@ export function mount(root, ctx) {
       if (f && f.ds === ds && Number.isInteger(f.i)) scrollToPos(positionOf(f.i), 'center');
       // swatches from the row records (a colour column they lack loads after first paint)
       refreshColor().catch(report);
+      // Ask for the first screen now; the frame that draws it follows (paint).
+      if (visible) {
+        const win = windowRange();
+        requestWindow(win.first, win.nRows);
+      }
       paint(true);
       startupDone = true;
       // Whole shown columns wait for the page's first paint and then a quiet period.

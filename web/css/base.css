@@ -95,15 +95,15 @@ button.pk-chip { cursor: pointer; }
 .pk-mono { font-family: var(--pk-mono); }
 .pk-num { font-variant-numeric: tabular-nums; }
 
+/* Loading placeholder, static on purpose (WPD3): an animated shimmer re-rasters every skeleton
+   each frame, and under software GL (SwiftShader) that backlog holds back the frames and the
+   main-thread work of the first paint. The "Loading…" text and aria-busy carry the state. */
 .pk-skeleton {
   display: flex; align-items: center; justify-content: center;
   width: 100%; height: 100%; min-height: 64px;
   color: var(--pk-fg-3); font-size: var(--pk-fs-0);
   background: linear-gradient(90deg, var(--pk-bg-2) 0%, var(--pk-bg-3) 50%, var(--pk-bg-2) 100%);
-  background-size: 200% 100%;
-  animation: pk-shimmer 1.4s ease-in-out infinite;
 }
-@keyframes pk-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
 
 .pk-error-note, .pk-warn-note, .pk-info-note {
   margin: var(--pk-sp-2); padding: var(--pk-sp-2) var(--pk-sp-3);

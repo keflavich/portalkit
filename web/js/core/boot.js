@@ -1,14 +1,16 @@
 // Page boot (ARCHITECTURE.md section 6.1). Invoked by shell.html: `boot()`.
 //
 // Order:
-//  1. parse #pk-page (theme already set by the shell's inline pre-script)
+//  1. parse #pk-page (theme already set by the shell's inline pre-script); start importing the
+//     module graphs of the panes shown at load (warmPaneModules; WPD3) so their fetch chains
+//     overlap the CSS and manifest waits. registry.load() still owns pane CSS and errors (step 5)
 //  2. store: defaults <- page.state <- carry <- legacy hash mapping (legacyhash.js, only when
 //     page.page.legacy.grammar is set; imported dynamically) <- canonical hash
 //  3. hub; start fetching manifests of every catalog a non-collapsed pane uses
 //  4. runtime capabilities (WebGL2, EXT_color_buffer_float, DecompressionStream, deviceMemory);
 //     per-pane tiers once N is known
-//  5. mount the layout (pane modules imported lazily through core/registry.js) once the base
-//     sheets and css/panes/ui.css have loaded
+//  5. mount the layout once the base sheets and css/panes/ui.css have loaded; each shown pane
+//     loads through core/registry.js (pane CSS first, then the module warmed at step 1)
 //  6. <body data-caps> (enabled caps, space separated) and data-tier ("pane:tier ...")
 //  7. bind hash, keys and theme; install window.__pk when ?pktest=1
 //  8. emit 'ready' {ms}; app.afterFirstPaint() resolves once no visible pane is loading, at the
@@ -30,7 +32,7 @@ import {registry} from './registry.js';
 import {createTestHooks} from './testhooks.js';
 import {loadCSS} from './loadscript.js';
 import {fmtCount, escapeHtml} from './fmt.js';
-import {mountLayout, normalizeTree} from '../layout/layout.js';
+import {mountLayout, normalizeTree, shownAtLoad} from '../layout/layout.js';
 import {createHub} from '../data/hub.js';
 import {Budget} from '../gl/budget.js';
 
@@ -308,6 +310,43 @@ function showFatal(err) {
   (document.querySelector('.pk-main') || document.body).prepend(note);
 }
 
+/**
+ * Start importing the module graphs of the panes the layout shows at load (layout.js
+ * shownAtLoad: saved fold state, tab mode) while boot still waits on the base CSS and the
+ * manifests. A pane module imports several levels of helpers (list -> legend -> canvas2d ->
+ * overlays -> ...), and the browser discovers each level only after the previous one arrives;
+ * starting early takes that chain off the first-paint path. import() fetches and evaluates the
+ * modules; the pane modules' top level defines constants and functions only (no DOM work), so
+ * nothing visible happens before the pane CSS loads. registry.load() still attaches the pane
+ * CSS before mount() and reports any load error when the layout mounts the pane. Types
+ * registered in memory (registry.register: tests, embedding) are skipped when the registry
+ * exposes isOverridden(), as are types modulePath() cannot resolve. `where` = {portalId,
+ * pageId, tabMode} as for shownAtLoad. Returns the types whose import started.
+ */
+export function warmPaneModules(norm, reg = registry, where = {}) {
+  const types = new Set();
+  const overridden = typeof reg.isOverridden === 'function' ? (t) => reg.isOverridden(t) : () => false;
+  for (const id of shownAtLoad(norm, where)) {
+    const leaf = norm.panes.get(id);
+    if (!leaf || !reg.has(leaf.type) || overridden(leaf.type)) continue;
+    types.add(leaf.type);
+  }
+  const warmed = [];
+  for (const type of types) {
+    let url;
+    try {
+      url = reg.modulePath(type);
+    } catch (err) {
+      if (!(err instanceof Error)) throw err;
+      continue;  // registered in memory only: nothing to fetch
+    }
+    // registry.load() imports the same URL later and surfaces a failure there.
+    import(url).catch((err) => { if (!(err instanceof Error)) throw err; });
+    warmed.push(type);
+  }
+  return warmed;
+}
+
 function readPage() {
   const node = document.getElementById('pk-page');
   if (!node) throw new Error('missing #pk-page configuration');
@@ -336,6 +375,7 @@ async function bootInner(t0, hooks) {
   const primaryDs = primaryDataset(page, norm);
   const portalId = (page.portal && page.portal.id) || 'portal';
   const assetBase = new URL('../../', import.meta.url).href;
+  warmPaneModules(norm, registry, {portalId, pageId: (page.page && page.page.id) || 'page'});
   // ui.css (shared widget rules, IMPLEMENTATION_NOTES 108) loads with the base sheets, before
   // mountLayout: its <link> precedes every pane sheet the registry adds, and panes that mount
   // widgets (controls, chips, legends) never paint unstyled.
