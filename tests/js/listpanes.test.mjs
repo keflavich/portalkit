@@ -19,8 +19,10 @@ import {MISSING} from '../../web/js/core/fmt.js';
 import {annotateOptions, catalogSortKey, mount as mountGallery, orderByRank, rankOf} from '../../web/js/panes/gallery.js';
 import {mount as mountHist} from '../../web/js/panes/hist.js';
 import {mount as mountScatter} from '../../web/js/panes/scatter.js';
+import {densityCacheStats} from '../../web/js/plot/canvas2d.js';
 import {mount as mountManifold} from '../../web/js/panes/manifold.js';
-import {searchManifests} from '../../web/js/panes/landing.js';
+import {COUNT_NOUNS, countEntries, countLabel, mount as mountLanding, searchManifests} from '../../web/js/panes/landing.js';
+import {setFetch} from '../../web/js/data/fetch.js';
 import {importResultText} from '../../web/js/ui/export.js';
 import * as legend from '../../web/js/ui/legend.js';
 import {mount as mountTable} from '../../web/js/panes/table.js';
@@ -305,6 +307,48 @@ test('searchManifests: one group per resolved manifest URL, entries without page
   assert.equal(searchManifests([{page: 'a', manifest: 'https://x.org/m.json'}], undefined)[0].url, 'https://x.org/m.json');
 });
 
+test('countEntries: valid portal.json counts[] grouped by page, nouns from the kind', () => {
+  const g = countEntries([
+    {page: 'cat', ds: 'src', kind: 'catalog', n: 1234},
+    {page: 'cat', ds: 'src2', kind: 'catalog', n: 1},
+    {page: 'img', ds: 'cut', kind: 'images', n: 1},
+    {page: 'spec', ds: 'sp', kind: 'records', n: 20},
+    {page: 'odd', ds: 'x', kind: 'mystery', n: 3},
+    {page: 'u1', ds: 'a', kind: 'catalog', n: 2, unit: 'field'},
+    {page: 'u2', ds: 'a', kind: 'catalog', n: 2, units: 'Sgr B2 cores'},
+    {page: 'u3', ds: 'a', kind: 'records', n: 2, unit: ' ', units: ''},
+    // invalid entries: dropped
+    {page: 'bad', kind: 'catalog', n: -1}, {page: 'bad', kind: 'catalog', n: 1.5},
+    {page: 'bad', kind: 'catalog', n: NaN}, {page: 'bad', kind: 'catalog', n: '7'},
+    {page: '', kind: 'catalog', n: 3}, {kind: 'catalog', n: 3}, null, 4, 'x',
+  ]);
+  assert.deepEqual(Array.from(g.keys()), ['cat', 'img', 'spec', 'odd', 'u1', 'u2', 'u3']);
+  assert.deepEqual(g.get('cat').map((e) => [e.ds, e.n, e.unit, e.units]), [['src', 1234, 'source', 'sources'], ['src2', 1, 'source', 'sources']]);
+  assert.deepEqual([g.get('img')[0].unit, g.get('img')[0].units], COUNT_NOUNS.images);
+  assert.deepEqual([g.get('spec')[0].unit, g.get('spec')[0].units], ['spectrum', 'spectra']);
+  assert.deepEqual([g.get('odd')[0].unit, g.get('odd')[0].units], ['item', 'items']);
+  assert.deepEqual([g.get('u1')[0].unit, g.get('u1')[0].units], ['field', 'fields']);
+  assert.deepEqual([g.get('u2')[0].unit, g.get('u2')[0].units], ['Sgr B2 cores', 'Sgr B2 cores']);
+  assert.deepEqual([g.get('u3')[0].unit, g.get('u3')[0].units], ['spectrum', 'spectra'], 'blank nouns: kind default');
+  assert.equal(countEntries(null).size, 0);
+  assert.equal(countEntries({page: 'a', n: 1}).size, 0);
+});
+
+test('countLabel: singular at n == 1, same nouns summed, different nouns listed', () => {
+  const one = (n, unit = 'source', units = 'sources', ds = 'a') => ({ds, n, unit, units});
+  assert.deepEqual(countLabel([one(0)]), {text: '0 sources', title: 'a: 0 sources'});
+  assert.equal(countLabel([one(1)]).text, '1 source');
+  assert.equal(countLabel([one(1), one(1, 'source', 'sources', 'b')]).text, '2 sources');
+  assert.equal(countLabel([one(1234), one(20, 'spectrum', 'spectra', 's'), one(5, 'source', 'sources', 'c')]).text,
+    '1,239 sources · 20 spectra');
+  assert.equal(countLabel([one(1234), one(20, 'spectrum', 'spectra', 's')]).title, 'a: 1,234 sources\ns: 20 spectra');
+  assert.equal(countLabel([{ds: 'm', title: 'Main catalog', n: 3, unit: 'source', units: 'sources'}]).title, 'Main catalog: 3 sources');
+  assert.equal(countLabel([one(1, 'Hα knot', 'Hα knots')]).text, '1 Hα knot');
+  assert.equal(countLabel([one(-1), one(NaN), null]).text, '');
+  assert.deepEqual(countLabel([]), {text: '', title: ''});
+  assert.deepEqual(countLabel(null), {text: '', title: ''});
+});
+
 // ------------------------------------------------------------------ note 93: import dialog
 
 test('importResultText: app.importCsv result and resolveImport result', () => {
@@ -506,8 +550,11 @@ class FakeEl {
   }
   all() { return this.children.flatMap((c) => [c, ...c.all()]); }
   querySelectorAll(sel) {
-    const m = /^\.([\w-]+)$/.exec(sel);
-    return m ? this.all().filter((e) => e.classList.contains(m[1])) : [];
+    // `.cls` or `.cls[data-key]` (the landing's card selector)
+    const m = /^\.([\w-]+)(?:\[data-([\w-]+)\])?$/.exec(sel);
+    if (!m) return [];
+    const dk = m[2] ? m[2].replace(/-([a-z])/g, (_, c) => c.toUpperCase()) : null;
+    return this.all().filter((e) => e.classList.contains(m[1]) && (!dk || e.dataset[dk] !== undefined));
   }
 }
 
@@ -1467,6 +1514,104 @@ test('scatter: firstPaint resolves at the first data draw; a failed x/y load rej
   p2.destroy();
 }));
 
+/**
+ * Scatter over catalog `cat` with a context catalog `bg` (context:true) whose manifest lists the
+ * count grids `density` (manifest entries); every read of either client is recorded.
+ */
+async function scatterWithContext(density, config = {x: 'f115w', y: 'f200w'}, opts = {}) {
+  globalThis.window.localStorage = fakeStorage();
+  globalThis.window.removeEventListener = () => {};
+  const store = createStore({});
+  const cols = [{key: 'id', role: 'id', enc: 'str'}, {key: 'f115w', role: 'mag', enc: 'f32', label: 'F115W'},
+    {key: 'f200w', role: 'mag', enc: 'f32', label: 'F200W'}, {key: 'f444w', role: 'mag', enc: 'f32', label: 'F444W'}];
+  const n = 50;
+  const mk = (name, man) => {
+    const calls = {values: [], bin2d: [], density: []};
+    return {
+      calls, n, manifest: {cols, ...man}, col: (k) => cols.find((c) => c.key === k) || null, baseKeys: (e) => [e],
+      vis: async () => ({vis: null}),
+      values: async (k) => { calls.values.push(k); return Float32Array.from({length: n}, (_, i) => 10 + i / 10); },
+      bin2d: async (ref, nx, ny) => { calls.bin2d.push(ref); const c = new Float64Array(nx * ny); c[0] = 3; return {counts: c, nx, ny, xr: [9, 16], yr: [9, 16]}; },
+      density: async (k) => {
+        calls.density.push(k);
+        if (opts.densityFails) throw new Error('grid 404');
+        const v = new Float32Array(16);
+        v[5] = 40; v[6] = 7;
+        // a new array per call, as client.density transfers one
+        return {values: v, nx: 4, ny: 4, xr: [9, 16], yr: [10, 17], total: 47};
+      },
+    };
+  };
+  const fg = mk('cat', {});
+  const bg = mk('bg', {density});
+  const app = {
+    page: {datasets: {cat: {kind: 'catalog'}, bg: {kind: 'catalog', context: true}}},
+    catalog: async (k) => (k === 'bg' ? bg : fg), runtime: {webgl2: false},
+    caps: new Set(), afterFirstPaint: () => Promise.resolve(),
+    selectionFor: async () => ({count: 0, mask: new Uint8Array(n), onChange: () => () => {}}),
+  };
+  const pane = await mountScatter(new FakeEl('div'), {id: 'sc', type: 'scatter', config, store, app, dataset: 'cat',
+    setStatus() {}, theme: () => ({}), tools: null});
+  pane.resize(200, 150, 1);
+  return {pane, fg, bg, store};
+}
+
+const CMD_GRID = {key: 'cmd', x: 'f115w', y: 'f200w', xr: [9, 16], yr: [10, 17], nx: 4, ny: 4, enc: 'f32', lo: 0, hi: 40, file: 'density/cmd.bin'};
+
+test('scatter context: a matching pre-binned grid is drawn without reading context columns', () => withDom(async () => {
+  const {pane, bg, fg} = await scatterWithContext([{...CMD_GRID, key: 'stat', stat: 'median:f444w'}, CMD_GRID]);
+  let painted = false;
+  pane.firstPaint.then(() => { painted = true; });
+  await settle(12);
+  assert.equal(painted, true);
+  assert.deepEqual(bg.calls.density, ['cmd'], 'the count grid, never the stat grid');
+  assert.deepEqual(bg.calls.values, [], 'no context column read');
+  assert.deepEqual(bg.calls.bin2d, [], 'no worker binning of the context catalog');
+  assert.deepEqual(pane.stats().context, {prebinned: 1, binned: 0});
+  assert.ok(fg.calls.values.length >= 2, 'foreground x / y read');
+  // redraws reuse the decoded counts array: the colourised backdrop comes from the cache
+  const h0 = densityCacheStats().hits;
+  pane.onVisible(true);   // two full redraws
+  await settle(6);
+  pane.onVisible(true);
+  await settle(6);
+  assert.ok(densityCacheStats().hits >= h0 + 2, 'canvas2d colourise cache hit on redraw');
+  assert.deepEqual(bg.calls.density, ['cmd'], 'grid fetched once');
+  pane.destroy();
+}));
+
+test('scatter context: no grid for the axes (or log axes) bins the context columns in the worker', () => withDom(async () => {
+  const other = await scatterWithContext([{...CMD_GRID, x: 'f115w', y: 'f444w'}]);
+  await settle(12);
+  assert.deepEqual(other.bg.calls.density, []);
+  assert.equal(other.bg.calls.bin2d.length, 1, 'worker bin2d of the context catalog');
+  assert.deepEqual(other.pane.stats().context, {prebinned: 0, binned: 1});
+  other.pane.destroy();
+
+  const log = await scatterWithContext([CMD_GRID], {x: 'f115w', y: 'f200w', xlog: true});
+  await settle(12);
+  assert.deepEqual(log.bg.calls.density, [], 'grids are linear: a log axis bins instead');
+  assert.equal(log.bg.calls.bin2d.length, 1);
+  log.pane.destroy();
+}));
+
+test('scatter context: an unreadable grid falls back to binning its columns', () => withDom(async () => {
+  const warn = console.warn;
+  const warned = [];
+  console.warn = (m) => { warned.push(String(m)); };
+  try {
+    const r = await scatterWithContext([CMD_GRID], {x: 'f115w', y: 'f200w'}, {densityFails: true});
+    await settle(12);
+    assert.deepEqual(r.bg.calls.density, ['cmd']);
+    assert.equal(r.bg.calls.bin2d.length, 1, 'worker bin2d after the failed grid read');
+    assert.deepEqual(r.pane.stats().context, {prebinned: 0, binned: 1});
+    assert.ok(warned.some((m) => /context grid bg\/cmd unavailable/.test(m)));
+    r.pane.destroy();
+  } finally {
+    console.warn = warn;
+  }
+}));
+
 test('manifold: firstPaint resolves at the first projected draw; a failed base load rejects it', () => withDom(async () => {
   globalThis.window.localStorage = fakeStorage();
   globalThis.window.removeEventListener = () => {};
@@ -1513,3 +1658,82 @@ test('manifold: firstPaint resolves at the first projected draw; a failed base l
     console.warn = warn;
   }
 }));
+
+// ------------------------------------------------------------------ landing counts (WPE2)
+
+/** Fake fetch over a {url: object} map; records each URL. Unknown URLs answer 404. */
+function fakeFetch(docs) {
+  const urls = [];
+  const enc = new TextEncoder();
+  const f = async (u) => {
+    urls.push(String(u));
+    if (!Object.prototype.hasOwnProperty.call(docs, u)) return {ok: false, status: 404, arrayBuffer: async () => new ArrayBuffer(0)};
+    const b = enc.encode(JSON.stringify(docs[u]));
+    return {ok: true, status: 200, arrayBuffer: async () => b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength)};
+  };
+  return {f, urls};
+}
+
+async function landingCards(portal, docs = {}) {
+  const ff = fakeFetch({'https://example.org/p/portal.json': portal, ...docs});
+  setFetch(ff.f);
+  try {
+    return await withDom(async () => {
+      const root = new FakeEl('div');
+      const app = {page: {page: {id: 'home'}, datasets: {}}};
+      const pane = mountLanding(root, {id: 'land', config: {search: false}, app, setStatus() {}});
+      await settle(8);
+      const cards = root.querySelectorAll('.pk-card-link');
+      const out = {
+        urls: ff.urls, stats: pane.stats(),
+        counts: Object.fromEntries(cards.map((c) => [c.dataset.page || c.dataset.key, c.querySelector('.pk-card-count').textContent])),
+        titles: Object.fromEntries(cards.map((c) => [c.dataset.page || c.dataset.key, c.querySelector('.pk-card-count').title])),
+      };
+      pane.destroy();
+      return out;
+    });
+  } finally {
+    setFetch(null);
+  }
+}
+
+const LANDING_PAGES = [
+  {id: 'home', file: 'index.html', archetype: 'landing'},
+  {id: 'cat', file: 'cat.html', archetype: 'catalog'},
+  {id: 'img', file: 'img.html', archetype: 'gallery'},
+  {id: 'mix', file: 'mix.html', archetype: 'catalog'},
+];
+
+test('landing: portal.json counts[] rendered on the cards, no manifest fetched', async () => {
+  const r = await landingCards({
+    pages: LANDING_PAGES,
+    search: [{page: 'cat', ds: 'src', manifest: 'data/src/manifest.json'}],
+    counts: [
+      {page: 'cat', ds: 'src', kind: 'catalog', n: 1},
+      {page: 'img', ds: 'cut', kind: 'images', n: 12, unit: 'cutout'},
+      {page: 'mix', ds: 'a', kind: 'catalog', n: 1000},
+      {page: 'mix', ds: 'b', kind: 'catalog', n: 234},
+      {page: 'mix', ds: 'sp', kind: 'records', n: 1},
+    ],
+  });
+  assert.deepEqual(r.urls, ['https://example.org/p/portal.json'], 'counts present: only portal.json');
+  assert.equal(r.stats.counts, 'counts');
+  assert.deepEqual(r.counts, {cat: '1 source', img: '12 cutouts', mix: '1,234 sources · 1 spectrum'});
+  assert.equal(r.titles.mix, 'a: 1,000 sources\nb: 234 sources\nsp: 1 spectrum');
+});
+
+test('landing: empty counts[] leaves the cards blank; no counts falls back to the search manifests', async () => {
+  const empty = await landingCards({pages: LANDING_PAGES, counts: [], search: [{page: 'cat', ds: 'src', manifest: 'm.json'}]});
+  assert.deepEqual(empty.urls, ['https://example.org/p/portal.json']);
+  assert.deepEqual(empty.counts, {cat: '', img: '', mix: ''});
+
+  const fb = await landingCards({
+    pages: LANDING_PAGES,
+    search: [{page: 'cat', ds: 'src', manifest: 'data/src/manifest.json'}, {page: 'mix', ds: 'gone', manifest: 'data/gone/manifest.json'}],
+  }, {'https://example.org/p/data/src/manifest.json': {n: 5, title: 'Sources'}});
+  assert.equal(fb.stats.counts, 'search');
+  assert.deepEqual(fb.urls.slice().sort(), ['https://example.org/p/data/gone/manifest.json',
+    'https://example.org/p/data/src/manifest.json', 'https://example.org/p/portal.json']);
+  assert.deepEqual(fb.counts, {cat: '5 sources', img: '', mix: ''}, 'unreadable manifest: card left blank');
+  assert.equal(fb.titles.cat, 'Sources: 5 sources');
+});

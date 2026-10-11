@@ -21,7 +21,8 @@ One portal per catalog size N (8, 2k, 50k, 1M; 5M only for slow tests) is writte
 * ``tpl``/``flt``/``ext``/``feat``  shared physics resources under ``<root>/res``
   (``<portal>/res`` is a symlink to it); ``iso`` 3 synthetic isochrone tracks.
 * ``hips``     relative HiPS stubs, rungs, bookmarks; ``ovl`` sky and dim overlays;
-  ``nar`` a 5-beat narrative; ``readme``.
+  ``nar`` a 6-beat narrative (b1..b5 with sky views, b3 also with a highlight; b6 a
+  highlight-only beat: highlight, no view); ``readme``.
 * ``vc``       a 120-dim manifold catalog (40 stored mags + 80 virtual colours), which
   forces the CPU projection path (folded support 40 > MAXD 28). N is capped at 50k.
 
@@ -447,7 +448,56 @@ def narrative_spec(ids: list[str]) -> NarrativeSpec:
             view["highlight"] = {"ds": "src", "ids": ids[:3]}
         beats.append({"id": f"b{k + 1}", "title": f"Beat {k + 1}",
                       "markdown": f"## Beat {k + 1}\n\nSynthetic narrative step **{k + 1}**.", "view": view})
+    # b6: a highlight and no view (no sky, no layers), so the sky pane centres on the highlight
+    # (narrative:highlight goto, docs/js.md); appended after the view beats, so b1..b5 are as before
+    k = N_BEATS
+    view6: dict[str, Any] = {"pane": "sky", "layers_on": [], "layers_off": []}
+    if ids:
+        view6["highlight"] = {"ds": "src", "ids": ids[:3]}
+    beats.append({"id": f"b{k + 1}", "title": f"Beat {k + 1}",
+                  "markdown": f"## Beat {k + 1}\n\nSynthetic narrative step **{k + 1}**: the highlight only.",
+                  "view": view6})
     return NarrativeSpec(beats=beats)
+
+
+#: the highlight-only beat of narrative_spec (a highlight, no view)
+HIGHLIGHT_ONLY_BEAT = f"b{N_BEATS + 1}"
+
+#: landing-card nouns per primary-dataset kind, as build.py _PortalBuild.COUNT_UNITS
+COUNT_UNITS = {"catalog": ("source", "sources"), "images": ("image", "images"),
+               "records": ("spectrum", "spectra")}
+
+
+def portal_counts(specs: list[PageSpec], ds: dict[str, Any], manifests: dict[str, Any]) -> list[dict]:
+    """portal.json ``counts`` (ARCHITECTURE.md section 4.2) for the synthetic pages, chosen as
+    build.py ``_PortalBuild._page_count`` chooses them: a gallery's image set, a spectra
+    page's record set, else the first non-context catalog; no entry for the landing page."""
+    out = []
+    for page in specs:
+        if page.archetype == "landing":
+            continue
+        found: dict[str, tuple[str, int]] = {}
+        for k in page.datasets:
+            s = ds.get(k)
+            if isinstance(s, CatalogSpec) and not s.context:
+                kind, n = "catalog", (manifests.get(k) or {}).get("n")
+            elif isinstance(s, ImageSetSpec):
+                kind, n = "images", len(s.items)
+            elif isinstance(s, RecordSetSpec):
+                kind, n = "records", (manifests.get(k) or {}).get("n")
+            else:
+                continue
+            if isinstance(n, int) and not isinstance(n, bool) and kind not in found:
+                found[kind] = (k, n)
+        prefer = {"gallery": ("images", "catalog", "records"),
+                  "spectra": ("records", "catalog", "images")}.get(page.archetype, ("catalog", "images", "records"))
+        for kind in prefer:
+            if kind in found:
+                k, n = found[kind]
+                one, many = getattr(ds.get(k), "noun", None) or COUNT_UNITS[kind]
+                out.append({"page": page.id, "ds": k, "kind": kind, "n": n, "unit": one, "units": many})
+                break
+    return out
 
 
 README = """# Synthetic portal
@@ -799,7 +849,8 @@ def build_portal(root: str | Path, n: int, *, seed: int = SEED, force: bool = Fa
                                   html_bytes=nbytes, legacy=list(page.legacy.grammar) if page.legacy else [])
         portal_pages.append({"id": page.id, "title": page.title, "file": fname, "archetype": page.archetype})
     portal_doc = {"schema": "pk-portal/1", **PORTAL, "build": BUILD, "pk": VERSION, "pages": portal_pages,
-                  "search": [{"ds": "src", "page": "explorer", "manifest": "data/src/manifest.json"}]}
+                  "search": [{"ds": "src", "page": "explorer", "manifest": "data/src/manifest.json"}],
+                  "counts": portal_counts(page_specs(), ds, manifests)}
     errs = validate_portal(portal_doc)
     if errs:
         raise ValueError(f"portal.json invalid: {errs}")

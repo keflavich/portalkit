@@ -171,3 +171,68 @@ def test_portal_json_and_landing(synth, server, open_page):
     assert [p["id"] for p in doc["pages"]] == list(ms.PAGES)
     run = open_page(portal.url_path("index"))
     assert run.store_get("sel:src") is None or isinstance(run.store_get("sel:src"), dict)
+    # landing cards: portal.json counts[] (one entry per non-landing page, build.py's rule),
+    # rendered as "<n> <unit|units>" on .pk-card-link[data-page] without a manifest read
+    counts = doc.get("counts")
+    assert isinstance(counts, list) and counts, doc.keys()
+    landing = {p["id"] for p in doc["pages"] if p.get("archetype") == "landing"}
+    assert {c["page"] for c in counts} == {p["id"] for p in doc["pages"]} - landing, counts
+    assert len({c["page"] for c in counts}) == len(counts)
+    run.page.wait_for_function(
+        "() => Array.from(document.querySelectorAll('.pk-card-link[data-page] .pk-card-count'))"
+        ".some((c) => c.textContent.trim())", timeout=30000)
+    cards = run.ev("""() => Object.fromEntries(Array.from(document.querySelectorAll('.pk-card-link[data-page]'))
+        .map((a) => [a.dataset.page, (a.querySelector('.pk-card-count') || {}).textContent || '']))""")
+    for c in counts:
+        if c["page"] not in cards:
+            continue          # the current page has no card
+        want = f"{c['n']:,} {c['unit'] if c['n'] == 1 else c['units']}"
+        assert cards[c["page"]] == want, (c, cards)
+    land = run.ev(PANE_OF_TYPE_JS, "landing")
+    assert land, "no landing pane on index"
+    assert run.ev("(p) => window.__pk.app.layout.pane(p).stats().counts", land) == "counts"
+    assert run.errors() == []
+
+
+PANE_OF_TYPE_JS = """(t) => { const s = document.querySelector(`section.pk-pane[data-pane-type='${t}']`);
+                            return s ? s.dataset.paneId : null; }"""
+
+
+def test_narrative_highlight_only_beat(e2e, request, synth, open_page):
+    """``#beat=b6`` (make_synthetic's highlight-only beat: a highlight, no view) on a fresh
+    load: the narrative emits narrative:highlight with goto (docs/js.md), the sky pane rings the
+    beat's three rows and centres on their mean position (away from the page default, so the
+    check needs the goto), and the centring is implied by the beat, so the hash stays
+    ``#beat=b6`` (IMPLEMENTATION_NOTES 119)."""
+    portal = synth(8)
+    _expect_clean(e2e, request, portal, "narrative")
+    beat = ms.HIGHLIGHT_ONLY_BEAT
+    spec = next(b for b in ms.narrative_spec([ms.syn_id(i) for i in range(3)]).beats if b["id"] == beat)
+    assert "sky" not in spec["view"] and spec["view"]["highlight"]["ids"], spec
+    hl_ids = [str(i) for i in spec["view"]["highlight"]["ids"]]
+    n = len(hl_ids)
+    # the goto centres on the mean position of the highlighted rows (sky.js drawHighlight);
+    # that mean lies away from the view the sky pane opens on (the page has no default sky; the
+    # HiPS target is ms.CENTER), so the view check below needs the goto
+    _, data = ms.datasets(8)
+    all_ids = [str(i) for i in data.ids]
+    rows = [all_ids.index(i) for i in hl_ids]
+    want = (float(sum(data.ra[r] for r in rows)) / n, float(sum(data.dec[r] for r in rows)) / n)
+    tol = 0.003  # deg; the mean lies ~0.03 deg from the start view
+    run = open_page(portal.url_path("narrative"), hash=f"beat={beat}")
+    home = run.ev("() => { const p = window.__pk.app.page; return (p && p.state && p.state.sky) || null; }")
+    start = (home["ra"], home["dec"]) if home else ms.CENTER
+    assert abs(start[0] - want[0]) > 5 * tol or abs(start[1] - want[1]) > 5 * tol, (start, want)
+    nar, sky = run.ev(PANE_OF_TYPE_JS, "narrative"), run.ev(PANE_OF_TYPE_JS, "sky")
+    assert nar and sky, (nar, sky)
+    run.page.wait_for_function(
+        """([nr, s, b, n, ra, dec, tol]) => { const L = window.__pk.app.layout; const hn = L.pane(nr), hs = L.pane(s);
+             const sn = hn && hn.stats ? hn.stats() : null, ss = hs && hs.stats ? hs.stats() : null;
+             return !!(sn && sn.beat === b && ss && ss.highlight === n && ss.view && Number.isFinite(ss.view.ra)
+                       && Math.abs(ss.view.ra - ra) < tol && Math.abs(ss.view.dec - dec) < tol); }""",
+        arg=[nar, sky, beat, n, want[0], want[1], tol], timeout=60000)
+    assert run.stable_hash() == f"#beat={beat}"
+    st = run.store_get("sky") or {}
+    assert st.get("beatView") == beat, st
+    assert abs(st["ra"] - want[0]) < tol and abs(st["dec"] - want[1]) < tol, (st, want)
+    assert run.errors() == []

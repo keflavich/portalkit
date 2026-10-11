@@ -2,8 +2,10 @@
 // source_list_search; ARCHITECTURE.md sections 3, 4.2 and 6.10).
 //
 // Cards for the portal's pages (portal.json `pages`, the current page left out) and related
-// portals (login-required badge for auth "secure"), with row counts read from the manifests
-// listed in portal.json `search` (option counts). A global search box (option search) looks
+// portals (login-required badge for auth "secure"), with counts (option counts): portal.json
+// `counts[]` ({page, ds, kind, n, unit?, units?}, section 4.2) when present, without fetching
+// anything else; a portal.json without `counts` falls back to the row counts of the manifests
+// listed in `search`. A global search box (option search) looks
 // an id, alias or position up in every searchable catalog of the portal (DataClient.find) and
 // links each hit to its page with `#id=<id>`. Below the cards the page readme and the provenance
 // section are rendered (panes/readme.js).
@@ -13,7 +15,7 @@
 // manifest that is one of this page's own catalog datasets reuses the page's client. Typing runs
 // a debounced search; Enter / the Search button runs it at once.
 
-import {fmtCount, plural} from '../core/fmt.js';
+import {plural} from '../core/fmt.js';
 import {fetchJSON, FetchError} from '../data/fetch.js';
 import {DataClient} from '../data/client.js';
 import {carryTo, loadPortal, loginBadge} from '../ui/nav.js';
@@ -100,6 +102,55 @@ export function searchManifests(search, base) {
   return Array.from(groups.values());
 }
 
+/** Default card nouns per `counts[].kind` (section 4.2); an unknown kind counts items. */
+export const COUNT_NOUNS = Object.freeze({
+  catalog: ['source', 'sources'], images: ['image', 'images'], records: ['spectrum', 'spectra'],
+});
+
+const isCount = (n) => typeof n === 'number' && Number.isInteger(n) && n >= 0;
+const noun = (s) => (typeof s === 'string' && s.trim() ? s.trim() : null);
+
+/**
+ * Valid portal.json `counts[]` entries grouped by page: Map page id -> [{ds, kind, n, unit,
+ * units}] in document order. Entries need a page id and an integer n >= 0; the nouns default
+ * from the kind (COUNT_NOUNS; `unit + 's'` when only the singular is given, the plural for both
+ * when only it is given).
+ */
+export function countEntries(counts) {
+  const out = new Map();
+  for (const c of Array.isArray(counts) ? counts : []) {
+    if (!c || typeof c !== 'object' || typeof c.page !== 'string' || !c.page || !isCount(c.n)) continue;
+    const kind = typeof c.kind === 'string' ? c.kind : '';
+    const def = COUNT_NOUNS[kind] || ['item', 'items'];
+    const one = noun(c.unit), many = noun(c.units);
+    const unit = one || many || def[0];
+    const units = many || (one ? `${one}s` : def[1]);
+    if (!out.has(c.page)) out.set(c.page, []);
+    out.get(c.page).push({ds: typeof c.ds === 'string' ? c.ds : '', kind, n: c.n, unit, units});
+  }
+  return out;
+}
+
+/**
+ * Card count text and tooltip for one page's entries ([{ds, n, unit, units}]): entries with the
+ * same nouns are summed ("1,234 sources"), different nouns are listed in first-seen order
+ * ("165 sources · 20 spectra"); n == 1 takes the singular. The title lists every dataset.
+ * Returns {text, title}; text '' for an empty list.
+ */
+export function countLabel(list) {
+  const groups = new Map();
+  for (const e of Array.isArray(list) ? list : []) {
+    if (!e || !isCount(e.n)) continue;
+    const k = `${e.unit}\u0000${e.units}`;
+    if (!groups.has(k)) groups.set(k, {n: 0, unit: e.unit, units: e.units});
+    groups.get(k).n += e.n;
+  }
+  const text = Array.from(groups.values()).map((g) => plural(g.n, g.unit, g.units)).join(' · ');
+  const title = (Array.isArray(list) ? list : []).filter((e) => e && isCount(e.n))
+    .map((e) => `${e.title || e.ds || '?'}: ${plural(e.n, e.unit, e.units)}`).join('\n');
+  return {text, title};
+}
+
 function el(tag, cls, text) {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
@@ -183,33 +234,45 @@ export function mount(root, ctx) {
     }
   }
 
+  let countSource = null; // 'counts' | 'search' once counts were rendered from that source
+
+  // portal.json `counts[]` first (no other fetch); without it, the `search` manifests' row counts.
   async function loadCounts() {
-    if (!countsOn || !portal || !Array.isArray(portal.search)) return;
-    const byPage = new Map();
-    await Promise.all(portal.search.map(async (s) => {
-      if (!s || !s.manifest) return;
-      let man;
-      try {
-        man = await fetchJSON(new URL(s.manifest, portal._url).toString());
-      } catch (err) {
-        if (!(err instanceof FetchError)) throw err;
-        console.warn(`landing: manifest ${s.manifest} unavailable: ${err.message}`);
-        return;
-      }
-      const n = Number.isFinite(man && man.n) ? man.n : null;
-      if (n === null) return;
-      const key = s.page || '';
-      if (!byPage.has(key)) byPage.set(key, []);
-      byPage.get(key).push({ds: s.ds, n, title: man.title || s.ds});
-    }));
+    if (!countsOn || !portal) return;
+    let byPage;
+    if (Array.isArray(portal.counts)) {
+      byPage = countEntries(portal.counts);
+      countSource = 'counts';
+    } else if (Array.isArray(portal.search)) {
+      byPage = new Map();
+      await Promise.all(portal.search.map(async (s) => {
+        if (!s || !s.manifest) return;
+        let man;
+        try {
+          man = await fetchJSON(new URL(s.manifest, portal._url).toString());
+        } catch (err) {
+          if (!(err instanceof FetchError)) throw err;
+          console.warn(`landing: manifest ${s.manifest} unavailable: ${err.message}`);
+          return;
+        }
+        const n = Number.isFinite(man && man.n) ? man.n : null;
+        if (n === null) return;
+        const key = s.page || '';
+        if (!byPage.has(key)) byPage.set(key, []);
+        byPage.get(key).push({ds: s.ds, n, title: man.title || s.ds, unit: 'source', units: 'sources'});
+      }));
+      countSource = 'search';
+    } else {
+      return;
+    }
     if (destroyed) return;
     for (const card of cardsEl.querySelectorAll('.pk-card-link[data-page]')) {
       const list = byPage.get(card.dataset.page);
-      if (!list) continue;
-      const total = list.reduce((a, b) => a + b.n, 0);
+      if (!list || !list.length) continue;
+      const {text, title} = countLabel(list);
       const cnt = card.querySelector('.pk-card-count');
-      cnt.textContent = plural(total, 'source');
-      cnt.title = list.map((x) => `${x.title}: ${fmtCount(x.n)}`).join('\n');
+      cnt.textContent = text;
+      cnt.title = title;
     }
   }
 
@@ -376,7 +439,7 @@ export function mount(root, ctx) {
       failedOpen.clear();
     },
     stats() {
-      return {searchClients: opened.size};
+      return {searchClients: opened.size, counts: countSource};
     },
   };
 }

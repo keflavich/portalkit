@@ -328,3 +328,71 @@ starting.
 118. WPE1: deploy's ownership manifest `<target>/.portalkit-deploy.json` is served with the target and keeps the
     absolute `target` and the full `legacy_modules` paths that `status` uses. `deploy --htaccess` does not deny it
     yet (owner of `deploy/htaccess.py`).
+119. **Narrative beats and the sky hash (WPD2; extends 71 and 72).** The store `sky` value carries two markers,
+    `sky.beatView` and `sky.beatOvl` (`core/hash.js` `BEAT_VIEW`, `BEAT_OVL`). Each holds the id of the beat whose
+    view, respectively overlay set, the value holds; `''` stands for the first beat of a page opened without
+    `beat=`. A marker equal to `state.beat` (or `''` while no beat is set) means that part is implied by the beat:
+    `skyImplied(state)` reports it, and `stateToHash` writes neither `sky=` nor `ovl=` for it. So a view or overlay
+    set that a beat applied stays out of the hash, and `#beat=b3` reloads to the same view. The sky pane records
+    the origin of the last viewer move: `store` (a goto to the stored view), `beat` (a goto the narrative asked
+    for), `explicit` (a programmatic goto with a new view) or `user` (capture listeners `USER_VIEW_EVENTS` on the
+    stage). Settles write as follows (`settledSky`): store origin writes nothing, so Aladin's rounding is absorbed;
+    beat origin writes the view marked with the beat, and only when the narrative marked that view for the same
+    beat; explicit and user origins drop `beatView`, so a pan or zoom after the beat writes `sky=`. A layer-panel
+    change drops `beatOvl` (`layersSky`), so a toggle after the beat writes `ovl=`; a base-only change keeps it.
+    `hashToPatch` marks the parts a `beat=` hash leaves out, and an explicit `sky=`/`ovl=` (including `-`) clears
+    the marker. `#sky=..&beat=b3` therefore keeps the hash view: at load the narrative computes
+    `explicitSky(sky, pageSky, {beatSet})`, and the parts it finds explicit are kept over the beat
+    (`activate(k, {keep})`), with no highlight goto for a kept view. The narrative keeps a view marker only when
+    loading `beat=` alone reproduces the view (`beatSky`): a beat without its own sky view, or with
+    `suppress_view`, keeps the current view unmarked unless it equals the page default. The exception is a
+    highlight-only beat (`goto`: a highlight, no `sky`, no `suppress_view`, a view not kept from the hash,
+    target pane of type sky): the sky pane centres on the highlight, so the centre is the beat's, and the view
+    is marked when its fov equals the page default, whatever the current centre. Tests:
+    `tests/js/plotpanes.test.mjs` (settledSky, layersSky, explicitSky, beatSky, the narrative:highlight goto
+    condition on a mounted narrative pane); `tests/e2e/test_deep_links.py`; `test_archetype_smoke.py` opens the
+    synthetic highlight-only beat `b6` (`make_synthetic.HIGHLIGHT_ONLY_BEAT`: a highlight, no view, appended
+    after b1..b5) and checks three rings, a sky view (pane stats and store) at the mean position of the three
+    highlighted rows (away from the page default, so the check needs the goto), `beatView = b6` and the hash
+    `#beat=b6`.
+120. **Startup order and perf timing (WPD3; extends 100 and 112).** Skeletons (`.pk-skeleton`, base.css) are static
+    (no animation or transition): an animated placeholder re-rasters every frame and, under software GL, holds
+    first paint back by seconds. The list pane asks for its first screen of rows during mount, outside an
+    animation frame, so the read does not wait behind a renderer stall. Boot calls
+    `warmPaneModules(norm, registry, {portalId, pageId, tabMode})` before the hub is created: it imports the module
+    graphs of the panes shown at load (layout `shownAtLoad(norm, {portalId, pageId, tabMode})`: saved fold state
+    over the spec's `collapsed`, and only the active tab in tab mode; `tabModeQuery()` is the tab-mode media
+    query). It reads no data and renders nothing; types registered in memory (`registry.isOverridden`) are
+    skipped. Folded panes carry `pk-collapsed` from creation, so no CSS transition runs at startup. Perf timing
+    (`tests/perf/test_perf_budget.py`): before the first timed page of the session the browser loads one untimed
+    warm-up page of the same portal (`WARMUP_PAGES` order: cmd, hist, explorer), waits until it has been quiet
+    for `QUIET_SETTLE_MS` and closes it; `PK_PERF_WARMUP=0` turns the warm-up off. Timed runs start from a fresh
+    browser context, and the clock starts at `page.goto` (`PageRun.t_start`), not at context creation.
+    `first_paint_from_open_s` (first paint counted from before the context was created), `open_s` and
+    `first_paint_at_s` are reported in the perf report and not budgeted.
+121. **Landing counts (WPE2; completes 113).** The landing pane reads `portal.json counts[]` first and fetches nothing
+    else for the cards. Valid entries (a page id and an integer `n >= 0`) are grouped by page (`countEntries`).
+    Nouns default from the kind (catalog: source/sources, images: image/images, records: spectrum/spectra, any
+    other kind: item/items); a lone `unit` gets `unit + 's'` as its plural, and a lone `units` serves for both.
+    `countLabel` sums entries with the same nouns and lists different nouns in first-seen order joined by
+    `' · '` (`1,234 sources · 20 spectra`); `n == 1` takes the singular, and the card tooltip lists every
+    dataset. A `counts` array, even an empty one, is authoritative. Without `counts` (portals built before WPE1)
+    the pane falls back to the row counts of the `search` manifests, as before. `handle.stats().counts` is
+    `'counts'` or `'search'`. The synthetic portal writes `counts` with build.py's rule (`portal_counts`).
+122. **Context backdrop from the pre-binned grid (WPE2; replaces the caveat of 114).** For each context catalog
+    (`context: true`, or the pane's `background`) the scatter pane looks for a manifest `density[]` entry without
+    `stat` whose `x`/`y` equal the current axes, on linear axes only (`contextGridEntry`). When one exists, the
+    grid is read with `client.density(key)` at data load, next to the foreground grid and before any column, and
+    drawn as the gray backdrop (`contextGridData`, shifted by the `dm` fold); no context column is read and no
+    worker binning runs. Only catalogs without a matching grid (or whose grid cannot be read) are binned with
+    `bin2d` at settle time, as before. Decoded grids are cached per catalog and grid key, so an axes round trip
+    or a `dm` change refetches nothing, and the backdrop keeps the decoded `values` array as its `counts`, so
+    canvas2d's colourise cache (note 103) hits on every redraw. Grid cells (small multiples) use the same rule
+    per cell. `stats().context` is `{prebinned, binned}`. With this, `first_paint_files(man, context=True)` of
+    note 114 matches what the browser reads before first paint for panes whose axes have a context grid.
+123. **Animation-frame lookup at call time (WPE2).** `panes/scatter.js` used to bind `requestAnimationFrame` when the
+    module was imported, falling back to a 16 ms `setTimeout` when it was absent. Under node the module is
+    imported before a test installs its stand-in, so draws ran on the 16 ms timer, and the test
+    `scatter: firstPaint resolves at the first data draw` passed or failed depending on timer order (5 of 20
+    runs failed). `raf`/`caf` now look the function up at each call and remember which clock issued the handle;
+    30 consecutive runs pass. `ui/controls.js` binds `raf` at import in the same way (owner of that file).

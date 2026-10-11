@@ -434,7 +434,7 @@ Rules:
 
 Only built pages are listed, so nav never shows a missing page. `related[].auth = "secure"` renders a "login required" badge.
 
-`search` lists the catalogs of explorer and manifold pages (the landing search box opens their manifests). `counts` (optional, additive; WPE1) holds one entry per built non-landing page with the size of that page's primary dataset, so every landing card can show a count without fetching a manifest:
+`search` lists the catalogs of explorer and manifold pages (the landing search box opens their manifests). `counts` (optional, additive; WPE1) holds one entry per built non-landing page with the size of that page's primary dataset, so every landing card can show a count without fetching a manifest (the landing pane reads `counts` when present and falls back to the `search` manifests' `n` otherwise; IMPLEMENTATION_NOTES 121):
 - `kind = "catalog"`: the manifest row count `n` of a non-context catalog;
 - `kind = "images"`: the item count of an image set;
 - `kind = "records"`: the id count `n` of a record set's `index.json`.
@@ -765,7 +765,7 @@ Values are the stretched image quantized to `0..255` (u8) or `1..65535` (u16, 0 
 A density grid file holds `nx*ny` u16 values (2-plane shuffled, gz). Counts are log-scaled with `u16log` semantics over `[lo,hi]`, and 0 means empty. It is built for every `axes` preset whose dataset has N > `T0_MAX` (3000), and for each context dataset preset. Uses:
 - first paint while columns stream;
 - tier F (no WebGL2);
-- background layers under foreground points.
+- background layers under foreground points: a context catalog's count grid (no `stat`) whose `x`/`y` equal the scatter pane's linear axes is drawn as the backdrop as it is, read with the foreground grid and before any column; only without a matching grid are the context columns binned in the worker (IMPLEMENTATION_NOTES 122).
 
 ### 5.10 Other JSON documents
 
@@ -864,7 +864,7 @@ Panes never call each other. They read and write store keys, call the DataClient
 | `template` | `{key, grid, scale:"auto"|number, bands?:string[]}` or null | `tpl=` | controls | spectrum1d, sed |
 | `features` | string[] (atlas families on) | `feat=` | controls | spectrum1d, sed |
 | `spec` | `{pinned:string[] (≤ 8), variant, xr?:[w0,w1], yr?:[..], segments?:{label:bool}, vel?:km/s}` | `spec=`, `wl=` | spectrum1d, controls | spectrum1d, spectrum2d (x-link) |
-| `sky` | `{ra, dec, fov, base, overlays:[{id, opacity}], fits:[id]}` | `sky=ra,dec,fov`, `base=`, `ovl=` | sky | sky, wavelength |
+| `sky` | `{ra, dec, fov, base, overlays:[{id, opacity}], fits:[id], beatView?, beatOvl?}` | `sky=ra,dec,fov`, `base=`, `ovl=` (not for a part a beat implies, §6.4) | sky, narrative | sky, wavelength, narrative |
 | `rung` | string | `rung=` | wavelength | wavelength |
 | `beat` | string | `beat=` | narrative | narrative, sticky pane |
 | `role` | string | `role=` | gallery | gallery, lightbox |
@@ -888,6 +888,11 @@ Panes never call each other. They read and write store keys, call the DataClient
 | `pane:resize` | `{pane, w, h}` | layout |
 | `nav:carry` | `{href}` | nav (before navigation) |
 | `selection:saved` | `{ds, name}` | export/chips |
+
+**Beat markers in `sky`** (WPD2, IMPLEMENTATION_NOTES 119). `sky.beatView` and `sky.beatOvl` (hash.js `BEAT_VIEW`, `BEAT_OVL`) hold the id of the beat whose view, respectively overlay set, the value holds; `''` stands for the first beat of a page opened without `beat=`. They are store-only: never written to the hash. Writers:
+- the narrative pane marks the parts a beat applies (`beatSky`); a view is marked only when loading `beat=` alone reproduces it (a beat without its own sky view, or with `suppress_view`, leaves the current view unmarked unless it equals the page default; a highlight-only beat (goto) marks the view when its fov equals the page default, because the sky pane centres on the highlight);
+- the sky pane records the origin of each viewer move (`store`, `beat`, `explicit`, `user`). A settle after a `store` goto writes nothing; a `beat` settle writes the view marked with that beat (only when the narrative marked it for the same beat); `explicit` and `user` settles (pan, zoom, a goto with a new view) drop `beatView`. A layer-panel change of the overlay set or opacities drops `beatOvl`; a base-only change keeps it;
+- `hashToPatch` marks the parts a `beat=` hash leaves out, and an explicit `sky=`/`ovl=` (including `-`) clears the marker.
 
 ### 6.3 Selection (`core/selection.js`)
 
@@ -946,6 +951,12 @@ export function bindHash(store: Store, opts: {primaryDs: string, keys: string[]}
 export const GRAMMARS: Record<string, (loc: {hash:string, search:string}) => Record<string,string> | null>
 export function mapLegacy(grammars: string[], loc): {hash: Record<string,string>, consumedSearch: string[]}
 ```
+
+**Beat rule** (WPD2, IMPLEMENTATION_NOTES 119): a part of `sky` whose marker (§6.2) equals `state.beat` (or `''` while no beat is set) is implied by the beat. `skyImplied(state)` reports `{view, ovl}`, and `stateToHash` writes neither `sky=` nor `ovl=` for an implied part. So:
+- a view or overlay set that a beat applied (including the sky pane's centring on a highlight-only beat) is implied by `beat=` and not written: `#beat=b3` reloads to b3's view;
+- a user pan, zoom or layer toggle after the beat drops the marker and writes `sky=` / `ovl=` next to `beat=`;
+- `#sky=..&beat=b3` keeps the hash view: at load and on hash navigation the narrative pane computes `explicitSky(sky, pageSky, {beatSet})` and keeps the explicit parts over the beat's, with no highlight goto for a kept view;
+- `narrative:highlight` carries `goto: true` only for a beat with a highlight, no `view.sky`, no `suppress_view`, and no kept explicit view (docs/js.md).
 
 Grammar names (WP13 implements all of them; WP12 tests one fixture per name):
 
@@ -1211,7 +1222,7 @@ Overlay layers with `space:"dim"` (isochrone tracks, extinction vectors, referen
 
 ### 7.6 Context datasets
 
-A catalog with `context: true`, such as the W51 53k background for colorcolor or an observed catalog under Robitaille models, is drawn as a GL (or tier F) density layer under the foreground on any scatter or manifold pane whose expressions resolve in it. It never takes part in selection.
+A catalog with `context: true`, such as the W51 53k background for colorcolor or an observed catalog under Robitaille models, is drawn as a GL (or tier F) density layer under the foreground on any scatter or manifold pane whose expressions resolve in it. It never takes part in selection. On a scatter pane the layer is the catalog's pre-binned count grid when one matches the pane's linear axes (§5.9); a page then reads no context column for it. Without a matching grid the pane bins the context columns in the worker at settle time.
 
 ---
 
@@ -1888,6 +1899,11 @@ Byte budgets are hard. Timing budgets apply under SwiftShader and are generous; 
 | 50k | ≤ 3 s | ≤ 300 ms | ≤ 500 ms | ≤ 2 MB |
 | 1M | ≤ 10 s | ≤ 1.5 s | ≤ 2 s | ≤ 2 MB |
 | 5M (slow) | ≤ 25 s | ≤ 6 s | ≤ 6 s | ≤ 6 MB |
+
+Timing rules (WPD3, IMPLEMENTATION_NOTES 120):
+- Before the first timed page of a session the browser loads one untimed warm-up page of the same synthetic portal (first of cmd, hist, explorer), waits until it has been quiet for `QUIET_SETTLE_MS` and closes it, so the timed runs measure the page and not Chromium start-up (GPU process, SwiftShader initialisation). `PK_PERF_WARMUP=0` skips the warm-up, to compare against a cold browser.
+- Each timed run opens a fresh browser context (cold HTTP cache). Its clock starts at `page.goto` (`PageRun.t_start`); creating the context and the page is not counted.
+- `first_paint_from_open_s` (first paint counted from before the context was created), `open_s` and `first_paint_at_s` are written to `perf_report.json` and are not budgeted.
 
 ### Level 4: adapters and per-port acceptance
 

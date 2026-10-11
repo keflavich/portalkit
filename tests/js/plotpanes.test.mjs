@@ -124,6 +124,39 @@ test('scatter.statGridImage keeps NaN and stretches values', () => {
   assert.ok(g.counts[3] > 0.99);
 });
 
+test('scatter.contextGridEntry: count grid for the linear axes, never a stat grid', () => {
+  const cnt = {key: 'cmd', x: 'f115w-f200w', y: 'f200w', nx: 4, ny: 4};
+  const stat = {key: 'med', x: 'f115w-f200w', y: 'f200w', stat: 'median:f444w'};
+  const man = {density: [stat, {x: 'f115w-f200w', y: 'f200w'}, cnt]};
+  assert.equal(sc.contextGridEntry(man, {x: 'f115w-f200w', y: 'f200w'}), cnt);
+  assert.equal(sc.contextGridEntry(man, {x: 'f200w', y: 'f115w-f200w'}), null, 'swapped axes do not match');
+  assert.equal(sc.contextGridEntry(man, {x: 'f115w-f200w', y: 'f200w', ylog: true}), null, 'log axis');
+  assert.equal(sc.contextGridEntry(man, {x: 'f115w-f200w', y: 'f200w', xlog: true}), null);
+  assert.equal(sc.contextGridEntry({density: [stat]}, {x: 'f115w-f200w', y: 'f200w'}), null);
+  assert.equal(sc.contextGridEntry({}, {x: 'a', y: 'b'}), null);
+  assert.equal(sc.contextGridEntry({density: 'x'}, {x: 'a', y: 'b'}), null);
+  assert.equal(sc.contextGridEntry(null, {x: 'a', y: 'b'}), null);
+  assert.equal(sc.contextGridEntry(man, {x: '', y: 'f200w'}), null);
+  assert.equal(sc.contextGridEntry(man, null), null);
+});
+
+test('scatter.contextGridData: same counts array, fold shift on the ranges, malformed grids null', () => {
+  const values = new Float32Array(6);
+  const g = {values, nx: 3, ny: 2, xr: [0, 3], yr: [10, 12], total: 9};
+  const d = sc.contextGridData(g);
+  assert.equal(d.counts, values, 'the decoded array itself (canvas2d cache key)');
+  assert.deepEqual([d.nx, d.ny, d.xr, d.yr, d.total], [3, 2, [0, 3], [10, 12], 9]);
+  const s = sc.contextGridData(g, [0.5, -2]);
+  assert.equal(s.counts, values);
+  assert.deepEqual([s.xr, s.yr], [[0.5, 3.5], [8, 10]]);
+  assert.deepEqual(g.xr, [0, 3], 'input not mutated');
+  assert.deepEqual(sc.contextGridData(g, [NaN, Infinity]).xr, [0, 3], 'non-finite shift ignored');
+  assert.equal(sc.contextGridData(null), null);
+  assert.equal(sc.contextGridData({...g, values: null}), null);
+  assert.equal(sc.contextGridData({...g, nx: 0}), null);
+  assert.equal(sc.contextGridData({...g, yr: 'x'}), null);
+});
+
 test('legend colours: GPU slots, plot levels and codes', () => {
   const c = leg.gpuCatColors({levels: ['a', 'b']}, {neutral: '#808080', categorical: ['#ff0000', '#00ff00']});
   assert.equal(c.length, 8);
@@ -1007,6 +1040,148 @@ test('beat rule end to end: beat writes stay out of the hash, user writes go in'
   // the next beat re-marks both parts: beat only again
   sky = narr.beatSky(sky, {sky: {ra: 266.5, dec: -29.1, fov: 0.2}}, ['marks'], {mark: 'b4'});
   assert.deepEqual(h('b4', sky), {beat: 'b4'});
+});
+
+// ---- narrative pane mount: the narrative:highlight goto condition (docs/js.md event table)
+
+class NarEl extends FakeEl {
+  constructor(tag) {
+    super(tag);
+    const cl = this.classList;
+    cl.add = (c) => cl.toggle(c, true);
+    cl.remove = (c) => cl.toggle(c, false);
+    this.clientHeight = 100;
+  }
+  removeAttribute(k) { delete this.attrs[k]; }
+  removeEventListener(t, fn) { if (this.listeners[t]) this.listeners[t] = this.listeners[t].filter((f) => f !== fn); }
+  closest() { return null; }
+  querySelector() { return null; }
+  // beats stacked 100 px apart under a 100 px band (centre line at 50). scrollIntoView centres
+  // the beat at once (NarEl.instant: prefers-reduced-motion, scroll-behavior auto) or on a
+  // later task (the pane's default scroll-behavior smooth)
+  getBoundingClientRect() {
+    const k = this.attrs['data-k'];
+    const top = k === undefined ? 0 : Number(k) * 100 - NarEl.scrollTop;
+    return {top, bottom: top + 100, left: 0, right: 100, width: 100, height: 100};
+  }
+  scrollIntoView() {
+    const to = Number(this.attrs['data-k'] || 0) * 100;
+    if (NarEl.instant) NarEl.scrollTop = to;
+    else setTimeout(() => { NarEl.scrollTop = to; }, 0);
+  }
+}
+NarEl.scrollTop = 0;
+NarEl.instant = false;
+
+const NAR_HOME = {ra: 266.42, dec: -29.0, fov: 0.5};
+const NAR_HL = {ds: 'src', ids: ['s1', 's2', 's3']};
+const NAR_DOC = {beats: [
+  {id: 'b1', view: {pane: 'sky', sky: {ra: 266.40, dec: -29.01, fov: 0.2}}},
+  {id: 'b2', view: {pane: 'sky', highlight: NAR_HL}},                                   // highlight only
+  {id: 'b3', view: {pane: 'sky', sky: {ra: 266.45, dec: -29.02, fov: 0.1}, highlight: NAR_HL}},
+  {id: 'b4', view: {pane: 'sky', highlight: NAR_HL, suppress_view: true}},
+  {id: 'b5', view: {pane: 'sky', highlight: {ds: 'src', ids: []}}},                     // empty ids: no highlight
+]};
+
+/** Mount a narrative pane over NAR_DOC with a sky pane beside it; returns {pane, store, events}. */
+async function narrativeHarness(initial = {}, {instant = false} = {}) {
+  const prev = {document: globalThis.document, raf: globalThis.requestAnimationFrame};
+  globalThis.document = {createElement: (t) => new NarEl(t), activeElement: null, createTextNode: (t) => ({textContent: t})};
+  globalThis.requestAnimationFrame = (f) => setTimeout(f, 0);
+  NarEl.scrollTop = 0;
+  NarEl.instant = instant;
+  const store = createStore(initial);
+  const events = [];
+  store.onEvent('narrative:highlight', (p) => events.push(p));
+  const ctx = {id: 'nar', config: {narrative: 'story'}, store, setStatus() {},
+    app: {page: {datasets: {}, state: {sky: NAR_HOME}}},
+    hub: {json: async () => NAR_DOC},
+    layout: {panes: () => [{id: 'nar', type: 'narrative'}, {id: 'sky1', type: 'sky'}]}};
+  const pane = narr.mount(new NarEl('div'), ctx);
+  await pane.ready;
+  const restore = () => {
+    pane.destroy();
+    globalThis.document = prev.document;
+    if (prev.raf === undefined) delete globalThis.requestAnimationFrame;
+    else globalThis.requestAnimationFrame = prev.raf;
+  };
+  return {pane, store, events, restore};
+}
+
+const lastHl = (events) => events.filter((e) => e.ids.length || e.goto !== false).at(-1);
+
+test('narrative:highlight goto: a highlight-only beat asks the sky pane to bring the rows into view', async () => {
+  const h = await narrativeHarness({beat: 'b2'});
+  try {
+    assert.equal(h.pane.stats().beat, 'b2');
+    const e = lastHl(h.events);
+    assert.deepEqual([e.pane, e.ds, e.ids, e.beat, e.goto], ['sky1', 'src', ['s1', 's2', 's3'], 'b2', true]);
+    assert.ok(Number.isInteger(e.seq) && e.seq > 0, 'each goto request carries a seq');
+    // the centring is implied by beat=b2: the hash carries the beat only
+    assert.deepEqual(stateToHash({beat: h.store.get('beat'), sky: h.store.get('sky')}), {beat: 'b2'});
+  } finally {
+    h.restore();
+  }
+});
+
+test('narrative:highlight goto: not with a beat sky view, suppress_view, or empty ids', async () => {
+  const h = await narrativeHarness({});
+  try {
+    const n0 = h.events.length;
+    h.pane.go('b3');
+    let e = h.events.at(-1);
+    assert.deepEqual([e.beat, e.ids.length, 'goto' in e], ['b3', 3, false], 'beat sky view: rings only');
+    h.pane.go('b4');
+    e = h.events.at(-1);
+    assert.deepEqual([e.beat, e.ids.length, 'goto' in e], ['b4', 3, false], 'suppress_view: rings only');
+    h.pane.go('b5');
+    e = h.events.at(-1);
+    assert.deepEqual([e.beat, e.ids.length, 'goto' in e], ['b5', 0, false]);
+    // go() to the highlight-only beat: goto, with a new seq each time
+    h.pane.go('b2');
+    const g1 = h.events.at(-1);
+    assert.equal(g1.goto, true);
+    h.pane.go('b1');
+    h.pane.go('b2');
+    const g2 = h.events.at(-1);
+    assert.equal(g2.goto, true);
+    assert.ok(g2.seq > g1.seq);
+    assert.ok(h.events.length > n0);
+  } finally {
+    h.restore();
+  }
+});
+
+test('narrative:highlight goto: an explicit deep-link view kept over the beat is not moved', async () => {
+  // '#sky=..&beat=b2': the hash view is explicit (no beatView marker) and stays
+  const deep = {ra: 266.3, dec: -28.9, fov: 0.3};
+  const h = await narrativeHarness({beat: 'b2', sky: {...deep}});
+  try {
+    assert.equal(h.pane.stats().beat, 'b2');
+    const e = lastHl(h.events);
+    assert.deepEqual([e.beat, e.ids.length, 'goto' in e], ['b2', 3, false]);
+    const sky = h.store.get('sky');
+    assert.deepEqual([sky.ra, sky.dec, sky.fov], [deep.ra, deep.dec, deep.fov]);
+    assert.equal(BEAT_VIEW in sky, false);
+    assert.equal(stateToHash({beat: 'b2', sky}).sky, '266.3,-28.9,0.3');
+  } finally {
+    h.restore();
+  }
+});
+
+// Contract issue (WPE2): with an instant scroll (prefers-reduced-motion) activate(k, {scroll,
+// keep}) centres beat k before it sets S.current, so arrived() -> unpin() -> pickActive()
+// activates k once more without `keep`; that inner call asks for the goto and the sky pane then
+// leaves the deep-link view. narrative.js is not owned by WPE2; this records the behaviour.
+test('narrative:highlight goto: deep-link view kept over the beat with an instant scroll', {todo: 'narrative.js activate re-enters through pickActive before S.current is set'}, async () => {
+  const deep = {ra: 266.3, dec: -28.9, fov: 0.3};
+  const h = await narrativeHarness({beat: 'b2', sky: {...deep}}, {instant: true});
+  try {
+    const e = lastHl(h.events);
+    assert.deepEqual([e.beat, e.ids.length, 'goto' in e], ['b2', 3, false]);
+  } finally {
+    h.restore();
+  }
 });
 
 test('sky store listener follows only a changed stored view (storedView / sameStoredView)', () => {

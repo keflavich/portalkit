@@ -296,8 +296,9 @@ to `state.beat` (or `''` while no beat is set) means that part is implied by the
 beat b3 with b3's view writes `#beat=b3`, and a reload reproduces it. `hashToPatch` marks the
 parts a `beat=` hash leaves out, and an explicit `sky=`/`ovl=` (including `-`) clears the
 marker; the narrative pane then keeps a view marker only when loading `beat=` alone reproduces
-that view (`beatSky`: a beat without its own sky view or with `suppress_view` drops it, so the
-view is written as `sky=`). On navigation, page defaults are still restored for parts the beat does not imply.
+that view (`beatSky`: a beat without its own sky view or with `suppress_view` drops it unless
+the view equals the page default, so the view is written as `sky=`; a highlight-only beat whose
+highlight the sky pane centres on (goto) keeps it when the fov equals the page default). On navigation, page defaults are still restored for parts the beat does not imply.
 An unknown beat id falls back to the first beat and is canonicalized to it. The sky pane
 records what last moved the viewer (`store`, `beat`, `explicit` or `user`; user = capture
 listeners for pointerdown/wheel/touchstart/keydown/dblclick on the stage, `USER_VIEW_EVENTS`):
@@ -451,6 +452,20 @@ markers, spectrum and detail with no focus) leave it out and are `ready` at moun
 | manifold | the first grid, canvas points or GPU frame draw |
 | hist | the first histogram draws (or "choose a column" shows) |
 
+Scatter context backdrop (note 122): for a context catalog (`context: true`, or the pane's
+`background`) whose manifest has a count grid (`density[]` entry without `stat`) with `x`/`y`
+equal to the pane's linear axes (`contextGridEntry(manifest, axes)`), the pane reads that grid
+with `client.density(key)` when it loads its data and draws it as the gray backdrop
+(`contextGridData(grid, shift)`, the `dm` fold applied to its ranges). It reads no context
+column for it, so nothing extra is fetched before first paint. Catalogs without a matching
+grid, or whose grid cannot be read, are binned with `bin2d` at settle time. The backdrop keeps
+the decoded `values` array as its `counts`, so the canvas2d colourise cache (note 103) serves
+every redraw. `stats().context = {prebinned, binned}` counts both kinds.
+
+Animation frames (note 123): look up `requestAnimationFrame` when scheduling, not when the
+module is imported (scatter's `raf`/`caf` remember which clock issued the handle). A module that
+binds it at import falls back to its timer under node even after a test installs a stand-in.
+
 List deferred columns (note 112): after first paint the list reads hover columns and class
 colours from the row records it already holds (`rowsCarry(manifest, key)` says whether
 `rows.cols` includes a key; `levelIndex(meta)` maps a label to its level). `client.values` for a
@@ -463,6 +478,13 @@ values match levels through `payloadLevel(levels, v)`, which also tries the code
 (`true` -> `'True'`, a float32 value -> `String(Math.fround(v))`); a label that still misses
 loads the whole colour column after first paint. One `client.values(key)` read per key is in
 flight at a time, shared by the shown-column and colour loaders.
+
+Landing cards (note 121): the landing pane takes card counts from `portal.json counts[]`
+(`countEntries(counts)` groups the valid entries by page; `countLabel(list)` gives the card
+text and tooltip: `n == 1` takes `unit`, else `units`; entries with the same nouns are summed,
+different nouns are listed with ` · `). Default nouns follow the kind (`COUNT_NOUNS`). With
+`counts` present no manifest is fetched; without it the pane reads the `n` of each `search`
+manifest, as before. `stats().counts` names the source used.
 
 Pane tools go into `ctx.tools` (header, right side). `ctx.setStatus(text, title)` writes the
 small status text in the header; `ctx.setTitle(text)` changes the pane title (section 5).
@@ -482,7 +504,7 @@ Store events are synchronous. Topics used by the core:
 | `hash:sel-dropped` | `{ds, length}` | hash |
 | `caps:change` | `{cap, enabled, reason}` | `app.disableCap` |
 | `brush:commit` | `{pane, ds, shape, op, count}` | brushing panes, test hooks |
-| `narrative:highlight` | `{pane, ds, ids, beat, goto?}` | narrative pane (note 71): beat `beat` highlights source ids `ids` of `ds`; `pane` is the beat's target pane id (else the sticky pane type); an empty `ids` clears the highlight; `goto: true` asks the target to bring the rows into view (set when the beat has a highlight, no sky view, no `suppress_view`, and no explicit `sky=` deep-link view kept over the beat). Scatter, manifold and sky panes listen |
+| `narrative:highlight` | `{pane, ds, ids, beat, goto?, seq?}` | narrative pane (note 71): beat `beat` highlights source ids `ids` of `ds`; `pane` is the beat's target pane id (else the sticky pane type); an empty `ids` clears the highlight; `goto: true` asks the target to bring the rows into view (set when the beat has a highlight, no sky view, no `suppress_view`, and no explicit `sky=` deep-link view kept over the beat; each goto request carries a new `seq`, so a target skips a `narrative:sync` replay of a goto it already applied; tests: plotpanes.test.mjs, and the synthetic highlight-only beat `b6` in test_archetype_smoke.py). Scatter, manifold and sky panes listen |
 | `narrative:sync` | `{pane}` | a scatter, manifold or sky pane at mount: asks the narrative pane to re-emit its current `narrative:highlight`, so a pane that mounts after the beat still shows it |
 
 **Offer protocol.** Keyboard actions that a pane or widget may own are emitted with a payload
@@ -630,10 +652,17 @@ quantized fallback, `_posDeferred`, `_qkeys` merging and which files each read f
 the list's deferred columns and the `firstPaint` of list, table, gallery and hist;
 `layout.test.mjs` checks the layout's pane state (`loading` until `firstPaint`, `error` on a
 rejection, the guard) with a fake DOM;
-`plotpanes.test.mjs` covers chips/legend `default_off` and the Aladin retry. The full suite is
+`listpanes.test.mjs` also covers the landing counts (`countEntries`, `countLabel`, a mounted
+landing pane with `setFetch` serving portal.json with and without `counts`) and the scatter
+context backdrop on a mounted pane (a matching grid: no context column read, colourise cache
+hits on redraw; no grid, a log axis or an unreadable grid: worker `bin2d`).
+`plotpanes.test.mjs` covers chips/legend `default_off`, the Aladin retry, `contextGridEntry` /
+`contextGridData`, the WPD2 sky helpers, and the `narrative:highlight` goto condition on a
+mounted narrative pane (highlight-only beat, beat sky view, `suppress_view`, empty ids, a kept
+deep-link view). The full suite is
 `node --test tests/js/*.test.mjs`.
 
-## 14. Runtime contracts from IMPLEMENTATION_NOTES 68-112
+## 14. Runtime contracts from IMPLEMENTATION_NOTES 68-123
 
 Where each JS-facing note lives (details in the module headers):
 
@@ -673,3 +702,8 @@ Where each JS-facing note lives (details in the module headers):
 | 108 | widget CSS only in `css/panes/ui.css`, loaded by boot before `mountLayout` | `core/boot.js`, `core/registry.js` |
 | 109 | a failed Aladin prefetch is retried once per page; sky and wavelength mount through `retryAladinOnce(app.page)` | `sky/aladin.js`, `panes/sky.js`, `panes/wavelength.js` |
 | 112 | `data-state` waits on `handle.firstPaint` (guard `LAYOUT_TIMING`); list/table/gallery/scatter/manifold/hist expose it; the list loads whole columns only on sort/filter/colour-by or at idle; `__pk.firstPaintAt()`; DevServer `RequestRecord.t` | `layout/layout.js` (section 5), section 6, `core/testhooks.js`, `deploy/devserver.py` |
+| 119 | `sky.beatView` / `sky.beatOvl` markers; a beat-applied view or overlay set stays out of the hash, user changes write `sky=`/`ovl=`, `#sky=..&beat=` keeps the hash view | `core/hash.js` (section 4), `panes/sky.js`, `panes/narrative.js` |
+| 120 | static skeletons; the list asks for rows at mount; `warmPaneModules`, `shownAtLoad`, `tabModeQuery` | `core/boot.js` (section 1), `layout/layout.js` (section 5), `panes/list.js` |
+| 121 | landing card counts from `portal.json counts[]`, `search` manifests as the fallback | `panes/landing.js` (section 6) |
+| 122 | scatter context backdrop from the context catalog's matching count grid, worker `bin2d` otherwise | `panes/scatter.js` (section 6) |
+| 123 | `requestAnimationFrame` looked up at call time | `panes/scatter.js` (section 6) |

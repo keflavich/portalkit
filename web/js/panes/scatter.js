@@ -14,7 +14,10 @@
 // Pre-binned first paint: the manifest density grid for the current axes is drawn as soon as
 // the manifest is open, before any column arrives. Context datasets (`background` option, or
 // any page catalog with context:true whose columns resolve the axes) are drawn as a faint
-// worker-binned density under the foreground and never take part in selection. `raster`
+// density under the foreground and never take part in selection: the context catalog's own
+// pre-binned count grid when one matches the current axes (sections 5.9, 7.6; fetched with the
+// foreground grid, so no context column is read), else a worker bin2d of its columns at settle
+// time (only after the foreground columns have arrived). `raster`
 // layers ([{url, extent: [x0, x1, y_bottom, y_top], x?, y?, cell?, opacity?}], matplotlib
 // extent order) are drawn under the points; `x` / `y` bind a layer to an axis pair and `cell`
 // to a grid cell (an unbound layer belongs to the single plot). Binned-statistic grids of the
@@ -99,8 +102,17 @@ export function iconButton(text, title, cls = '') {
 }
 
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
-const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (fn) => setTimeout(() => fn(now()), 16);
-const caf = typeof cancelAnimationFrame === 'function' ? cancelAnimationFrame : clearTimeout;
+// Animation frames are looked up at call time, not bound at import: a module evaluated before a
+// page (or test harness) installs requestAnimationFrame would otherwise keep the 16 ms timer
+// fallback for good, and a frame would land on a different clock than the host's frames.
+// The handle records which clock it came from, so caf cancels it with the matching function.
+const raf = (fn) => (typeof requestAnimationFrame === 'function'
+  ? {raf: true, h: requestAnimationFrame(fn)} : {raf: false, h: setTimeout(() => fn(now()), 16)});
+const caf = (f) => {
+  if (!f) return;
+  if (!f.raf) clearTimeout(f.h);
+  else if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(f.h);
+};
 
 /** Page datasets ({id: DatasetRef}). */
 export function pageDatasets(ctx) {
@@ -504,6 +516,31 @@ export function contextDatasets(ctx, ds) {
   return Object.keys(all).filter((k) => k !== ds && all[k] && all[k].kind === 'catalog' && all[k].context);
 }
 
+/**
+ * Pre-binned count grid of a context catalog for the axes `ax` ({x, y, xlog?, ylog?}):
+ * the manifest `density[]` entry without `stat` whose x / y expressions equal the axes, on
+ * linear axes only (grids are binned in linear catalog units, section 5.9); null when none
+ * matches, and the backdrop is then binned in the worker.
+ */
+export function contextGridEntry(manifest, ax) {
+  if (!manifest || !ax || !ax.x || !ax.y || ax.xlog || ax.ylog) return null;
+  const list = Array.isArray(manifest.density) ? manifest.density : [];
+  return list.find((g) => g && !g.stat && g.key && g.x === ax.x && g.y === ax.y) || null;
+}
+
+/**
+ * Drawable context backdrop {counts, nx, ny, xr, yr, total} from a decoded density grid
+ * (client.density result) shifted by the distance-modulus fold `shift` ([dx, dy]). `counts` is
+ * the decoded array itself, so canvas2d's colourise cache (keyed by the counts object) hits on
+ * every redraw and after a dm change. null for a missing or malformed grid.
+ */
+export function contextGridData(g, shift = [0, 0]) {
+  if (!g || !g.values || !(g.nx > 0) || !(g.ny > 0) || !Array.isArray(g.xr) || !Array.isArray(g.yr)) return null;
+  const dx = Number.isFinite(shift[0]) ? shift[0] : 0, dy = Number.isFinite(shift[1]) ? shift[1] : 0;
+  return {counts: g.values, nx: g.nx, ny: g.ny, xr: [g.xr[0] + dx, g.xr[1] + dx], yr: [g.yr[0] + dy, g.yr[1] + dy],
+    total: g.total};
+}
+
 /** True when every base key of the expressions is a column of the client. */
 export function resolvesIn(client, exprs) {
   for (const e of exprs) {
@@ -812,7 +849,8 @@ export async function mount(host, ctx) {
     preview: null,
     renderMs: 0,
     fGrid: null, fKey: '',
-    ctxGrids: [], ctxKey: '',
+    ctxGrids: [], ctxKey: '',  // worker-binned context backdrops (catalogs without a matching grid)
+    ctxPre: {key: '', plan: null, grids: new Map()},  // pre-binned context backdrops per catalog
     inView: null, inViewKey: '',
     prebinned: null,
     statKey: '', stat: null,  // chosen binned-statistic background {key, img}
@@ -994,8 +1032,9 @@ export async function mount(host, ctx) {
     const key = xyKey();
     const ax = S.axes;
     S.shift = dmShift(client, ax.x, ax.y, ax.xlog, ax.ylog, Number(store.get('dm')) || 0);
-    S.fGrid = null; S.fKey = ''; S.ctxKey = ''; S.inView = null; S.inViewKey = ''; S.style = null;
+    S.fGrid = null; S.fKey = ''; S.ctxKey = ''; S.ctxGrids = []; S.inView = null; S.inViewKey = ''; S.style = null;
     loadPrebinned();
+    loadContextGrids();
     schedule();
     if (!ax.x || !ax.y) { ctx.setStatus('choose x and y'); fp.resolve(); return; }
     ctx.setStatus('loading…');
@@ -1119,6 +1158,71 @@ export async function mount(host, ctx) {
       if (err && err.name === 'AbortError') return;
       console.warn(`density grid ${d.key} unavailable`, err);
     });
+  }
+
+  // decoded context grids per `<catalog>\u0000<grid key>` (Promise), shared by the single plot
+  // and the grid cells, so an axes round trip or a dm change refetches nothing
+  const ctxGridCache = new Map();
+
+  /** Decoded pre-binned grid `entry` of context catalog `cds` (null when it cannot be read). */
+  function contextGridFor(cds, bg, entry) {
+    const k = `${cds}\u0000${entry.key}`;
+    if (!ctxGridCache.has(k)) {
+      const p = bg.density(entry.key).then((g) => g || null, (err) => {
+        if (err && err.name === 'AbortError') throw err;
+        console.warn(`context grid ${cds}/${entry.key} unavailable; binning its columns`, err);
+        return null;
+      });
+      ctxGridCache.set(k, p);
+      p.then((g) => { if (!g) ctxGridCache.delete(k); }, () => ctxGridCache.delete(k));
+    }
+    return ctxGridCache.get(k);
+  }
+
+  /**
+   * Context backdrop plan for the current axes (sections 5.9 and 7.6): one entry per context
+   * catalog, 'grid' when its manifest has a count grid for these (linear) axes, 'bin' when its
+   * columns resolve the axes but no grid matches (worker bin2d at settle time), 'none'
+   * otherwise. Matching grids are fetched here, at reloadData / dm change, before any column;
+   * a grid that cannot be read turns its catalog into 'bin'. Returns the plan Promise
+   * (Map catalog -> kind), cached per axes, fold shift and catalog list.
+   */
+  function loadContextGrids() {
+    const ax = S.axes;
+    const ids = contextDatasets(ctx, ds);
+    const key = `${xyKey()}|${S.shift[0]},${S.shift[1]}|${ids.join(',')}`;
+    if (S.ctxPre.key === key && S.ctxPre.plan) return S.ctxPre.plan;
+    const pre = {key, plan: null, grids: new Map()};
+    S.ctxPre = pre;
+    if (!ids.length || !ax.x || !ax.y) {
+      pre.plan = Promise.resolve(new Map(ids.map((c) => [c, 'none'])));
+      return pre.plan;
+    }
+    const shift = S.shift.slice();
+    pre.plan = Promise.all(ids.map(async (cds) => {
+      let bg;
+      try {
+        bg = await app.catalog(cds);
+      } catch (err) {
+        if (err && err.name === 'AbortError') return [cds, 'none'];
+        console.warn(`scatter ${id}: context catalog ${cds} unavailable`, err);
+        return [cds, 'none'];
+      }
+      const entry = contextGridEntry(bg.manifest, ax);
+      if (!entry) return [cds, resolvesIn(bg, [ax.x, ax.y]) ? 'bin' : 'none'];
+      const g = await contextGridFor(cds, bg, entry);
+      if (destroyed || S.ctxPre !== pre) return [cds, 'grid'];
+      const data = contextGridData(g, shift);
+      if (!data) return [cds, resolvesIn(bg, [ax.x, ax.y]) ? 'bin' : 'none'];
+      pre.grids.set(cds, data);
+      schedule();
+      return [cds, 'grid'];
+    })).then((pairs) => new Map(pairs));   // settleNow awaits it and bins the 'bin' catalogs
+    pre.plan.catch((err) => {
+      if (err && err.name === 'AbortError') return;
+      console.warn(`scatter ${id}: context backdrop failed`, err);
+    });
+    return pre.plan;
   }
 
   /** Per-point styling for T0 (and pair connectors for T0 / T1 up to SEMANTIC_ZOOM_MARKERS). */
@@ -1365,6 +1469,7 @@ export async function mount(host, ctx) {
   }
 
   function drawContext(c, view, tk) {
+    for (const g of S.ctxPre.grids.values()) drawDensityGrid(c, view, g, {tokens: tk, cmap: 'gray_r', alpha: 0.45});
     for (const g of S.ctxGrids) drawDensityGrid(c, view, g, {tokens: tk, cmap: 'gray_r', alpha: 0.45});
   }
 
@@ -1458,12 +1563,16 @@ export async function mount(host, ctx) {
     const ctxIds = contextDatasets(ctx, ds);
     const ckey = `${key}|${ctxIds.join(',')}`;
     if (ctxIds.length && S.ctxKey !== ckey) {
-      jobs.push(Promise.all(ctxIds.map(async (cds) => {
+      // only catalogs without a pre-binned grid for these axes are binned (and so read their
+      // columns); a matching grid is drawn as it is (loadContextGrids)
+      const shift = S.shift.slice();
+      const axKey = xyKey();
+      jobs.push(loadContextGrids().then((plan) => Promise.all(ctxIds.filter((c) => plan.get(c) === 'bin').map(async (cds) => {
         const bg = await app.catalog(cds);
-        if (!resolvesIn(bg, [ax.x, ax.y])) return null;
         const g = await bg.bin2d({pane: `${id}:ctx`, kind: 'xy', x: ax.x, y: ax.y, xlog: ax.xlog, ylog: ax.ylog}, CONTEXT_BINS, CONTEXT_BINS, {mask: 'vis', xr, yr});
-        return gridToData(g, ax.xlog, ax.ylog, S.shift);
-      })).then((grids) => {
+        return gridToData(g, ax.xlog, ax.ylog, shift);
+      }))).then((grids) => {
+        if (axKey !== xyKey() || destroyed) return;   // the axes changed meanwhile: reloadData cleared them
         S.ctxGrids = grids.filter(Boolean);
         S.ctxKey = ckey;
       }));
@@ -1702,6 +1811,10 @@ export async function mount(host, ctx) {
     if (c.ctx && c.ctx.key === key) return c.ctx.grids;
     const grids = await Promise.all(ids.map(async (cds) => {
       const bg = await app.catalog(cds);
+      // the context catalog's pre-binned grid for the cell's axes when it has one (no column read)
+      const entry = contextGridEntry(bg.manifest, c.spec);
+      const pre = entry ? contextGridData(await contextGridFor(cds, bg, entry)) : null;
+      if (pre) return pre;
       if (!resolvesIn(bg, [c.spec.x, c.spec.y])) return null;
       const g = await bg.bin2d({pane: `${id}:g${c.k}:ctx`, kind: 'xy', x: c.spec.x, y: c.spec.y, xlog: false, ylog: false},
         CONTEXT_BINS, CONTEXT_BINS, {mask: 'vis', xr, yr});
@@ -1865,6 +1978,7 @@ export async function mount(host, ctx) {
     if (S.dom) S.dom = {x: S.dom.x.map((v) => v + S.shift[0] - old[0]), y: S.dom.y.map((v) => v + S.shift[1] - old[1])};
     S.fKey = ''; S.ctxKey = ''; S.inViewKey = '';
     loadPrebinned();
+    loadContextGrids();
     settle();
     schedule();
   }));
@@ -1995,6 +2109,7 @@ export async function mount(host, ctx) {
       return {renderMs: S.renderMs, tier: S.tier, mode: stage.dataset.mode || null, n, shown: S.lastCount,
         selected: sel ? sel.count : 0, inView: S.inView, gl, grid: !!(gridOn && S.focusCell === null), gridDrawn,
         overlays: S.overlays.length, stat: S.stat ? S.stat.key : null,
+        context: {prebinned: S.ctxPre.grids.size, binned: S.ctxGrids.length},
         highlight: hl ? hl.rows().length : 0,
         view: viewStats(S.view, S.axes, {shift: S.shift, xinv: xInv(), yinv: yInv()}),
         cells: cells.map((c) => ({k: c.k, drawn: !!c.view, density: !!c.dens, context: c.ctx ? c.ctx.grids.length : 0}))};
