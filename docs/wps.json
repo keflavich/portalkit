@@ -930,5 +930,46 @@
    "tests/js/layout.test.mjs"
   ],
   "description": "Level 3 at 656f853 (host load ~120 on a 2-CPU cgroup, SwiftShader): explorer@50000 first_paint_s 3.49-4.31 s vs the 3.0 s budget; WPD1's request order shows rows/r0000 finished ~3.27 s BEFORE firstPaintAt, so ~3 s is spent after the data is in. Trace where (Playwright tracing/CDP Performance and the panes' firstPaint latch timings): which pane's latch resolves last, and what that pane waits on (WebGL program/first raster on SwiftShader, density grid colourise, idle callback FIRST_PAINT_IDLE_TIMEOUT_MS, layout guard, scatter waiting for full x/y columns instead of the head chunk/density grid). Fix what is ours: e.g. scatter first paint from the pre-binned grid or the LOD head chunk then progressive full draw; resolve afterFirstPaint without an idle wait longer than needed; avoid main-thread blocking work before first paint. Keep note 112 semantics (latch = first data-backed paint). Report before/after first_paint_s for 50k and 1M over >=3 interleaved runs each (python -m pytest tests/perf -m perf -q -k 'not 5000000', PK_SYNTH_DIR=<scratch>/WPD3/synth) and the trace breakdown. Do not change budgets."
+ },
+ {
+  "id": "WPE1",
+  "title": "Wave E: Python framework fixes from wave-1 adapter reviews",
+  "depends_on": [],
+  "files": [
+   "portalkit/spec.py",
+   "portalkit/config.py",
+   "portalkit/schema.py",
+   "portalkit/build.py",
+   "portalkit/context.py",
+   "portalkit/caps.py",
+   "portalkit/bundle/catalog.py",
+   "portalkit/deploy/deploy.py",
+   "portalkit/deploy/stage.py",
+   "portalkit/deploy/status.py",
+   "portalkit/render/",
+   "docs/ARCHITECTURE.md",
+   "docs/IMPLEMENTATION_NOTES.md",
+   "docs/adapters.md",
+   "docs/deploy.md",
+   "docs/inventory.json",
+   "docs/port_table.json",
+   "tests/data/inventory_caps.json",
+   "tests/data/port_table.json",
+   "sites/nirspec6927.toml",
+   "adapters/nirspec6927.py",
+   "tests/adapters/test_nirspec6927.py",
+   "tests/adapters/test_sgrb2.py",
+   "tests/adapters/test_robitaille.py",
+   "tests/py/test_config.py",
+   "tests/py/test_schema.py",
+   "tests/py/test_spec.py",
+   "tests/py/test_deploy.py",
+   "tests/py/test_cli_build.py",
+   "tests/py/test_catalog_bundle.py",
+   "tests/py/test_context.py",
+   "tests/py/test_provenance.py",
+   "tests/py/test_parity_inventory.py"
+  ],
+  "description": "Framework issues raised by the wave-1 adapters (WP20 sgrb2, WP21 robitaille, WP22 nirspec6927; their code is committed). Fix each in the framework, with tests:\n1. Per-legacy-file preset and replace policy. PageConfig.preset is one hash fragment per page and applies to every legacy file of the page. Allow each [[portal.page]] legacy entry to be a string or a table {file, preset?, replace?}: preset is the hash fragment the deploy redirect stub for THAT legacy file appends (e.g. gallery_6927_2221.html -> gallery_6927.html#role=c2221); replace=false keeps that legacy path out of --replace stubbing (for legacy files behind a served symlink, e.g. robitaille imaging/ -> modelgrids/imaging_run/png, which today raises SymlinkRefusal). Spec dataclass (LegacyRef or the page legacy list), config assembly, schema validation, deploy stub writer and docs (ARCHITECTURE section on legacy redirects and site toml, docs/deploy.md). Then update sites/nirspec6927.toml so gallery_6927 maps pngs/gallery_6927.html, pngs/gallery_6927_2221.html (preset role=c2221) and pngs/gallery_6927_1182.html (preset role=c1182); check those legacy files exist under the nirspec_6927 legacy_dir first (read-only) and adjust paths to what exists.\n2. portal.json 'search' lists only explorer/manifold catalogs, so landing cards for other pages (a map_ccd page on the same catalog, gallery pages over image sets, spectra/record pages) get no manifest-driven count and adapters fall back to build-time card text. Make the landing counts cover every page's primary dataset (catalog row count, image-set item count, record-set id count) in a schema-valid way (extend pk-portal/1 additively if needed, with the landing pane reading it only if it already supports it; do NOT edit web/js files: if the JS landing pane needs a change, record it in contract_issues with the exact field names).\n3. Absolute local input paths (/orange/adamginsburg/..., /blue/...) are written into rendered page HTML and manifests (provenance / readme / build inputs). Rendered pages and served data must not carry absolute filesystem paths: replace them with a path relative to the site's declared input roots (legacy_dir / legacy_paths / data roots) or with the basename, prefixed by a stable label; keep the full paths in build_report.json only (that file is not deployed; confirm deploy excludes it, and make it so if not). Add a check in `portalkit check` (warning at G1, error at G2) that flags any absolute /orange/, /blue/, /home/ path in staged .html/.json files.\n4. The first-paint estimator (portalkit/bundle/catalog.py first_paint_files and the build ledger) counts list-row chunks for context catalogues (context=True, used only as density/background layers) and, when exact_rows is off, counts the head chunk of every column. Context catalogues are never shown in a list pane: count only what the panes using them read at first paint (density grids). Then set exact_rows off for the 121,068-row `bg` context catalogue in adapters/nirspec6927.py (WP22 measured 6.3 MB of row files nobody fetches) and confirm the colorcolor first-paint estimate stays below 1 MB.\n5. Build input registry efficiency: WP21 measured a 13-minute adapter test run because the build input registry (portalkit/context.py, input_sha256.json) walks large directories (robitaille seds/) on Lustre. Make the registry cheap: record directory inputs by (path, mtime, entry count) or by the files actually read, cache content hashes keyed by (path, size, mtime_ns), never hash or stat a whole tree when the adapter registered a directory. Measure before/after on the robitaille adapter's Tier A fixture build (python -m pytest tests/adapters/test_robitaille.py -m adapters -q -x, PK_CACHE_DIR=<scratch>/WPE1/cache) and report both timings.\n6. Inventory family key: docs/inventory.json, docs/port_table.json, tests/data/inventory_caps.json and tests/data/port_table.json key the family as 'nirspec-6927' while the site/family id is 'nirspec6927'; tests/adapters/test_nirspec6927.py maps them with INV_FAMILY. Normalize every family key to the site ids (check the others too: sgrb2, robitaille, and the not-yet-ported families' keys against the sites they will get per ARCHITECTURE section 14) and drop the mapping. Keep tests/py/test_parity_inventory.py green.\nRun: python -m pytest tests/py -q (whole python suite must stay green) plus the adapter tests you touch (tests/adapters/test_nirspec6927.py -m adapters; robitaille for item 5). Do not run e2e/perf here."
  }
 ]
