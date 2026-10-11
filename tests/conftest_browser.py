@@ -313,6 +313,15 @@ class PageRun:
     def store_get(self, key: str) -> Any:
         return self.page.evaluate("(k) => { const v = window.__pk.store.get(k); return v === undefined ? null : JSON.parse(JSON.stringify(v)); }", key)
 
+    def first_paint_at(self, timeout_ms: int = 60000) -> float:
+        """Epoch-ms time at which ``app.afterFirstPaint()`` resolved (``__pk.firstPaintAt()``,
+        IMPLEMENTATION_NOTES 112), comparable with DevServer ``RequestRecord.t``."""
+        return float(self.page.evaluate(
+            """async (ms) => {
+                 const t = new Promise((_, rej) => setTimeout(() => rej(new Error('firstPaintAt timeout')), ms));
+                 return await Promise.race([window.__pk.firstPaintAt(), t]);
+               }""", timeout_ms))
+
     def wait_panes_settled(self, timeout_ms: int = 60000) -> None:
         """Wait until no visible pane is in the 'loading' state."""
         self.page.wait_for_function(

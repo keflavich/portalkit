@@ -99,6 +99,59 @@ def test_request_recorded_before_response_headers(root):
         assert st == [200, 401, 404, 200]
 
 
+def _wait_finished(srv: DevServer, k: int, timeout: float = 2.0):
+    """Record ``k`` once its ``t`` is set (the server thread stamps it right after the write,
+    which can be a moment after the client has read the body)."""
+    end = time.time() + timeout
+    while time.time() < end:
+        log = srv.requests
+        if len(log) > k and log[k].t is not None:
+            return log[k]
+        time.sleep(0.002)
+    return srv.requests[k]
+
+
+def test_request_finish_time(root):
+    """``RequestRecord.t``: epoch ms when the response finished, inside the request window and
+    in completion order, for files, ranges, HEAD, listings and plain error bodies."""
+    with DevServer(root, latency_ms=20) as srv:
+        cases = [("GET", "/data/cols.0123abcd.bin", {}),
+                 ("GET", "/data/cols.0123abcd.bin", {"Range": "bytes=10-19"}),
+                 ("HEAD", "/data/manifest.json", {}),
+                 ("GET", "/sub/", {}),
+                 ("GET", "/missing.json", {})]
+        windows = []
+        for k, (method, path, hdrs) in enumerate(cases):
+            t0 = time.time() * 1000.0
+            req(srv, path, method, hdrs)
+            rec = _wait_finished(srv, k)
+            windows.append((t0, time.time() * 1000.0))
+            assert rec.t is not None, rec
+        log = srv.requests
+        assert len(log) == len(cases)
+        for rec, (t0, t1) in zip(log, windows):
+            # the 20 ms latency is spent before the record exists, so t is at least that late
+            assert t0 + 15 <= rec.t <= t1, (rec, t0, t1)
+        ts = [r.t for r in log]
+        assert ts == sorted(ts)
+
+
+def test_request_finish_time_unset_until_written(root):
+    """A new record has no ``t``; the server stamps it after the body is written."""
+    with DevServer(root) as srv:
+        conn = http.client.HTTPConnection(srv.host, srv.port, timeout=10)
+        try:
+            conn.request("GET", "/data/cols.0123abcd.bin")
+            r = conn.getresponse()
+            r.read()
+        finally:
+            conn.close()
+        rec = _wait_finished(srv, 0)
+        assert rec.t is not None and rec.bytes == 1024
+    from portalkit.deploy.devserver import RequestRecord
+    assert RequestRecord("GET", "/x", 200).t is None
+
+
 def test_ranges(root):
     with DevServer(root) as srv:
         st, h, body = req(srv, "/data/cols.0123abcd.bin", headers={"Range": "bytes=10-19"})

@@ -89,6 +89,7 @@ output in `page.caps.enabled`; `app.notes` records the runtime reason.
 | `catalog(ds)` | cached `hub.catalog(ds)`; also creates the dataset's Selection |
 | `selectionFor(ds)` | `Promise<Selection>` |
 | `afterFirstPaint()` | the page's first-paint promise (note 100), the same promise on every call; see below |
+| `firstPaintAt()` | `Promise<number>`: epoch ms at which `afterFirstPaint()` resolved (note 112) |
 | `resolveIds(ds, ids)` | `Promise<number[]>` stored row indices, -1 when not found. A row matches when its id equals the text exactly (first stored row wins) or the text is one of its aliases (manifest `ids.alias_file`); substring hits never count. Ids already in the id cache, or resolved by an earlier call, answer at once. The rest (deduplicated) go to the worker in one `client.resolveIds(uniq, {aliases: true})` pass (note 102), which loads every ids chunk and the alias file once; resolved rows are memoised per dataset. Clients without `resolveIds` (test doubles) use the older path: `RESOLVE_BATCH_MIN` (16) or more unknown ids are matched in one pass over `client.export({mask: 'all', format: 'ids'})` (`matchIdList`) and the alias file, fewer go through `client.find` one at a time |
 | `idOf(ds, i)` | `Promise<string>` cached id lookup |
 | `applySelection(ds, str)` | apply an `ids:`/`bits:`/`r:` string as one replace (recipes replay on an empty scratch Selection through `client.brush`, `client.query` and presets, then load with `sel.replaceWith`) |
@@ -125,6 +126,12 @@ first paint before it leaves the loading state: sky and wavelength panes start
 `markers.refresh({force: true})` without awaiting it and register their view listeners
 (`positionChanged`, `zoomChanged`, `resizeChanged`) right away; the sky pane also emits
 `narrative:sync` without waiting for the markers.
+
+A pane leaves `data-state="loading"` only at its first data paint (IMPLEMENTATION_NOTES 112,
+section 5): the list, table, gallery, scatter, manifold and hist handles expose `firstPaint`,
+so first paint (and with it every deferred column, ids and pos read) waits until their first
+screen is drawn. `app.firstPaintAt()` returns a Promise of the epoch-ms time (`Date.now()`)
+at which `afterFirstPaint` resolved; `__pk.firstPaintAt()` (section 12) exposes it to tests.
 
 Selections: boot uses `client.selection()` when it returns an object with `apply`, `mask` and
 `onChange` (a `core/selection.js` Selection); otherwise it creates `new Selection(client.n)`.
@@ -325,6 +332,18 @@ LayoutNode: `{row: [...]}`, `{col: [...]}` or a pane leaf
   tab order, and a saved split with any non-positive entry is ignored on load.
 - Panes mount lazily the first time they become visible. A `ResizeObserver` calls
   `handle.resize(w, h, dpr)` once per frame and emits `pane:resize {pane, w, h}`.
+- Pane state (IMPLEMENTATION_NOTES 112): `section.pk-pane[data-state]` is `loading` from the
+  start of the mount until `mount()` resolves and, when the handle has a `firstPaint`
+  Promise, until that settles: resolve gives `ready`, reject gives `error` (with a console
+  warning; the pane keeps its own error note). A handle without `firstPaint` is `ready` at
+  mount. While the first paint is pending, a pane hidden by a fold or an inactive tab is
+  `paused` (it skips its draws, so it cannot paint) and returns to `loading` when shown; a
+  paused pane does not hold back `afterFirstPaint`. A guard marks the pane `ready` with a console warning
+  `LAYOUT_TIMING.firstPaintMaxWaitMs` (`PANE_FIRST_PAINT_MAX_WAIT_MS` = 30 s) after mount
+  (`LAYOUT_TIMING` is mutable for tests). `whenMounted(id)` still resolves at mount. A
+  destroyed pane's state is left alone. `firstPaintLatch()` returns `{promise, done,
+  resolve(), reject(err)}`: the first call wins, later calls are ignored, and an unobserved
+  rejection is handled; panes use it for their `firstPaint`.
 
 - Titles (IMPLEMENTATION_NOTES 77): `options.title` (a non-blank string or a finite number)
   seeds the header text, the mobile tab text and the pane `aria-label`; otherwise the title
@@ -368,6 +387,7 @@ export function mount(el, ctx) {
     onVisible(v) { visible = v; if (v) draw(); },
     destroy() { offStore(); offTheme(); },
     stats() { return {renderMs: 0}; },
+    // optional: firstPaint: Promise   (settles at the first data paint; see below)
     // optional: brush(shape, op) -> Promise<count>  (used by __pk.brush)
     // optional: snapshot() -> Promise<Blob>
   };
@@ -378,6 +398,37 @@ Rules: show the skeleton or a status while data loads; stop work while hidden; r
 from the theme tokens and repaint on `theme:change`; hit-test brushes through the same
 transform used to draw; never call another pane directly. Add the type to
 `core/registry.js` (`PANE_MODULES`, `PANE_CSS`, `PANE_TITLES`).
+
+`firstPaint` (optional, IMPLEMENTATION_NOTES 112): a Promise the layout waits on before it
+marks the pane `ready` (section 5). A pane that reads catalog data resolves it once its first
+screen is drawn from data (or once it shows a note such as "choose a column" or "no catalog"),
+rejects it when that load fails, and resolves it in `destroy()`. Use `firstPaintLatch()` from
+`layout/layout.js`. Never make it wait on `app.afterFirstPaint()` or on reads gated by it
+(whole columns, ids, pos): first paint waits on every visible pane, so that would hold the
+page until the 30 s guard. Panes whose data arrives later by design (sky and wavelength
+markers, spectrum and detail with no focus) leave it out and are `ready` at mount.
+
+| pane | `firstPaint` resolves when |
+|---|---|
+| list | the first screen of rows is drawn (rows fetched for the window; in a sorted or filtered order, after its columns load) |
+| table | every row of the first screen is drawn |
+| gallery | the first page of cards is laid out (thumbnails load afterwards) |
+| scatter | the first density grid or points draw (or no axes are set) |
+| manifold | the first grid, canvas points or GPU frame draw |
+| hist | the first histogram draws (or "choose a column" shows) |
+
+List deferred columns (note 112): after first paint the list reads hover columns and class
+colours from the row records it already holds (`rowsCarry(manifest, key)` says whether
+`rows.cols` includes a key; `levelIndex(meta)` maps a label to its level). `client.values` for a
+whole column runs only on a sort, filter, search or colour-by change, or at idle:
+`LIST_TIMING.idleColumnsMs` (4 s) after the last scroll, key or pointer activity and with no row
+read in flight, through `requestIdleCallback` (timeout `LIST_TIMING.idleTimeoutMs`). A shown
+column or colour column that the rows do not carry (for example an `exact: false` column, left out
+of `rows.cols`) loads right after first paint, without the quiet period. Row-record category
+values match levels through `payloadLevel(levels, v)`, which also tries the codec spellings
+(`true` -> `'True'`, a float32 value -> `String(Math.fround(v))`); a label that still misses
+loads the whole colour column after first paint. One `client.values(key)` read per key is in
+flight at a time, shared by the shown-column and colour loaders.
 
 Pane tools go into `ctx.tools` (header, right side). `ctx.setStatus(text, title)` writes the
 small status text in the header; `ctx.setTitle(text)` changes the pane title (section 5).
@@ -520,7 +571,11 @@ With `?pktest=1`, `window.__pk` exists from the first line of boot:
 `ready` (Promise), `errors` (window errors, unhandled rejections and `console.error`),
 `caps()`, `tiers()`, `store`, `hub`, `app`, `select(ds, ids, op?)`, `brush(pane, shape, op?)`
 (uses the pane's `brush` hook when present, else `client.brush` with the pane's axes),
-`focus(ds, id)` and `stats()` (`{fetches, bytes, renderMs, decodeMs}`).
+`focus(ds, id)`, `stats()` (`{fetches, bytes, renderMs, decodeMs}`) and `firstPaintAt()`
+(`Promise<number>`, epoch ms at which `app.afterFirstPaint()` resolved; available before boot
+attaches the app; it rejects with the boot error when boot fails). The perf test (`tests/perf/test_perf_budget.py`) compares it with DevServer
+`RequestRecord.t` (epoch ms when each response finished) to count the bytes before first
+paint, and also reports the bytes up to a 1 s quiet settle.
 
 ## 13. Tests
 
@@ -537,11 +592,14 @@ form through a real Selection. `store.test.mjs` also checks that every `PANE_CSS
 `ui/export.js` (note 93). `chunks.test.mjs` drives the worker engine on in-memory bundles (head chunks, row chunks, the
 quantized fallback, `_posDeferred`, `_qkeys` merging and which files each read fetches).
 `listpanes.test.mjs` mounts the table, detail, sky and wavelength panes with fake clients
-(deferred-position re-reads, `{pos: true}` reads, setup that does not wait for first paint);
+(deferred-position re-reads, `{pos: true}` reads, setup that does not wait for first paint),
+the list's deferred columns and the `firstPaint` of list, table, gallery and hist;
+`layout.test.mjs` checks the layout's pane state (`loading` until `firstPaint`, `error` on a
+rejection, the guard) with a fake DOM;
 `plotpanes.test.mjs` covers chips/legend `default_off` and the Aladin retry. The full suite is
 `node --test tests/js/*.test.mjs`.
 
-## 14. Runtime contracts from IMPLEMENTATION_NOTES 68-109
+## 14. Runtime contracts from IMPLEMENTATION_NOTES 68-112
 
 Where each JS-facing note lives (details in the module headers):
 
@@ -580,3 +638,4 @@ Where each JS-facing note lives (details in the module headers):
 | 107 | `sel=` form: recipe competes with `bits:` only when view-independent; shorter wins, tie to recipe | `core/selection.js` (section 3) |
 | 108 | widget CSS only in `css/panes/ui.css`, loaded by boot before `mountLayout` | `core/boot.js`, `core/registry.js` |
 | 109 | a failed Aladin prefetch is retried once per page; sky and wavelength mount through `retryAladinOnce(app.page)` | `sky/aladin.js`, `panes/sky.js`, `panes/wavelength.js` |
+| 112 | `data-state` waits on `handle.firstPaint` (guard `LAYOUT_TIMING`); list/table/gallery/scatter/manifold/hist expose it; the list loads whole columns only on sort/filter/colour-by or at idle; `__pk.firstPaintAt()`; DevServer `RequestRecord.t` | `layout/layout.js` (section 5), section 6, `core/testhooks.js`, `deploy/devserver.py` |

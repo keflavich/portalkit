@@ -1,6 +1,7 @@
 // Unit tests for the list / gallery / detail / landing helpers changed in WPI4
-// (IMPLEMENTATION_NOTES 74, 76, 81, 85, 93), and the startup reads of the list, hover card and
-// sky markers (note 99). Pure functions, plus list mount / hover install / SkyMarkers on a
+// (IMPLEMENTATION_NOTES 74, 76, 81, 85, 93), the startup reads of the list, hover card and
+// sky markers (note 99), and the panes' first-paint promises and the list's deferred column
+// reads (note 112). Pure functions, plus list mount / hover install / SkyMarkers on a
 // minimal fake DOM and fake DataClient (no jsdom).
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -8,13 +9,17 @@ import assert from 'node:assert/strict';
 import {itemUrl, productUrl, substituteRefs} from '../../web/js/ui/lightbox.js';
 import {
   asOrder, ID_SORT, keepMask, normalizeSortSpec, orderKey, parseSort, subsetInOrder,
-  afterFirstPaint, cellText, mount as mountList, ROW_BLOCK, ROW_CACHE_ROWS, RowCache, rowBlocks, rowId, rowsIdKey,
+  afterFirstPaint, cellText, levelIndex, LIST_TIMING, mount as mountList, ROW_BLOCK, ROW_CACHE_ROWS, RowCache, rowBlocks,
+  payloadLevel, rowId, rowsCarry, rowsIdKey,
 } from '../../web/js/panes/list.js';
 import {HOVER_CHANNEL, install as installHover, recordColumns, recordExact, recordId, recordValueText} from '../../web/js/ui/hover.js';
 import {afterFirstPaint as markersAfterFirstPaint, SkyMarkers} from '../../web/js/sky/markers.js';
 import {createStore} from '../../web/js/core/store.js';
 import {MISSING} from '../../web/js/core/fmt.js';
-import {annotateOptions, catalogSortKey, orderByRank, rankOf} from '../../web/js/panes/gallery.js';
+import {annotateOptions, catalogSortKey, mount as mountGallery, orderByRank, rankOf} from '../../web/js/panes/gallery.js';
+import {mount as mountHist} from '../../web/js/panes/hist.js';
+import {mount as mountScatter} from '../../web/js/panes/scatter.js';
+import {mount as mountManifold} from '../../web/js/panes/manifold.js';
 import {searchManifests} from '../../web/js/panes/landing.js';
 import {importResultText} from '../../web/js/ui/export.js';
 import * as legend from '../../web/js/ui/legend.js';
@@ -467,9 +472,12 @@ class FakeEl {
   get firstChild() { return this.children[0] || null; }
   setAttribute(k, v) { this.attrs[k] = String(v); }
   getAttribute(k) { return Object.prototype.hasOwnProperty.call(this.attrs, k) ? this.attrs[k] : null; }
+  removeAttribute(k) { delete this.attrs[k]; }
+  hasAttribute(k) { return Object.prototype.hasOwnProperty.call(this.attrs, k); }
   append(...cs) { for (const c of cs) { if (c && typeof c === 'object') { c.parent = this; this.children.push(c); } } }
   remove() { if (this.parent) this.parent.children = this.parent.children.filter((c) => c !== this); }
   addEventListener(t, fn) { (this.listeners[t] = this.listeners[t] || []).push(fn); }
+  removeEventListener(t, fn) { if (this.listeners[t]) this.listeners[t] = this.listeners[t].filter((f) => f !== fn); }
   fire(t, ev = {}) { for (const fn of this.listeners[t] || []) fn({type: t, target: this, ...ev}); }
   contains(e) { return e === this || this.all().includes(e); }
   closest(sel) {
@@ -489,10 +497,12 @@ class FakeEl {
   get lastChild() { return this.children[this.children.length - 1] || null; }
   getContext() {
     const nop = () => {};
-    return {save: nop, restore: nop, setTransform: nop, clearRect: nop, fillRect: nop, beginPath: nop, arc: nop,
+    const base = {save: nop, restore: nop, setTransform: nop, clearRect: nop, fillRect: nop, beginPath: nop, arc: nop,
       fill: nop, stroke: nop, moveTo: nop, lineTo: nop, closePath: nop, rect: nop, scale: nop, translate: nop,
       createImageData: (w, h) => ({data: new Uint8ClampedArray(w * h * 4), width: w, height: h}), putImageData: nop,
       drawImage: nop, fillText: nop, measureText: () => ({width: 0})};
+    // any other 2-D context method is a no-op
+    return new Proxy(base, {get: (t, k) => (k in t ? t[k] : (typeof k === 'string' ? nop : undefined))});
   }
   all() { return this.children.flatMap((c) => [c, ...c.all()]); }
   querySelectorAll(sel) {
@@ -602,12 +612,37 @@ function listedIds(root) {
   return root.querySelectorAll('.pk-list-row').filter((r) => !r.hidden).map((r) => r.firstChild.textContent);
 }
 
-test('list: first screen from rows(), no values() or id() until afterFirstPaint', () => withDom(async () => {
+/** Run fn with LIST_TIMING.idleColumnsMs set to ms (restored afterwards). */
+async function withIdle(ms, fn) {
+  const saved = LIST_TIMING.idleColumnsMs;
+  LIST_TIMING.idleColumnsMs = ms;
+  try {
+    return await fn();
+  } finally {
+    LIST_TIMING.idleColumnsMs = saved;
+  }
+}
+
+test('levelIndex / rowsCarry: label map and carried row columns', () => {
+  assert.equal(levelIndex({}), null);
+  const m = levelIndex({levels: ['star', 'yso', 1]});
+  assert.equal(m.get('yso'), 1);
+  assert.equal(m.get('1'), 2);
+  assert.equal(rowsCarry({rows: {cols: ['id', 'cls']}, cols: [{key: 'f115w'}]}, 'cls'), true);
+  assert.equal(rowsCarry({rows: {cols: ['id', 'cls']}, cols: [{key: 'f115w'}]}, 'f115w'), false);
+  assert.equal(rowsCarry({cols: [{key: 'f115w'}]}, 'f115w'), true, 'quantized rows carry every stored column');
+  assert.equal(rowsCarry(null, 'x'), false);
+});
+
+test('list: first screen from rows(), no values() or id() until idle after afterFirstPaint', () => withIdle(30, () => withDom(async () => {
   const h = listHarness();
+  let painted = false;
+  h.pane.firstPaint.then(() => { painted = true; });
   await settle();
   assert.deepEqual(h.client.calls.rows, [[0, ROW_BLOCK]], 'one block read for the first screen');
   assert.deepEqual(h.client.calls.values, [], 'no whole column before first paint');
   assert.deepEqual(h.client.calls.id, [], 'ids come from the rows payload');
+  assert.equal(painted, true, 'firstPaint resolves once the rows are drawn');
   const ids = listedIds(h.root);
   assert.equal(ids.length, 12);
   assert.deepEqual(ids.slice(0, 3), ['s0', 's1', 's2']);
@@ -618,7 +653,10 @@ test('list: first screen from rows(), no values() or id() until afterFirstPaint'
 
   h.fp.release();
   await settle();
-  assert.deepEqual([...h.client.calls.values].sort(), ['cls', 'f115w'], 'shown columns load after first paint');
+  assert.deepEqual(h.client.calls.values, [], 'no whole column right after first paint');
+  await tick(80);
+  await settle();
+  assert.deepEqual([...h.client.calls.values].sort(), ['cls', 'f115w'], 'shown columns load at idle');
   assert.equal(h.pane.stats().colsLoaded, true);
   assert.deepEqual(h.client.calls.id, []);
 
@@ -631,6 +669,100 @@ test('list: first screen from rows(), no values() or id() until afterFirstPaint'
   assert.equal(listedIds(h.root)[0], 's5000');
   assert.deepEqual(h.client.calls.id, []);
   h.pane.destroy();
+})));
+
+test('list: firstPaint waits for the rows; scrolling defers the idle column load', () => withIdle(60, () => withDom(async () => {
+  const rowsGate = gate();
+  const client = fakeClient();
+  const rows0 = client.rows.bind(client);
+  client.rows = (a, b) => rowsGate.p.then(() => rows0(a, b));
+  const h = listHarness({}, client);
+  let painted = false;
+  h.pane.firstPaint.then(() => { painted = true; });
+  await settle();
+  assert.equal(painted, false, 'no first paint while rows() is pending');
+  assert.equal(h.pane.stats().firstPaint, false);
+  rowsGate.release();
+  await settle();
+  assert.equal(painted, true);
+  h.fp.release();
+  await settle();
+  const view = h.root.children.find((c) => c.classList.contains('pk-list-view'));
+  for (let k = 0; k < 4; k++) {
+    await tick(30);
+    view.fire('scroll');
+  }
+  assert.deepEqual(client.calls.values, [], 'activity restarts the quiet period');
+  await tick(120);
+  await settle();
+  assert.deepEqual([...client.calls.values].sort(), ['cls', 'f115w']);
+  h.pane.destroy();
+})));
+
+test('list: class colours come from the row records in stored order', () => withIdle(Infinity, () => withDom(async () => {
+  const store0 = createStore({});
+  store0.set({color: {by: 'cls'}});
+  const client = fakeClient();
+  const fp = gate();
+  const app = {
+    page: {datasets: {cat: {kind: 'catalog'}}},
+    catalog: async () => client,
+    selectionFor: async () => ({mask: new Uint8Array(client.n), setIndices() {}}),
+    afterFirstPaint: () => fp.p,
+  };
+  const root = new FakeEl('div');
+  const pane = mountList(root, {id: 'list1', config: {}, store: store0, app, dataset: 'cat', setStatus() {}, theme: () => null, tools: null});
+  await settle();
+  fp.release();
+  await settle();
+  assert.deepEqual(client.calls.values, [], 'no colour column read');
+  const pal = legend.plotLevelColors(client.col('cls'), null);
+  const rows = root.querySelectorAll('.pk-list-row');
+  assert.equal(rows[0].style.props['--pk-swatch'], pal[0]);
+  assert.equal(rows[1].style.props['--pk-swatch'], pal[1]);
+  assert.ok(root.classList.contains('pk-list-colored'));
+  pane.destroy();
+})));
+
+test('list: a colour column the rows do not carry loads after first paint', () => withIdle(Infinity, () => withDom(async () => {
+  const store0 = createStore({});
+  store0.set({color: {by: 'cls'}});
+  const client = fakeClient();
+  client.manifest.rows.cols = client.manifest.rows.cols.filter((k) => k !== 'cls');
+  const fp = gate();
+  const app = {
+    page: {datasets: {cat: {kind: 'catalog'}}},
+    catalog: async () => client,
+    selectionFor: async () => ({mask: new Uint8Array(client.n), setIndices() {}}),
+    afterFirstPaint: () => fp.p,
+  };
+  const root = new FakeEl('div');
+  const pane = mountList(root, {id: 'list1', config: {}, store: store0, app, dataset: 'cat', setStatus() {}, theme: () => null, tools: null});
+  await settle();
+  assert.deepEqual(client.calls.values, []);
+  fp.release();
+  await settle();
+  assert.deepEqual(client.calls.values, ['cls']);
+  pane.destroy();
+})));
+
+test('list: firstPaint rejects when the catalog fails, resolves on the non-catalog note', () => withDom(async () => {
+  const store0 = createStore({});
+  const bad = {
+    page: {datasets: {cat: {kind: 'catalog'}, img: {kind: 'images'}}},
+    catalog: async () => { throw new Error('boom'); },
+    selectionFor: async () => null,
+    afterFirstPaint: () => Promise.resolve(),
+  };
+  const mk = (ds) => mountList(new FakeEl('div'), {id: 'l', config: {}, store: store0, app: bad, dataset: ds, setStatus() {}, theme: () => null, tools: null});
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    await assert.rejects(mk('cat').firstPaint, /boom/);
+  } finally {
+    console.warn = warn;
+  }
+  await mk('img').firstPaint;
 }));
 
 test('list: a sort loads the whole columns before first paint', () => withDom(async () => {
@@ -654,7 +786,9 @@ test('list: header click sorts and loads columns; colour-by loads its column', (
   assert.deepEqual([...h.client.calls.values].sort(), ['cls', 'f115w']);
   h.store.set({color: {by: 'cls'}});
   await settle();
-  assert.equal(h.client.calls.values.filter((k) => k === 'cls').length, 2, 'colour column read for the swatches');
+  assert.equal(h.client.calls.values.filter((k) => k === 'cls').length, 1, 'the loaded cls column also gives the swatches');
+  const sw = h.root.querySelectorAll('.pk-list-row').map((r) => r.style.props['--pk-swatch']);
+  assert.ok(sw.some((c) => c && c !== 'transparent'), 'swatches drawn in the sorted order');
   h.fp.release();
   await settle();
   h.pane.destroy();
@@ -669,6 +803,144 @@ test('list: colour-by after startup loads columns before first paint', () => wit
   assert.ok(h.client.calls.values.includes('f115w'), 'colour-by also loads the shown columns');
   h.pane.destroy();
 }));
+
+test('payloadLevel: bool and float32 payload labels match codec level spellings', () => {
+  const lv = (levels) => levelIndex({levels});
+  assert.equal(payloadLevel(lv(['False', 'True']), true), 1);
+  assert.equal(payloadLevel(lv(['False', 'True']), false), 0);
+  assert.equal(payloadLevel(lv(['false', 'true']), true), 1, 'JS spelling still matches');
+  const f32 = lv([String(Math.fround(0.1)), String(Math.fround(0.2))]);
+  assert.equal(String(Math.fround(0.1)), '0.10000000149011612');
+  assert.equal(payloadLevel(f32, 0.1), 0);
+  assert.equal(payloadLevel(f32, 0.2), 1);
+  assert.equal(payloadLevel(lv(['1', '2']), 2), 1, 'integer labels');
+  assert.equal(payloadLevel(lv(['0.5']), 0.5), 0, 'float64 labels');
+  assert.equal(payloadLevel(lv(['a']), 'a'), 0);
+  assert.ok(Number.isNaN(payloadLevel(lv(['a']), 'b')));
+  assert.ok(Number.isNaN(payloadLevel(lv(['a']), null)));
+  assert.ok(Number.isNaN(payloadLevel(null, 'a')));
+});
+
+/** Category colour client: `grp` (3 levels, not shown) besides the default columns. */
+function grpClient() {
+  const cols = [...LIST_COLS, {key: 'grp', role: 'category', levels: ['a', 'b', 'c'], enc: 'u8'}];
+  const client = fakeClient(N_ROWS, {cols, row: (i) => ({id: `s${i}`, cls: i % 2 ? 'yso' : 'star', f115w: 10 + i / 100, grp: ['a', 'b', 'c'][i % 3]})});
+  const values0 = client.values.bind(client);
+  client.values = (k) => {
+    if (k !== 'grp') return values0(k);
+    client.calls.values.push(k);
+    return Promise.resolve(Float32Array.from({length: client.n}, (_, i) => i % 3));
+  };
+  return client;
+}
+
+function swatches(root) {
+  return root.querySelectorAll('.pk-list-row').filter((r) => !r.hidden).map((r) => r.style.props['--pk-swatch']);
+}
+
+test('list: colour-by A -> none -> A in sorted order re-reads the colour column', () => withIdle(Infinity, () => withDom(async () => {
+  const h = listHarness({sort: '-f115w', columns: ['f115w']}, grpClient());
+  await settle();
+  h.fp.release();
+  h.store.set({color: {by: 'grp'}});
+  await settle();
+  const first = swatches(h.root);
+  assert.ok(first.length > 0 && first.every((c) => c && c !== 'transparent'), JSON.stringify(first));
+  h.store.set({color: {by: null}});
+  await settle();
+  assert.ok(swatches(h.root).every((c) => c === 'transparent'));
+  h.store.set({color: {by: 'grp'}});
+  await settle();
+  assert.deepEqual(swatches(h.root), first, 'swatches back after A -> none -> A');
+  assert.equal(h.client.calls.values.filter((k) => k === 'grp').length, 2);
+  assert.ok(h.root.classList.contains('pk-list-colored'));
+  h.pane.destroy();
+})));
+
+test('list: a shown colour column is read once when a sort loads both', () => withIdle(Infinity, () => withDom(async () => {
+  const store0 = createStore({});
+  store0.set({color: {by: 'cls'}});
+  const client = fakeClient();
+  const fp = gate();
+  const app = {
+    page: {datasets: {cat: {kind: 'catalog'}}},
+    catalog: async () => client,
+    selectionFor: async () => ({mask: new Uint8Array(client.n), setIndices() {}}),
+    afterFirstPaint: () => fp.p,
+  };
+  const root = new FakeEl('div');
+  const pane = mountList(root, {id: 'list1', config: {columns: ['cls', 'f115w']}, store: store0, app, dataset: 'cat', setStatus() {}, theme: () => null, tools: null});
+  await settle();
+  fp.release();
+  await settle();
+  assert.deepEqual(client.calls.values, []);
+  const head = root.children.find((c) => c.classList.contains('pk-list-head'));
+  head.fire('click', {target: head.children.find((b) => b.dataset.key === 'f115w')});
+  await settle();
+  assert.deepEqual([...client.calls.values].sort(), ['cls', 'f115w'], 'one read per column');
+  const sw = swatches(root);
+  assert.ok(sw.length && sw.every((c) => c && c !== 'transparent'));
+  pane.destroy();
+})));
+
+test('list: a shown column the rows do not carry loads right after first paint', () => withIdle(Infinity, () => withDom(async () => {
+  const client = fakeClient(N_ROWS, {row: (i) => ({id: `s${i}`, cls: i % 2 ? 'yso' : 'star'})});
+  client.manifest.rows.cols = client.manifest.rows.cols.filter((k) => k !== 'f115w');
+  const h = listHarness({columns: ['cls', 'f115w']}, client);
+  let painted = false;
+  h.pane.firstPaint.then(() => { painted = true; });
+  await settle();
+  assert.equal(painted, true);
+  assert.deepEqual(client.calls.values, [], 'no whole column before first paint');
+  h.fp.release();
+  await settle();
+  assert.deepEqual(client.calls.values, ['f115w'], 'only the uncarried column, without the idle wait');
+  const r0 = h.root.querySelectorAll('.pk-list-row')[0];
+  assert.deepEqual(r0.children.map((c) => c.textContent), ['s0', 'star', '10']);
+  assert.equal(h.pane.stats().colsLoaded, false);
+  h.pane.destroy();
+})));
+
+test('list: a bool category colours from its rows; an unmatched label loads the column', () => withIdle(Infinity, () => withDom(async () => {
+  const mk = (levels, rowVal) => {
+    const cols = [{key: 'id', role: 'id', enc: 'str'}, {key: 'ok', role: 'category', levels, enc: 'u8'}];
+    const client = fakeClient(N_ROWS, {cols, row: (i) => ({id: `s${i}`, ok: rowVal(i)})});
+    const values0 = client.values.bind(client);
+    client.values = (k) => {
+      if (k !== 'ok') return values0(k);
+      client.calls.values.push(k);
+      return Promise.resolve(Float32Array.from({length: client.n}, (_, i) => i % 2));
+    };
+    const store0 = createStore({});
+    store0.set({color: {by: 'ok'}});
+    const fp = gate();
+    const app = {
+      page: {datasets: {cat: {kind: 'catalog'}}},
+      catalog: async () => client,
+      selectionFor: async () => ({mask: new Uint8Array(client.n), setIndices() {}}),
+      afterFirstPaint: () => fp.p,
+    };
+    const root = new FakeEl('div');
+    const pane = mountList(root, {id: 'l', config: {columns: []}, store: store0, app, dataset: 'cat', setStatus() {}, theme: () => null, tools: null});
+    return {client, root, pane, fp};
+  };
+  const a = mk(['False', 'True'], (i) => i % 2 === 1);
+  await settle();
+  a.fp.release();
+  await settle();
+  assert.deepEqual(a.client.calls.values, [], 'bool labels match True/False levels');
+  assert.ok(swatches(a.root).every((c) => c && c !== 'transparent'));
+  a.pane.destroy();
+
+  const b = mk(['x', 'y'], (i) => (i % 2 ? 'Y' : 'X'));
+  await settle();
+  assert.deepEqual(b.client.calls.values, [], 'the fallback waits for first paint');
+  b.fp.release();
+  await settle();
+  assert.deepEqual(b.client.calls.values, ['ok'], 'unmatched labels fall back to the colour column');
+  assert.ok(swatches(b.root).every((c) => c && c !== 'transparent'));
+  b.pane.destroy();
+})));
 
 test('list: ids come from the row-chunk id key, never from a stored column called id', () => withDom(async () => {
   const cols = [
@@ -690,7 +962,7 @@ test('list: ids come from the row-chunk id key, never from a stored column calle
   h.pane.destroy();
 }));
 
-test('list and hover: an integer-labelled category shows its labels, not shifted levels', () => withDom(async () => {
+test('list and hover: an integer-labelled category shows its labels, not shifted levels', () => withIdle(0, () => withDom(async () => {
   const cols = [
     {key: 'id', role: 'id', enc: 'str'},
     {key: 'kls', role: 'category', levels: ['1', '2', '3'], enc: 'cat8'},
@@ -702,6 +974,8 @@ test('list and hover: an integer-labelled category shows its labels, not shifted
   const cell = (k) => h.root.querySelectorAll('.pk-list-row')[k]._cells[0].textContent;
   assert.deepEqual([cell(0), cell(1), cell(2)], ['1', '2', '3'], 'payload labels');
   h.fp.release();
+  await settle();
+  await tick(20);
   await settle();
   assert.equal(h.pane.stats().colsLoaded, true);
   assert.deepEqual([cell(0), cell(1), cell(2)], ['1', '2', '3'], 'after the columns load');
@@ -717,7 +991,7 @@ test('list and hover: an integer-labelled category shows its labels, not shifted
   store.set({hover: {ds: 'cat', i: 1}});
   await settle();
   assert.match(card.textContent, /kls2$/, card.textContent);
-}));
+})));
 
 test('list virtual:false with more rows than the row cache settles', () => withDom(async () => {
   const n = ROW_CACHE_ROWS + 400;
@@ -1019,4 +1293,199 @@ test('wavelength: mount retries a failed Aladin prefetch; view listeners before 
   await settle();
   delete globalThis.window.A;
   aladin.resetAladin();
+}));
+
+// ---- first paint of the catalog readers (IMPLEMENTATION_NOTES 112)
+
+test('table: firstPaint resolves once the first window is drawn; a failed block rejects it', () => withDom(async () => {
+  const client = quantizedPosClient(50);
+  const rowsGate = gate();
+  const rows0 = client.rows.bind(client);
+  client.rows = (a, b, o) => rowsGate.p.then(() => rows0(a, b, o));
+  const store = createStore({});
+  const app = {page: {datasets: {cat: {kind: 'catalog'}}}, catalog: async () => client, afterFirstPaint: () => new Promise(() => {})};
+  const pane = mountTable(new FakeEl('div'), {id: 't1', config: {}, store, app, dataset: 'cat', setStatus() {}, tools: null});
+  let painted = false;
+  pane.firstPaint.then(() => { painted = true; });
+  await settle();
+  assert.equal(painted, false, 'rows still pending');
+  rowsGate.release();
+  await settle();
+  assert.equal(painted, true);
+  assert.equal(pane.stats().firstPaint, true);
+  pane.destroy();
+
+  const bad = quantizedPosClient(50);
+  bad.rows = () => Promise.reject(new Error('block failed'));
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    const app2 = {page: {datasets: {cat: {kind: 'catalog'}}}, catalog: async () => bad, afterFirstPaint: () => new Promise(() => {})};
+    const p2 = mountTable(new FakeEl('div'), {id: 't2', config: {}, store, app: app2, dataset: 'cat', setStatus() {}, tools: null});
+    await assert.rejects(p2.firstPaint, /block failed/);
+    p2.destroy();
+    // a configuration note counts as painted
+    const app3 = {page: {datasets: {img: {kind: 'images'}}}};
+    await mountTable(new FakeEl('div'), {id: 't3', config: {}, store, app: app3, dataset: 'img', setStatus() {}, tools: null}).firstPaint;
+  } finally {
+    console.warn = warn;
+  }
+}));
+
+test('gallery: firstPaint resolves at the first grid paint; a failed image set rejects it', () => withDom(async () => {
+  const savedOption = globalThis.Option;
+  globalThis.Option = function Option(text = '', value = '') {
+    const o = new FakeEl('option');
+    o.textContent = text;
+    o.value = value;
+    return o;
+  };
+  try {
+    await galleryFirstPaint();
+  } finally {
+    if (savedOption === undefined) delete globalThis.Option;
+    else globalThis.Option = savedOption;
+  }
+}));
+
+async function galleryFirstPaint() {
+  const store = createStore({});
+  const docGate = gate();
+  const doc = {items: [{id: 'a', url: 'a.png'}, {id: 'b', url: 'b.png'}]};
+  const hub = {json: () => docGate.p.then(() => doc)};
+  const app = {page: {datasets: {img: {kind: 'images'}}}, afterFirstPaint: () => Promise.resolve()};
+  const pane = mountGallery(new FakeEl('div'), {id: 'g1', config: {}, store, app, hub, dataset: 'img', setStatus() {}, theme: () => null, tools: null});
+  let painted = false;
+  pane.firstPaint.then(() => { painted = true; });
+  await settle();
+  assert.equal(painted, false, 'images.json pending');
+  docGate.release();
+  await settle(10);
+  assert.equal(painted, true);
+  pane.destroy();
+
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    const hub2 = {json: () => Promise.reject(new Error('no images'))};
+    const p2 = mountGallery(new FakeEl('div'), {id: 'g2', config: {}, store, app, hub: hub2, dataset: 'img', setStatus() {}, theme: () => null, tools: null});
+    await assert.rejects(p2.firstPaint, /no images/);
+    p2.destroy();
+  } finally {
+    console.warn = warn;
+  }
+}
+
+test('hist: firstPaint resolves once the histogram is drawn; a failed load rejects it', () => withDom(async () => {
+  const store = createStore({});
+  const cols = [{key: 'f115w', role: 'mag', enc: 'f32', label: 'F115W'}];
+  const mk = (hist) => ({
+    n: 100, manifest: {cols}, col: (k) => cols.find((c) => c.key === k) || null,
+    hist, baseKeys: (e) => [e], vis: async () => ({vis: null}),
+  });
+  const okHist = async (expr, nb) => ({edges: Array.from({length: nb + 1}, (_, k) => 10 + k), counts: new Float64Array(nb).fill(1), total: 100});
+  const appOf = (client) => ({
+    page: {datasets: {cat: {kind: 'catalog'}}}, catalog: async () => client,
+    selectionFor: async () => ({count: 0, mask: new Uint8Array(100), onChange: () => () => {}}),
+  });
+  const ctxOf = (client) => ({id: 'h1', config: {expr: 'f115w'}, store, app: appOf(client), dataset: 'cat', setStatus() {}, theme: () => ({}), tools: null});
+  const pane = await mountHist(new FakeEl('div'), ctxOf(mk(okHist)));
+  await settle();
+  await pane.firstPaint;
+  pane.destroy();
+
+  const p2 = await mountHist(new FakeEl('div'), ctxOf(mk(async () => { throw new Error('hist failed'); })));
+  await assert.rejects(p2.firstPaint, /hist failed/);
+  p2.destroy();
+}));
+
+/** window.localStorage stand-in for panes whose widgets remember settings. */
+function fakeStorage() {
+  const m = new Map();
+  return {getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k)};
+}
+
+test('scatter: firstPaint resolves at the first data draw; a failed x/y load rejects it', () => withDom(async () => {
+  globalThis.window.localStorage = fakeStorage();
+  globalThis.window.removeEventListener = () => {};
+  const store = createStore({});
+  const cols = [{key: 'id', role: 'id', enc: 'str'}, {key: 'f115w', role: 'mag', enc: 'f32', label: 'F115W'},
+    {key: 'f200w', role: 'mag', enc: 'f32', label: 'F200W'}];
+  const n = 50;
+  const xyGate = gate();
+  const mk = (values) => ({
+    n, manifest: {cols}, col: (k) => cols.find((c) => c.key === k) || null,
+    values, baseKeys: (e) => [e], vis: async () => ({vis: null}),
+  });
+  const okValues = (k) => xyGate.p.then(() => Float32Array.from({length: n}, (_, i) => (k === 'f115w' ? 10 : 11) + i / 10));
+  const appOf = (client) => ({
+    page: {datasets: {cat: {kind: 'catalog'}}}, catalog: async () => client, runtime: {webgl2: false},
+    caps: new Set(), afterFirstPaint: () => Promise.resolve(),
+    selectionFor: async () => ({count: 0, mask: new Uint8Array(n), onChange: () => () => {}}),
+  });
+  const ctxOf = (client, id) => ({id, type: 'scatter', config: {x: 'f115w', y: 'f200w'}, store, app: appOf(client), dataset: 'cat',
+    setStatus() {}, theme: () => ({}), tools: null});
+  const pane = await mountScatter(new FakeEl('div'), ctxOf(mk(okValues), 's1'));
+  pane.resize(200, 150, 1);
+  let painted = false;
+  pane.firstPaint.then(() => { painted = true; });
+  await settle();
+  assert.equal(painted, false, 'x/y pending');
+  xyGate.release();
+  await settle(10);
+  assert.equal(painted, true);
+  pane.destroy();
+
+  const failing = () => Promise.reject(new Error('xy failed'));
+  const p2 = await mountScatter(new FakeEl('div'), ctxOf(mk(failing), 's2'));
+  p2.resize(200, 150, 1);
+  await assert.rejects(p2.firstPaint, /xy failed/);
+  p2.destroy();
+}));
+
+test('manifold: firstPaint resolves at the first projected draw; a failed base load rejects it', () => withDom(async () => {
+  globalThis.window.localStorage = fakeStorage();
+  globalThis.window.removeEventListener = () => {};
+  const store = createStore({});
+  const cols = [{key: 'id', role: 'id', enc: 'str'},
+    {key: 'a', role: 'mag', enc: 'f32', center: 10, scale: 1}, {key: 'b', role: 'mag', enc: 'f32', center: 11, scale: 1},
+    {key: 'c', role: 'mag', enc: 'f32', center: 12, scale: 1}];
+  const n = 40;
+  const baseGate = gate();
+  const col = (k) => Float32Array.from({length: n}, (_, i) => cols.findIndex((c) => c.key === k) * 10 + i / 7);
+  const mk = (values) => ({
+    n, manifest: {cols}, col: (k) => cols.find((c) => c.key === k) || null,
+    values, baseKeys: (e) => [e], vis: async () => ({vis: null}),
+    project: async () => ({x: Float32Array.from({length: n}, (_, i) => i / n), y: Float32Array.from({length: n}, (_, i) => (i % 5) / 5), vis: null}),
+    density: async () => null,
+  });
+  const appOf = (client) => ({
+    page: {datasets: {cat: {kind: 'catalog'}}}, catalog: async () => client, runtime: {webgl2: false},
+    caps: new Set(), afterFirstPaint: () => Promise.resolve(),
+    selectionFor: async () => ({count: 0, mask: new Uint8Array(n), onChange: () => () => {}}),
+  });
+  const ctxOf = (client, id) => ({id, type: 'manifold', config: {dims: ['a', 'b', 'c'], frame: 'pair:0,1', tour: false},
+    store, app: appOf(client), dataset: 'cat', setStatus() {}, theme: () => ({}), tools: null});
+  const pane = await mountManifold(new FakeEl('div'), ctxOf(mk((k) => baseGate.p.then(() => col(k))), 'm1'));
+  pane.resize(200, 150, 1);
+  let painted = false;
+  pane.firstPaint.then(() => { painted = true; });
+  await settle();
+  assert.equal(painted, false, 'base columns pending');
+  baseGate.release();
+  await tick(40);
+  await settle(10);
+  assert.equal(painted, true);
+  pane.destroy();
+
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    const p2 = await mountManifold(new FakeEl('div'), ctxOf(mk(() => Promise.reject(new Error('base failed'))), 'm2'));
+    p2.resize(200, 150, 1);
+    await assert.rejects(p2.firstPaint, /base failed/);
+    p2.destroy();
+  } finally {
+    console.warn = warn;
+  }
 }));

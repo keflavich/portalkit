@@ -22,12 +22,54 @@
 //   collapsed:{paneId:bool}}; every access in try/catch; version mismatch discards.
 // - Panes mount lazily (first time visible) through registry.load(type).mount(el, ctx); they
 //   get resize(w, h, dpr) from a ResizeObserver (rAF-coalesced) and onVisible(v) on fold/tab.
+// - Pane state: section[data-state] is 'loading' from mount start until mount() resolves and,
+//   when the handle has a `firstPaint` promise, until it settles (bounded by
+//   PANE_FIRST_PAINT_MAX_WAIT_MS); then 'ready', or 'error' on a rejection or failed mount.
+//   While that is pending, a hidden pane (folded, inactive tab) is 'paused' instead of 'loading'.
 
 import {MOBILE_BREAK_PX} from '../core/constants.js';
 
 export const LAYOUT_VERSION = 1;
 export const MIN_PANE_PX = 48;
 export const KEY_STEP_PX = 16;
+
+/**
+ * Longest wait, after mount() resolves, for a pane handle's `firstPaint` promise before the
+ * pane is marked 'ready' anyway (with a console warning). Same bound as the page-level
+ * afterFirstPaint guard (IMPLEMENTATION_NOTES 100 and 112). Mutable through
+ * LAYOUT_TIMING.firstPaintMaxWaitMs for tests.
+ */
+export const PANE_FIRST_PAINT_MAX_WAIT_MS = 30000;
+export const LAYOUT_TIMING = {firstPaintMaxWaitMs: PANE_FIRST_PAINT_MAX_WAIT_MS};
+
+/**
+ * First-paint latch for pane handles (IMPLEMENTATION_NOTES 112):
+ * {promise, resolve(), reject(err), done}. `promise` goes on the handle as `firstPaint`; the
+ * pane calls resolve() once its first data-backed screen is drawn (or it settles on a note),
+ * reject(err) when its data failed to load. Later calls are ignored. A no-op rejection handler
+ * is attached so an unobserved rejection is not reported twice.
+ */
+export function firstPaintLatch() {
+  let res;
+  let rej;
+  const promise = new Promise((a, b) => { res = a; rej = b; });
+  promise.catch(() => {});
+  const latch = {
+    promise,
+    done: false,
+    resolve() {
+      if (latch.done) return;
+      latch.done = true;
+      res();
+    },
+    reject(err) {
+      if (latch.done) return;
+      latch.done = true;
+      rej(err);
+    },
+  };
+  return latch;
+}
 
 const DEFAULT_TITLES = {
   list: 'Sources', detail: 'Details', scatter: 'Scatter', manifold: 'Manifold', hist: 'Histogram',
@@ -576,7 +618,8 @@ export function mountLayout(root, tree, ctx) {
 
   function ensureMounted(leaf) {
     if (leaf.mounting) return leaf.mounting;
-    leaf.paneEl.dataset.state = 'loading';
+    leaf.firstPaintPending = true;
+    applyPendingState(leaf);
     leaf.mounting = (async () => {
       const mod = await registry.load(leaf.type);
       if (destroyed) return null;
@@ -587,7 +630,6 @@ export function mountLayout(root, tree, ctx) {
       leaf.handle = handle || {resize() {}, destroy() {}};
       leaf.module = mod;
       leaf.mounted = true;
-      leaf.paneEl.dataset.state = 'ready';
       leaf.bodyEl.dataset.paneBody = leaf.id;
       if (ro) ro.observe(leaf.bodyEl);
       const r = leaf.bodyEl.getBoundingClientRect();
@@ -599,9 +641,11 @@ export function mountLayout(root, tree, ctx) {
       }
       leaf.visible = null;
       updateVisibility();
+      watchFirstPaint(leaf);
       return leaf.handle;
     })();
     leaf.mounting.catch((err) => {
+      leaf.firstPaintPending = false;
       leaf.paneEl.dataset.state = 'error';
       leaf.bodyEl.textContent = '';
       const note = h('div', 'pk-error-note', {role: 'alert'});
@@ -610,6 +654,53 @@ export function mountLayout(root, tree, ctx) {
       console.error(`pane ${leaf.id} (${leaf.type}) failed to mount`, err);
     });
     return leaf.mounting;
+  }
+
+  /**
+   * data-state stays 'loading' until the handle's `firstPaint` promise settles
+   * (IMPLEMENTATION_NOTES 112): resolve -> 'ready', reject -> 'error' (the pane keeps its own
+   * error note), no settle within LAYOUT_TIMING.firstPaintMaxWaitMs -> 'ready' with a warning.
+   * A handle without `firstPaint` is 'ready' at mount. While the first paint is pending, a pane
+   * the user has hidden (folded; another tab) is 'paused' and does not hold back the page's
+   * first paint; it returns to 'loading' when shown again (see applyPendingState).
+   */
+  function watchFirstPaint(leaf) {
+    const fp = leaf.handle && leaf.handle.firstPaint;
+    if (!fp || typeof fp.then !== 'function') {
+      leaf.firstPaintPending = false;
+      leaf.paneEl.dataset.state = 'ready';
+      return;
+    }
+    let settled = false;
+    const wait = LAYOUT_TIMING.firstPaintMaxWaitMs;
+    const guard = Number.isFinite(wait) && wait >= 0 ? setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      leaf.firstPaintPending = false;
+      if (destroyed) return;
+      console.warn(`pane ${leaf.id} (${leaf.type}): no first paint ${wait} ms after mount; marking it ready`);
+      leaf.paneEl.dataset.state = 'ready';
+    }, wait) : null;
+    const finish = (state, err) => {
+      if (settled) return;
+      settled = true;
+      leaf.firstPaintPending = false;
+      if (guard !== null) clearTimeout(guard);
+      if (destroyed) return;
+      leaf.paneEl.dataset.state = state;
+      if (err) console.warn(`pane ${leaf.id} (${leaf.type}): first paint failed`, err);
+    };
+    fp.then(() => finish('ready'), (err) => finish('error', err || new Error('first paint failed')));
+  }
+
+  /**
+   * data-state of a pane whose first paint is pending: 'loading' while it is visible, 'paused'
+   * while hidden (folded, or not the active tab). A hidden pane skips its draws (onVisible(false)),
+   * so it cannot reach its first paint and must not hold back afterFirstPaint (notes 100, 112).
+   */
+  function applyPendingState(leaf) {
+    if (!leaf.firstPaintPending || destroyed) return;
+    leaf.paneEl.dataset.state = isVisible(leaf) ? 'loading' : 'paused';
   }
 
   function isVisible(leaf) {
@@ -628,6 +719,7 @@ export function mountLayout(root, tree, ctx) {
       }
       leaf.paneEl.classList.toggle('pk-collapsed', !!leaf.collapsed && !tabMode && !(popped && popped.id === leaf.id));
       leaf.foldEl.setAttribute('aria-expanded', String(!leaf.collapsed));
+      applyPendingState(leaf);
     }
   }
 

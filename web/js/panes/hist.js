@@ -15,6 +15,7 @@ import {prepareCanvas, tokensOf, drawAxes, toSVG} from '../plot/canvas2d.js';
 import {fmtCount, fmtNum} from '../core/fmt.js';
 import {createAxisPicker, exprLabel} from '../ui/axis_picker.js';
 import {el, iconButton, paneDataset} from './scatter.js';
+import {firstPaintLatch} from '../layout/layout.js';
 
 export const meta = {
   type: 'hist',
@@ -89,6 +90,9 @@ export async function mount(host, ctx) {
   let destroyed = false;
   let visible = true;
   const offs = [];
+  // first paint (IMPLEMENTATION_NOTES 112): the first drawn histogram, or the 'choose a column'
+  // state; a failed first load rejects
+  const fp = firstPaintLatch();
 
   // ------------------------------------------------------------ widgets
   const picker = createAxisPicker({client, axis: 'x', label: 'value', value: {expr: S.expr, log: S.xlog}, options: true,
@@ -171,7 +175,7 @@ export async function mount(host, ctx) {
   // ------------------------------------------------------------ data
   async function reload() {
     const my = ++S.seq;
-    if (!S.expr) { ctx.setStatus('choose a column'); return; }
+    if (!S.expr) { ctx.setStatus('choose a column'); fp.resolve(); return; }
     ctx.setStatus('loading…');
     try {
       const all = await client.hist(S.expr, nbins, {mask: null, log: S.xlog});
@@ -183,6 +187,7 @@ export async function mount(host, ctx) {
       if (err && err.name === 'AbortError') return;
       ctx.setStatus('error', err.message);
       store.emit('toast', {level: 'error', text: `Histogram of ${S.expr}: ${err.message}`});
+      fp.reject(err);
     }
     syncRange();
   }
@@ -306,6 +311,7 @@ export async function mount(host, ctx) {
       paint(c, view, tk);
       cv.setAttribute('aria-label', `Histogram of ${exprLabel(client, S.expr)}`);
       S.renderMs = performance.now() - t0;
+      if (S.all) fp.resolve();
     });
   }
 
@@ -385,11 +391,15 @@ export async function mount(host, ctx) {
   measure();
   await reload();
 
+  draw();
+
   return {
+    firstPaint: fp.promise,
     resize() { measure(); },
     onVisible(v) { visible = !!v; if (visible) { measure(); draw(); } },
     destroy() {
       destroyed = true;
+      fp.resolve();
       if (frame) cancelAnimationFrame(frame);
       if (layerTimer) clearTimeout(layerTimer);
       for (const off of offs) if (typeof off === 'function') off();

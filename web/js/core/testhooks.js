@@ -3,7 +3,11 @@
 // window.__pk = {ready: Promise<void>, caps(): string[], tiers(): Record<pane, tier>, store, hub,
 //                select(ds, ids, op?): Promise<number>, brush(pane, shape, op?): Promise<number>,
 //                focus(ds, id): Promise<void>, stats(): {fetches, bytes, renderMs, decodeMs},
-//                errors: string[], app}
+//                firstPaintAt(): Promise<number>, errors: string[], app}
+//
+// firstPaintAt() resolves to the epoch-ms time (Date.now()) at which app.afterFirstPaint()
+// resolved (IMPLEMENTATION_NOTES 112); callable before boot finishes (it waits for attach), and
+// it rejects with the boot error when boot fails.
 //
 // createTestHooks() runs first thing in boot() so `__pk.ready` and `__pk.errors` exist even when
 // boot fails early (ready then rejects with the boot error). attach(app) fills in the rest.
@@ -41,8 +45,18 @@ export function createTestHooks() {
     errors.push(args.map(errText).join(' '));
     origError(...args);
   };
+  let resolveAttached;
+  let rejectAttached;
+  const attached = new Promise((res, rej) => { resolveAttached = res; rejectAttached = rej; });
+  attached.catch(() => {});
+  // Rejects with the boot error, so firstPaintAt() never hangs on a failed boot (before or
+  // after attach).
+  let rejectFailed;
+  const failed = new Promise((res, rej) => { rejectFailed = rej; });
+  failed.catch(() => {});
   const pk = {
     ready, errors, store: null, hub: null, app: null,
+    firstPaintAt: () => attached.then((app) => pk.firstPaintAt()),
     caps: () => [], tiers: () => ({}),
     select: () => Promise.reject(new Error('not booted')),
     brush: () => Promise.reject(new Error('not booted')),
@@ -53,8 +67,15 @@ export function createTestHooks() {
   return {
     pk,
     resolve: () => resolveReady(),
-    reject: (err) => rejectReady(err),
-    attach: (app) => attach(pk, app),
+    reject: (err) => {
+      rejectReady(err);
+      rejectAttached(err);
+      rejectFailed(err);
+    },
+    attach: (app) => {
+      attach(pk, app, failed);
+      resolveAttached(app);
+    },
   };
 }
 
@@ -64,12 +85,17 @@ function catalogDs(app, ds) {
   return ds;
 }
 
-function attach(pk, app) {
+function attach(pk, app, failed = null) {
   const store = app.store;
   pk.app = app;
   pk.store = store;
   pk.hub = app.hub;
   pk.caps = () => Array.from(app.caps).sort();
+  pk.firstPaintAt = () => {
+    const at = typeof app.firstPaintAt === 'function' ? app.firstPaintAt()
+      : Promise.resolve(app.afterFirstPaint()).then(() => Date.now());
+    return failed ? Promise.race([at, failed]) : at;
+  };
   pk.tiers = () => {
     const out = {};
     for (const key of store.keys ? store.keys() : Object.keys(store.snapshot())) {

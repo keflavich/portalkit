@@ -8,10 +8,14 @@
 // row blocks read before first paint carry ra = dec = null (`_posDeferred`). Once
 // app.afterFirstPaint() resolves, those blocks (and blocks still in flight) are dropped and
 // re-read with {pos: true}; later blocks are read with {pos: true} directly.
+// First paint (IMPLEMENTATION_NOTES 112): the handle's `firstPaint` resolves once every row of
+// the first window is drawn from data (or the table is empty, or shows a configuration note);
+// it rejects when the document, the catalog or a first-window block fails to load.
 
 import {fmtCount, fmtValue, MISSING} from '../core/fmt.js';
 import {fetchJSON, FetchError} from '../data/fetch.js';
 import {mountSelectionTools} from '../ui/export.js';
+import {firstPaintLatch} from '../layout/layout.js';
 
 export const meta = {type: 'table', caps: ['selection_export'], needs: []};
 
@@ -121,6 +125,8 @@ export function mount(root, ctx) {
   const pool = [];
   const offs = [];
   let offTools = null;
+  let loaded = false;            // columns and total known
+  const fp = firstPaintLatch();
 
   function report(err) {
     if (!(err instanceof Error)) throw err;
@@ -191,6 +197,7 @@ export function mount(root, ctx) {
       }, (err) => {
         if (blocks.get(b) === p) blocks.delete(b);
         report(err);
+        if (!(err && err.name === 'AbortError')) fp.reject(err);
       });
       blocks.set(b, p);
     }
@@ -244,10 +251,12 @@ export function mount(root, ctx) {
     pool.forEach((r, j) => { r.hidden = j >= k; });
     rowsEl.style.transform = `translateY(${Math.round(view.scrollTop - frac)}px)`;
     const f = store.get('focus');
+    let drawn = 0;
     for (let j = 0; j < k; j++) {
       const r = pool[j];
       const i = first + j;
       const row = rowAt(i);
+      if (row) drawn++;
       while (r.childNodes.length < columns.length) r.append(el('span', 'pk-list-td'));
       while (r.childNodes.length > columns.length) r.lastChild.remove();
       r.dataset.i = String(i);
@@ -266,6 +275,7 @@ export function mount(root, ctx) {
         cell.setAttribute('role', 'cell');
       });
     }
+    if (loaded && drawn === k) fp.resolve();
   }
 
   view.addEventListener('scroll', () => paint(), {passive: true});
@@ -308,6 +318,7 @@ export function mount(root, ctx) {
       jsonRowsOrig = t.rows;
       jsonRows = t.rows.slice();
       total = jsonRows.length;
+      loaded = true;
       skel.remove();
       renderHead();
       layout();
@@ -315,11 +326,16 @@ export function mount(root, ctx) {
     }, (err) => {
       if (!(err instanceof FetchError) && !(err instanceof TypeError)) throw err;
       fail(`The table could not be loaded: ${err.message}`);
-    }).catch(report);
+      fp.reject(err);
+    }).catch((err) => {
+      fp.reject(err);
+      report(err);
+    });
   } else {
     const ref = app.page && app.page.datasets ? app.page.datasets[ds] : null;
     if (!ref || ref.kind !== 'catalog') {
       fail(`The table needs a catalog dataset or source "json:<url>" (got ${ref ? ref.kind : 'none'}).`);
+      fp.resolve();
     } else {
       ctx.setStatus('loading…');
       (async () => {
@@ -331,6 +347,7 @@ export function mount(root, ctx) {
         columns = Array.isArray(cfg.columns) && cfg.columns.length ? cfg.columns.map(String) : rowCols || all;
         metas = new Map((man.cols || []).map((c) => [c.key, c]));
         total = client.n;
+        loaded = true;
         if (ctx.tools) offTools = mountSelectionTools(app, ds, ctx.tools, {cols: () => columns.filter((c) => metas.has(c))});
         skel.remove();
         renderHead();
@@ -346,12 +363,14 @@ export function mount(root, ctx) {
       })().catch((err) => {
         report(err);
         fail(`The table could not be loaded: ${err.message}`);
+        fp.reject(err);
       });
       offs.push(store.on(['focus'], () => paint()));
     }
   }
 
   return {
+    firstPaint: fp.promise,
     resize() {
       layout();
     },
@@ -361,13 +380,14 @@ export function mount(root, ctx) {
     },
     destroy() {
       destroyed = true;
+      fp.resolve();
       if (raf) cancelAnimationFrame(raf);
       for (const off of offs) off();
       if (offTools) offTools();
       blocks.clear();
     },
     stats() {
-      return {rows: total, blocks: blocks.size, posReady};
+      return {rows: total, blocks: blocks.size, posReady, firstPaint: fp.done};
     },
   };
 }

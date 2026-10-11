@@ -411,8 +411,11 @@ async function bootInner(t0, hooks) {
   // 'ready' event once no visible pane is loading, at the next idle callback. Deferred loads
   // (whole columns, pos, ids) wait on it; panes may call it during mount.
   let firstPaintResolve;
+  let firstPaintAtMs = null;
   const firstPaint = new Promise((r) => { firstPaintResolve = r; });
   app.afterFirstPaint = () => firstPaint;
+  /** Promise of the epoch-ms time afterFirstPaint resolved (IMPLEMENTATION_NOTES 112). */
+  app.firstPaintAt = () => firstPaint.then(() => firstPaintAtMs);
 
   // 3. hub + manifest prefetch -----------------------------------------------------------
   const hub = createHub(page, store);
@@ -939,7 +942,10 @@ async function bootInner(t0, hooks) {
   const ms = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
   app.readyMs = ms;
   store.emit('ready', {ms});
-  whenFirstPaint(root).then(() => firstPaintResolve());
+  whenFirstPaint(root).then(() => {
+    firstPaintAtMs = Date.now();
+    firstPaintResolve();
+  });
   return app;
 
   function openHelp() {

@@ -20,6 +20,9 @@
 // the items follow the rank of their catalog row, items without a row go last. Tag, caption
 // and unjoined id sorts run locally over the items. Item image URLs resolve against the page
 // URL (note 81); category colours come from ui/legend.js (note 76).
+// First paint (IMPLEMENTATION_NOTES 112): the handle's `firstPaint` resolves at the first grid
+// paint after images.json is read (the cards' images load lazily afterwards), or on the
+// configuration note; it rejects when the image set fails to load.
 
 import {fmtCount, plural} from '../core/fmt.js';
 import {MOBILE_BREAK_PX} from '../core/constants.js';
@@ -29,6 +32,7 @@ import {
 } from '../ui/annotate.js';
 import {mountSelectionTools} from '../ui/export.js';
 import {isCategory, plotLevelColors} from '../ui/legend.js';
+import {firstPaintLatch} from '../layout/layout.js';
 
 export const meta = {
   type: 'gallery',
@@ -229,6 +233,7 @@ export function mount(root, ctx) {
   const imgDs = cfg.images || ctx.dataset;
   const ref = datasets[imgDs];
   const setId = ctx.id;
+  const fp = firstPaintLatch();
   const annotCfg = annotateOptions(cfg.annotate);
   const sortKeys = Array.isArray(cfg.sort) ? cfg.sort.map(parseSortKey).filter(Boolean) : [];
 
@@ -813,6 +818,7 @@ export function mount(root, ctx) {
       }
     }
     if (focusPos >= 0 && view.contains(document.activeElement)) view.setAttribute('aria-activedescendant', `${ctx.id}-card-${focusPos}`);
+    fp.resolve();
   }
 
   function isFocused(f, k, r) {
@@ -1023,6 +1029,7 @@ export function mount(root, ctx) {
     skel.remove();
     const n = el('div', 'pk-info-note', `The gallery needs an image set (got ${ref ? ref.kind : 'none'}).`);
     root.append(n);
+    fp.resolve();
   } else {
     ctx.setStatus('loading…');
     (async () => {
@@ -1123,10 +1130,13 @@ export function mount(root, ctx) {
       const n = el('div', 'pk-error-note', `The gallery could not be loaded: ${err.message}`);
       n.setAttribute('role', 'alert');
       root.append(n);
+      // the grid may already show the image set when the catalog join fails
+      fp.reject(err);
     });
   }
 
   return {
+    firstPaint: fp.promise,
     resize() {
       layoutGrid();
     },
@@ -1139,6 +1149,7 @@ export function mount(root, ctx) {
     },
     destroy() {
       destroyed = true;
+      fp.resolve();
       clearTimeout(searchTimer);
       if (raf) cancelAnimationFrame(raf);
       for (const off of offs) off();

@@ -12,14 +12,22 @@
 // never sorts. Category colours come from ui/legend.js plotLevelColors (note 76), so rows match
 // the plotted points for every level.
 //
-// Startup reads (IMPLEMENTATION_NOTES 99): the first screen paints from client.rows(first,
+// Startup reads (IMPLEMENTATION_NOTES 99, 112): the first screen paints from client.rows(first,
 // last) (row chunks, or the head chunks without them); id cells always come from a rows
 // payload (the row-chunk id key manifest.rows.cols[0], or `id` on quantized rows), never from
 // client.id(i) per row, while the list is in stored order. Payload category values are labels
-// (possibly numbers); column values are level indices. The shown
-// columns (and the colour-by column) load whole only on sort, filter or colour-by, or after
-// app.afterFirstPaint(). Once loaded, cells read the column values; rows read earlier keep
-// their payload values.
+// (possibly numbers); column values are level indices. In stored order the cells and the
+// class-colour swatches read the row records the list holds; the shown columns (and the
+// colour-by column) load whole only on sort, filter, search or a colour-by change, or at idle
+// once the list has been quiet for LIST_TIMING.idleColumnsMs after app.afterFirstPaint(). A
+// shown column or colour column the row records do not carry (rowsCarry false) loads right
+// after first paint, as does the colour column when a row label matches no level
+// (payloadLevel). One client.values(key) read per key is in flight at a time. Once loaded,
+// cells read the column values; rows read earlier keep their payload values.
+//
+// The handle's `firstPaint` promise (IMPLEMENTATION_NOTES 112) resolves once the first screen
+// is drawn from data: the rows of the visible window are cached (stored order), the shown
+// columns are loaded (sorted / filtered order), or the list is empty.
 //
 // Store: writes focus {ds, i, id} and hover {ds, i}; reads sel:<ds>, vis:<ds>, filters:<ds>
 // and focus. Handles the `nav:step` offer, so arrow keys walk the filtered, sorted order.
@@ -29,6 +37,7 @@ import {fmtCount, fmtQuant, fmtValue, MISSING} from '../core/fmt.js';
 import {pickHoverColumns} from '../ui/hover.js';
 import {mountSelectionTools} from '../ui/export.js';
 import {isCategory, plotLevelColors} from '../ui/legend.js';
+import {firstPaintLatch} from '../layout/layout.js';
 
 export const meta = {
   type: 'list',
@@ -46,6 +55,55 @@ export const ROW_CACHE_ROWS = 4096;
 export const ROW_BLOCK = 128;
 /** Header key of the id column (a catalog column may itself be called "id"). */
 export const ID_SORT = '__id';
+/**
+ * Idle whole-column load (IMPLEMENTATION_NOTES 112): after first paint the list waits for
+ * `idleColumnsMs` without scrolling, pointer or key activity and without rows() reads in
+ * flight, then loads the shown columns (and the colour column) at the next idle callback
+ * (timeout `idleTimeoutMs`). Mutable for tests; Infinity disables the idle load.
+ */
+export const LIST_TIMING = {idleColumnsMs: 4000, idleTimeoutMs: 2000};
+
+/** Map of category label (as a string) -> level index for a column meta, or null. */
+export function levelIndex(meta) {
+  const lv = meta && Array.isArray(meta.levels) ? meta.levels : null;
+  if (!lv) return null;
+  const m = new Map();
+  lv.forEach((v, k) => { if (!m.has(String(v))) m.set(String(v), k); });
+  return m;
+}
+
+/**
+ * Level index of a rows-payload category value `v` in `levels` (levelIndex output), or NaN.
+ * Payload values and level labels are spelled differently for some dtypes (codec._as_label):
+ * a bool payload `true` has the level 'True', and a float32 payload is the shortest float32
+ * spelling (0.1) while its level is the float64 repr ('0.10000000149011612'). Both spellings are
+ * tried; NaN when neither matches (the caller then loads the whole colour column).
+ */
+export function payloadLevel(levels, v) {
+  if (!levels || v === null || v === undefined) return NaN;
+  let k;
+  if (typeof v === 'boolean') {
+    k = levels.get(v ? 'True' : 'False');
+    if (k === undefined) k = levels.get(String(v));
+    if (k === undefined) k = levels.get(v ? '1' : '0');
+  } else {
+    k = levels.get(String(v));
+    if (k === undefined && typeof v === 'number' && Number.isFinite(v)) k = levels.get(String(Math.fround(v)));
+  }
+  return k === undefined ? NaN : k;
+}
+
+/**
+ * True when client.rows() records carry column `key`: the row-chunk columns
+ * (manifest.rows.cols) list it, or, without row chunks, it is a stored catalog column (the
+ * quantized fallback rows carry every stored column).
+ */
+export function rowsCarry(manifest, key) {
+  if (!manifest || !key) return false;
+  const r = manifest.rows;
+  if (r && Array.isArray(r.cols)) return r.cols.includes(key);
+  return Array.isArray(manifest.cols) && manifest.cols.some((c) => c && c.key === key);
+}
 
 /** Parse the `sort` option: "key", "-key", {key, dir} or [key, dir] -> {key, dir: 1|-1} | null. */
 export function parseSort(s) {
@@ -325,6 +383,14 @@ export function mount(root, ctx) {
   let offTools = null;
   let colorVals = null;          // Float32Array of level indices for color.by (category)
   let colorPal = null;           // CSS colour per level
+  let colorKey = null;           // category colour-by column, or null
+  let colorLevels = null;        // label -> level index for payload swatches
+  let colorFallbackKey = null;   // colour column queued to load because a row label missed
+  let colorMissed = false;       // the last paint had a row label with no level
+  const valuesInflight = new Map(); // key -> Promise of client.values(key) in flight (shared)
+  let idleTimer = 0;             // quiet-period timer of the idle column load
+  let idleArmed = false;         // first paint released: the idle load may run
+  const fp = firstPaintLatch();
   const rowCache = new RowCache();
   const rowsInflight = new Map(); // `${a}:${b}` -> Promise
   let rowsFailed = false;        // rows() failed: ids fall back to client.id(i)
@@ -374,14 +440,30 @@ export function mount(root, ctx) {
 
   // ------------------------------------------------------------------ reads
 
-  /** Whole shown columns (sort, filter, colour-by, or after first paint). Idempotent. */
+  /**
+   * client.values(key), one read per key at a time: the shown-column, uncarried-column and
+   * colour-column loaders share the read in flight, so a column is transferred once.
+   */
+  function columnValues(key) {
+    if (colVals.has(key)) return Promise.resolve(colVals.get(key));
+    const hit = valuesInflight.get(key);
+    if (hit) return hit;
+    reads.values++;
+    const p = Promise.resolve(client.values(key));
+    valuesInflight.set(key, p);
+    const clear = () => { if (valuesInflight.get(key) === p) valuesInflight.delete(key); };
+    p.then(clear, clear);
+    return p;
+  }
+
+  /** Whole shown columns (sort, filter, colour-by, or at idle). Idempotent. */
   function loadColumns() {
     if (colsP) return colsP;
     if (!client) return Promise.resolve();
+    disarmIdle();
     const p = Promise.all(cols.map(async (c) => {
       if (colVals.has(c.key)) return;
-      reads.values++;
-      const v = await client.values(c.key);
+      const v = await columnValues(c.key);
       if (!destroyed) colVals.set(c.key, v);
     })).then(() => {
       if (destroyed) return;
@@ -394,9 +476,91 @@ export function mount(root, ctx) {
     const done = p.then(null, (err) => {
       if (colsP === done) colsP = null;
       report(err);
+      // the first screen keeps its ids; count it as painted
+      if (order) fp.resolve();
     });
     colsP = done;
     return done;
+  }
+
+  /**
+   * Shown columns the row records do not carry (manifest.rows.cols lacks them, e.g. `exact:
+   * false` columns): their cells have no other source, so they load right after first paint
+   * instead of waiting for the idle quiet period.
+   */
+  function loadUncarriedColumns() {
+    if (!client) return Promise.resolve();
+    const keys = cols.map((c) => c.key).filter((k) => !colVals.has(k) && !rowsCarry(client.manifest, k));
+    if (!keys.length) return Promise.resolve();
+    return Promise.all(keys.map(async (k) => {
+      const v = await columnValues(k);
+      if (!destroyed) colVals.set(k, v);
+    })).then(() => {
+      if (destroyed) return;
+      dataVer++;
+      paint(true);
+    }, report);
+  }
+
+  /**
+   * Whole colour-by column (level indices) for the swatches; reuses a loaded shown column and a
+   * read in flight (columnValues). Every call with colorVals unset reads or reuses the column,
+   * so colour-by A -> none -> A recovers its swatches.
+   */
+  function loadColorColumn() {
+    const key = colorKey;
+    if (!key || !client || colorVals) return Promise.resolve();
+    if (colVals.has(key)) {
+      colorVals = colVals.get(key);
+      paint(true);
+      return Promise.resolve();
+    }
+    return columnValues(key).then((vals) => {
+      if (destroyed || colorKey !== key || colorVals) return;
+      colorVals = vals;
+      paint(true);
+    }, report);
+  }
+
+  /** A row label missed the levels: load the whole colour column once, after first paint. */
+  function colorFallback() {
+    const key = colorKey;
+    if (!key || colorVals || colorFallbackKey === key) return;
+    colorFallbackKey = key;
+    afterFirstPaint(app).then(() => {
+      if (destroyed || colorKey !== key) return;
+      return loadColorColumn();
+    }).catch(report);
+  }
+
+  // Idle load: a quiet period after first paint, then an idle callback.
+  function disarmIdle() {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = 0;
+  }
+
+  function armIdle() {
+    disarmIdle();
+    if (!idleArmed || destroyed || (colsP && (!colorKey || colorVals))) return;
+    const ms = LIST_TIMING.idleColumnsMs;
+    if (!Number.isFinite(ms) || ms < 0) return;
+    idleTimer = setTimeout(() => {
+      idleTimer = 0;
+      if (destroyed) return;
+      if (rowsInflight.size) { armIdle(); return; }
+      const run = () => {
+        if (destroyed || !idleArmed) return;
+        loadColumns();
+        loadColorColumn();
+      };
+      if (typeof requestIdleCallback === 'function') requestIdleCallback(run, {timeout: LIST_TIMING.idleTimeoutMs});
+      else setTimeout(run, 0);
+    }, ms);
+  }
+
+  /** Activity restarts the quiet period of the idle column load. */
+  function poke() {
+    if (idleTimer) armIdle();
   }
 
   /** Fetch rows [a, b) once (client.rows) into the row cache, then repaint. */
@@ -541,7 +705,10 @@ export function mount(root, ctx) {
     order = idx;
     posOf = null;
     // sorted / filtered / searched orders scatter the shown rows: read whole columns
-    if (order) loadColumns();
+    if (order) {
+      loadColumns();
+      loadColorColumn();
+    }
     total = order ? order.length : n;
     updateCount(note);
     layoutSpacer();
@@ -633,6 +800,7 @@ export function mount(root, ctx) {
     const f = store.get('focus');
     const fi = f && f.ds === ds && Number.isInteger(f.i) ? f.i : -1;
     const selMask = sel ? sel.mask : null;
+    colorMissed = false;
     for (let k2 = 0; k2 < nRows; k2++) {
       const r = pool[k2];
       const p = first + k2;
@@ -646,7 +814,7 @@ export function mount(root, ctx) {
       r.classList.toggle('pk-focus', i === fi);
       r.classList.toggle('pk-hover', i === hoverI);
       r.classList.toggle('pk-odd', p % 2 === 1);
-      const cv = colorVals ? colorVals[i] : NaN;
+      const cv = swatchLevel(i);
       r.style.setProperty('--pk-swatch', cv === cv && colorPal && colorPal[cv | 0] ? colorPal[cv | 0] : 'transparent');
       if (r._i !== i || r._cols !== cols || r._ver !== dataVer) {
         const fresh = r._i !== i;
@@ -679,9 +847,33 @@ export function mount(root, ctx) {
       }
     }
     if (fi >= 0 && view.contains(document.activeElement)) view.setAttribute('aria-activedescendant', `${ctx.id}-row-${fi}`);
+    if (colorMissed) colorFallback();
+    if (!fp.done && firstScreenDrawn(nRows)) fp.resolve();
   }
 
-  view.addEventListener('scroll', () => paint(), {passive: true});
+  /** Level index of row i for its swatch: the colour column, else the row record's label. */
+  function swatchLevel(i) {
+    if (colorVals) return colorVals[i];
+    if (!colorLevels) return NaN;
+    const row = rowCache.get(i);
+    if (!row || !Object.prototype.hasOwnProperty.call(row, colorKey)) return NaN;
+    const v = row[colorKey];
+    if (v === null || v === undefined) return NaN;
+    const k = payloadLevel(colorLevels, v);
+    if (k !== k) colorMissed = true;
+    return k;
+  }
+
+  /** True once the window of nRows rows shows data (IMPLEMENTATION_NOTES 112). */
+  function firstScreenDrawn(nRows) {
+    if (!startupDone) return false;
+    if (total === 0 || nRows === 0) return true;
+    if (!order) return rowsFailed || rowCache.missing(first, first + nRows) === null;
+    return colsLoaded || !cols.length;
+  }
+
+  view.addEventListener('scroll', () => { poke(); paint(); }, {passive: true});
+  view.addEventListener('keydown', poke);
 
   // ------------------------------------------------------------------ interaction
 
@@ -729,6 +921,7 @@ export function mount(root, ctx) {
 
   view.addEventListener('pointermove', (ev) => {
     if (ev.pointerType === 'touch') return;
+    poke();
     const i = rowFromEvent(ev);
     if (i === hoverI) return;
     hoverI = i;
@@ -884,28 +1077,49 @@ export function mount(root, ctx) {
     else paint();
   }));
   offs.push(store.on([`filters:${ds}`], () => syncFilterBtn()));
-  offs.push(store.on(['color'], () => { if (startupDone) refreshColor().catch(report); }));
+  offs.push(store.on(['color'], () => { if (startupDone) refreshColor({load: true}).catch(report); }));
   offs.push(store.onEvent('theme:change', () => { if (startupDone) refreshColor().catch(report); }));
 
-  async function refreshColor() {
+  /**
+   * Category swatches for the `color` store key. The palette and the label -> level map come
+   * from the column meta, so rows in stored order colour from their records; the whole colour
+   * column loads for a colour-by change (`load`), a sorted / filtered order, or a column the
+   * row records do not carry (after first paint).
+   */
+  async function refreshColor({load = false} = {}) {
     if (!client) return;
     const c = store.get('color');
     const m = c && c.by ? client.col(c.by) : null;
     if (!isCategory(m)) {
+      colorKey = null;
+      colorLevels = null;
       colorVals = null;
       colorPal = null;
+      colorFallbackKey = null;
     } else {
-      // colour-by reads whole columns (the colour column and the shown ones)
-      loadColumns();
-      reads.values++;
-      const vals = await client.values(c.by);
+      if (colorKey !== c.by) {
+        colorVals = null;
+        colorFallbackKey = null;
+      }
+      colorKey = c.by;
+      colorLevels = levelIndex(m);
+      colorPal = plotLevelColors(m, ctx.theme ? ctx.theme() : null);
+      if (load) {
+        // a colour-by change reads whole columns (the colour column and the shown ones)
+        loadColumns();
+        await loadColorColumn();
+      } else if (order) {
+        await loadColorColumn();
+      } else if (!rowsCarry(client.manifest, c.by)) {
+        await afterFirstPaint(app);
+        if (destroyed || colorKey !== c.by) return;
+        await loadColorColumn();
+      }
       if (destroyed) return;
       const now = store.get('color');
       if (!now || now.by !== c.by) return;     // a newer colour change owns the swatches
-      colorVals = vals;
-      colorPal = plotLevelColors(m, ctx.theme ? ctx.theme() : null);
     }
-    root.classList.toggle('pk-list-colored', !!colorVals);
+    root.classList.toggle('pk-list-colored', !!colorKey);
     paint(true);
   }
   offs.push(store.on(['focus'], (changed, st, sources) => {
@@ -936,6 +1150,7 @@ export function mount(root, ctx) {
     skel.remove();
     const note = el('div', 'pk-info-note', `The source list needs a catalog dataset (got ${ref ? ref.kind : 'none'}).`);
     root.append(note);
+    fp.resolve();
   } else {
     ctx.setStatus('loading…');
     (async () => {
@@ -975,22 +1190,28 @@ export function mount(root, ctx) {
       if (query) runSearch();
       const f = store.get('focus');
       if (f && f.ds === ds && Number.isInteger(f.i)) scrollToPos(positionOf(f.i), 'center');
+      // swatches from the row records (a colour column they lack loads after first paint)
+      refreshColor().catch(report);
       paint(true);
       startupDone = true;
-      // Whole columns and the colour-by swatches wait for the page's first paint.
+      // Whole shown columns wait for the page's first paint and then a quiet period.
       await afterFirstPaint(app);
       if (destroyed) return;
-      await Promise.all([loadColumns(), refreshColor().catch(report)]);
+      idleArmed = true;
+      loadUncarriedColumns();
+      armIdle();
     })().catch((err) => {
       skel.remove();
       report(err);
       const note = el('div', 'pk-error-note', `The source list could not be loaded: ${err.message}`);
       note.setAttribute('role', 'alert');
       root.append(note);
+      fp.reject(err);
     });
   }
 
   return {
+    firstPaint: fp.promise,
     resize(w, h) {
       viewH = view.clientHeight || h;
       layoutSpacer();
@@ -1002,6 +1223,8 @@ export function mount(root, ctx) {
     },
     destroy() {
       destroyed = true;
+      fp.resolve();
+      disarmIdle();
       orderCache.clear();
       clearTimeout(searchTimer);
       if (rafPaint) cancelAnimationFrame(rafPaint);
@@ -1011,7 +1234,7 @@ export function mount(root, ctx) {
       if (hv && hv.ds === ds && hoverI >= 0) store.set({hover: null}, {source: ctx.id});
     },
     stats() {
-      return {rows: total, rendered: pool.filter((r) => !r.hidden).length, colsLoaded,
+      return {rows: total, rendered: pool.filter((r) => !r.hidden).length, colsLoaded, firstPaint: fp.done,
         cachedRows: rowCache.size, reads: {...reads}};
     },
     order() {

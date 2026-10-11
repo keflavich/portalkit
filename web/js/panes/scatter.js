@@ -59,6 +59,7 @@ import {fmtCount} from '../core/fmt.js';
 import {createAxisPicker, exprLabel} from '../ui/axis_picker.js';
 import {createLegend, resolveColor, autoRange, plotLevelColors, gpuCatCodes, gpuCatColors} from '../ui/legend.js';
 import {createChips} from '../ui/chips.js';
+import {firstPaintLatch} from '../layout/layout.js';
 import {createControls} from '../ui/controls.js';
 
 export const meta = {
@@ -784,6 +785,9 @@ export async function mount(host, ctx) {
   let destroyed = false;
   let visible = true;
   const offs = [];
+  // first paint (IMPLEMENTATION_NOTES 112): the first frame showing the prebinned density grid
+  // or the points, or the small-multiples grid; no axes resolves, a failed x/y load rejects
+  const fp = firstPaintLatch();
   // small multiples: an empty or invalid `grid` list means a single plot
   const gridSpecs = (Array.isArray(cfg.grid) ? cfg.grid : [])
     .map((c) => (Array.isArray(c) ? {x: c[0], y: c[1]} : {x: c && c.x, y: c && c.y}))
@@ -993,7 +997,7 @@ export async function mount(host, ctx) {
     S.fGrid = null; S.fKey = ''; S.ctxKey = ''; S.inView = null; S.inViewKey = ''; S.style = null;
     loadPrebinned();
     schedule();
-    if (!ax.x || !ax.y) { ctx.setStatus('choose x and y'); return; }
+    if (!ax.x || !ax.y) { ctx.setStatus('choose x and y'); fp.resolve(); return; }
     ctx.setStatus('loading…');
     const p = (async () => {
       const [x, y] = await Promise.all([client.values(ax.x), client.values(ax.y)]);
@@ -1017,6 +1021,7 @@ export async function mount(host, ctx) {
       if (err && err.name === 'AbortError') return;
       ctx.setStatus('error', err.message);
       store.emit('toast', {level: 'error', text: `Scatter ${ax.x} / ${ax.y}: ${err.message}`});
+      fp.reject(err);
     }
   }
 
@@ -1267,6 +1272,7 @@ export async function mount(host, ctx) {
     stage.dataset.tier = S.tier;
     stage.dataset.mode = usesGL() ? (wantDensity() ? 'density' : 'markers') : S.tier === 'F' ? 'binned' : 'canvas';
     S.renderMs = now() - t0;
+    if (S.xy || S.prebinned) fp.resolve();
   }
 
   function drawOver(view, tk) {
@@ -1803,6 +1809,7 @@ export async function mount(host, ctx) {
       drawCellRings(c, tk);
     }
     gridDrawn = true;
+    fp.resolve();
   }
 
   function enterCell(k) {
@@ -1936,6 +1943,7 @@ export async function mount(host, ctx) {
 
   // ------------------------------------------------------------ handle
   return {
+    firstPaint: fp.promise,
     resize() { measure(); },
     onVisible(v) {
       visible = !!v;
@@ -1943,6 +1951,7 @@ export async function mount(host, ctx) {
     },
     destroy() {
       destroyed = true;
+      fp.resolve();
       if (frame) caf(frame);
       if (S.settleTimer) clearTimeout(S.settleTimer);
       if (domTimer) clearTimeout(domTimer);

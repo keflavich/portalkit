@@ -17,7 +17,8 @@ It emulates the behaviours of the production Apache host that the viewer must su
 * optional ``cache_control`` (a header value, or ``"htaccess"`` to apply the section 11.5
   rules) so tests can exercise ``verify``'s header report.
 
-Every request is recorded in ``DevServer.requests`` (method, path, status, bytes, range).
+Every request is recorded in ``DevServer.requests`` (method, path, status, bytes, range,
+encoding, auth, and ``t``: the epoch-ms time the response finished, IMPLEMENTATION_NOTES 112).
 """
 
 from __future__ import annotations
@@ -64,6 +65,10 @@ _RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
 
 @dataclass
 class RequestRecord:
+    """One logged request. The record is appended before the status line is sent; ``t`` is
+    filled in (epoch milliseconds, ``time.time() * 1000``) once the last byte of the response
+    (the headers for HEAD) has been handed to the socket, and stays ``None`` until then."""
+
     method: str
     path: str
     status: int
@@ -71,6 +76,7 @@ class RequestRecord:
     range: str | None = None
     encoding: str | None = None
     auth: bool = False
+    t: float | None = None
 
 
 @dataclass
@@ -116,11 +122,18 @@ class DevRequestHandler(SimpleHTTPRequestHandler):
             sys.stderr.write("%s - %s\n" % (self.address_string(), format % args))
 
     def _record(self, status: int, nbytes: int = 0, rng: str | None = None,
-                enc: str | None = None) -> None:
+                enc: str | None = None) -> RequestRecord:
+        rec = RequestRecord(
+            method=self.command, path=self.path, status=status, bytes=nbytes, range=rng,
+            encoding=enc, auth=bool(self.headers.get("Authorization")))
         with self.opts.lock:
-            self.opts.requests.append(RequestRecord(
-                method=self.command, path=self.path, status=status, bytes=nbytes, range=rng,
-                encoding=enc, auth=bool(self.headers.get("Authorization"))))
+            self.opts.requests.append(rec)
+        return rec
+
+    @staticmethod
+    def _finished(rec: RequestRecord) -> None:
+        """Stamp ``rec.t``: the response has been written (IMPLEMENTATION_NOTES 112)."""
+        rec.t = time.time() * 1000.0
 
     # -- entry points -------------------------------------------------------------------
     def do_GET(self) -> None:
@@ -140,7 +153,7 @@ class DevRequestHandler(SimpleHTTPRequestHandler):
                 head: bool = False) -> None:
         # record before any byte (status line included) reaches the client, so a client that
         # stops at the headers (HEAD, or an HTTPError) always finds its request in the log
-        self._record(int(status), 0 if head else len(body))
+        rec = self._record(int(status), 0 if head else len(body))
         self.send_response(status)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -149,6 +162,7 @@ class DevRequestHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         if not head:
             self._write(body)
+        self._finished(rec)
 
     def _write(self, data: bytes) -> None:
         try:
@@ -226,13 +240,14 @@ class DevRequestHandler(SimpleHTTPRequestHandler):
         data = (f"<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>Index of {title}"
                 f"</title></head><body><h1>Index of {title}</h1><ul>\n" + "\n".join(rows)
                 + "\n</ul></body></html>\n").encode("utf-8")
-        self._record(200, 0 if head else len(data))
+        rec = self._record(200, 0 if head else len(data))
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         if not head:
             self._write(data)
+        self._finished(rec)
 
     def _file(self, fs_path: str, head: bool) -> None:
         mode = self.opts.content_encoding
@@ -279,8 +294,8 @@ class DevRequestHandler(SimpleHTTPRequestHandler):
                 status = HTTPStatus.PARTIAL_CONTENT
                 headers["Content-Range"] = f"bytes {start}-{end}/{len(data)}"
         # record before the status line goes out (see _simple)
-        self._record(int(status), 0 if head else len(body),
-                     rng_hdr if status == HTTPStatus.PARTIAL_CONTENT else None, encoding)
+        rec = self._record(int(status), 0 if head else len(body),
+                           rng_hdr if status == HTTPStatus.PARTIAL_CONTENT else None, encoding)
         self.send_response(status)
         for k, v in headers.items():
             self.send_header(k, v)
@@ -288,6 +303,7 @@ class DevRequestHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         if not head:
             self._write(body)
+        self._finished(rec)
 
     @staticmethod
     def _parse_range(value: str, size: int) -> tuple[int, int] | str | None:

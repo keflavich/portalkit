@@ -14,7 +14,14 @@ SwiftShader against the DevServer:
   apply + ``brush:commit``);
 * settle after pan: time from a wheel event on the scatter canvas until ``__pk.stats()`` stops
   changing for ``QUIET_MS`` (the quiet window is not counted);
-* bytes before first paint: response bytes the DevServer logged up to first paint.
+* bytes before first paint: bytes of the responses the DevServer finished (``RequestRecord.t``)
+  at or before ``__pk.firstPaintAt()``, the time ``app.afterFirstPaint()`` resolved
+  (IMPLEMENTATION_NOTES 112). Deferred reads (whole columns, pos) start after that time.
+
+Also reported, not budgeted: ``first_paint_at_s`` (navigation to ``firstPaintAt``),
+``bytes_to_quiet_settle`` (responses finished once the page has been quiet for
+``QUIET_SETTLE_MS``, before the brush) and ``request_order`` (data requests in finish order,
+with bytes and finish time relative to ``firstPaintAt``).
 
 Every measurement is written to ``$PK_PERF_REPORT`` (default ``<synth root>/perf_report.json``)
 before the budgets are asserted, so a failing run still leaves its numbers behind.
@@ -38,6 +45,10 @@ pytestmark = pytest.mark.perf
 
 
 QUIET_MS = 200
+#: quiet window of the "bytes to quiet settle" report (no __pk.stats() change, no pane loading)
+QUIET_SETTLE_MS = 1000
+#: data requests listed in the report's ``request_order``
+ORDER_REPORT_MAX = 40
 #: multiplier on the time budgets (not the byte budgets) for hosts slower than the reference
 #: machine, e.g. PK_PERF_SCALE=3 on a 2-CPU SwiftShader runner. Default 1 = section 13 table.
 TIME_SCALE = float(os.environ.get("PK_PERF_SCALE", "1") or 1)
@@ -73,6 +84,21 @@ SETTLE_JS = """async ([quiet, limit]) => {
 SETTLE_LIMIT_MS = 60000
 
 
+def _finished_bytes(records, t_ms: float) -> tuple[int, int]:
+    """(bytes, count) of DevServer records whose response finished at or before ``t_ms``."""
+    done = [r for r in records if r.t is not None and r.t <= t_ms]
+    return sum(int(r.bytes or 0) for r in done), len(done)
+
+
+def _request_order(records, t_ref: float, limit: int = ORDER_REPORT_MAX) -> list:
+    """[path tail, bytes, finish ms relative to ``t_ref``] of the data requests, finish order."""
+    out = []
+    for r in sorted((r for r in records if r.t is not None and "/_pk/" not in r.path), key=lambda r: r.t):
+        tail = r.path.split("/data/", 1)[-1] if "/data/" in r.path else r.path.rsplit("/", 1)[-1]
+        out.append([tail, int(r.bytes or 0), round(r.t - t_ref, 1)])
+    return out[:limit]
+
+
 def _report_path(synth_root: Path) -> Path:
     env = os.environ.get("PK_PERF_REPORT")
     return Path(env) if env else Path(synth_root) / "perf_report.json"
@@ -99,14 +125,20 @@ def test_perf_budget(e2e, request, synth, synth_root, server, open_page, n):
 
     server.clear_requests()
     t0 = time.perf_counter()
+    t0_epoch_ms = time.time() * 1000.0
     run = open_page(portal.url_path("explorer"), wait=False)
     status = run.wait_ready()
     assert status == "ok", status
     t_ready = time.perf_counter() - t0
     run.wait_panes_settled(timeout_ms=120000)
     first_paint = time.perf_counter() - t0
-    nbytes = sum(int(getattr(r, "bytes", 0) or 0) for r in list(server.requests))
-    nreq = len(server.requests)
+    fp_at = run.first_paint_at(timeout_ms=120000)
+    nbytes, nreq = _finished_bytes(list(server.requests), fp_at)
+    # reported only: what the page reads until it has been quiet for QUIET_SETTLE_MS
+    quiet = run.ev(SETTLE_JS, [QUIET_SETTLE_MS, SETTLE_LIMIT_MS])
+    t_quiet = run.ev("() => Date.now()")
+    quiet_bytes, quiet_req = _finished_bytes(list(server.requests), t_quiet)
+    order = _request_order(list(server.requests), fp_at)
 
     # brush commit on the scatter pane (a central rectangle in data space)
     d = portal.data
@@ -146,6 +178,9 @@ def test_perf_budget(e2e, request, synth, synth_root, server, open_page, n):
         "brush_commit_s": round(brush["ms"] / 1000.0, 4), "brush_count": brush["count"], "brush_numpy": want, "brush_edge_rows": n_edge,
         "pan_settle_s": round(pan_settle, 4), "pan_settle_timed_out": settle["timedOut"],
         "brush_settle_timed_out": after_brush["timedOut"], "bytes_before_first_paint": nbytes, "requests": nreq,
+        "first_paint_at_s": round((fp_at - t0_epoch_ms) / 1000.0, 3),
+        "bytes_to_quiet_settle": quiet_bytes, "requests_to_quiet_settle": quiet_req,
+        "quiet_settle_timed_out": quiet["timedOut"], "request_order": order,
         "stats": stats, "tiers": tiers, "budget": budget, "time_scale": TIME_SCALE, "runtime": run.ev("() => window.__pk.app.runtime"),
     }
     _write_report(_report_path(synth_root), f"explorer@{n}", entry)

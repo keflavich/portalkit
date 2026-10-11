@@ -53,6 +53,7 @@ import {fmtCount} from '../core/fmt.js';
 import {exprLabel} from '../ui/axis_picker.js';
 import {createLegend} from '../ui/legend.js';
 import {createChips} from '../ui/chips.js';
+import {firstPaintLatch} from '../layout/layout.js';
 import {createControls} from '../ui/controls.js';
 import {
   el, iconButton, paneDataset, docOf, gpuBudget, planGpu, requestGpu, releaseGpu, paneTier, setPaneTier, makeStage,
@@ -383,6 +384,9 @@ export async function mount(host, ctx) {
   let destroyed = false;
   let visible = true;
   const offs = [];
+  // first paint (IMPLEMENTATION_NOTES 112): the first frame showing the prebinned density grid
+  // or projected data; a failed base-column load or projection rejects
+  const fp = firstPaintLatch();
 
   const tour = new Tour(D, {F: F0, seed: 0x5eed, onSettle: () => { S.moving = false; settle(); }});
 
@@ -535,7 +539,10 @@ export async function mount(host, ctx) {
     replan();
     if (p === 'gc') initGC().catch(gpuFail);
     else if (p === 'xy') initXY();
-    loadBase().catch(warnErr('columns'));
+    loadBase().catch((err) => {
+      warnErr('columns')(err);
+      if (!(err && err.name === 'AbortError')) fp.reject(err);
+    });
     legend.refresh();
     settle();
   }
@@ -729,6 +736,7 @@ export async function mount(host, ctx) {
         if (err && err.name === 'AbortError') return;
         console.warn(`manifold ${id}: projection failed`, err);
         ctx.setStatus('error', err.message);
+        fp.reject(err);
       });
     }, 0);
     schedule();
@@ -976,9 +984,13 @@ export async function mount(host, ctx) {
     u.clearRect(0, 0, S.w, S.h);
     drawAxes(u, view, {tokens: tk, xLabel: view.x.label, yLabel: view.y.label});
     for (const g of S.ctxGrids) drawDensityGrid(u, view, g, {tokens: tk, cmap: 'gray_r', alpha: 0.45});
+    let drewGrid = false;
     if (S.prebinned && firstPaintPending()) {
       const pg = prebinnedGrid();
-      if (pg) drawDensityGrid(u, view, pg, {tokens: tk, cmap: theme.densityCmap || 'magma'});
+      if (pg) {
+        drawDensityGrid(u, view, pg, {tokens: tk, cmap: theme.densityCmap || 'magma'});
+        drewGrid = true;
+      }
     }
     const moving = S.moving || tour.animating || tour.playing;
     let shown = 0;
@@ -1051,6 +1063,7 @@ export async function mount(host, ctx) {
     stage.dataset.moving = moving ? '1' : '0';
     note.hidden = true;
     S.renderMs = now() - t0;
+    if (n === 0 || drewGrid || (S.path && !firstPaintPending() && (S.path !== 'canvas' || pts))) fp.resolve();
   }
 
   // trails for GL paths: a 2-D canvas between `under` and the GL canvas keeps fading copies
@@ -1429,6 +1442,7 @@ export async function mount(host, ctx) {
   hl.sync();
 
   return {
+    firstPaint: fp.promise,
     resize() { measure(); },
     onVisible(v) {
       visible = !!v;
@@ -1436,6 +1450,7 @@ export async function mount(host, ctx) {
     },
     destroy() {
       destroyed = true;
+      fp.resolve();
       tour.stop();
       if (frameReq) cancelAnimationFrame(frameReq);
       if (settleTimer) clearTimeout(settleTimer);
