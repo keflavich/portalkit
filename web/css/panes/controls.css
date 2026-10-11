@@ -1,0 +1,151 @@
+/* Plot controls shared by the scatter, manifold and hist panes (ui/controls.js,
+   ui/axis_picker.js, ui/chips.js, ui/legend.js) and the common plot frame (.pk-plot).
+   The hist pane loads only this stylesheet, so its rules live here too.
+   Depends on tokens.css and base.css. */
+
+/* ---------------------------------------------------------------- plot frame */
+.pk-plot {
+  display: flex; flex-direction: column;
+  width: 100%; height: 100%; min-width: 0; min-height: 0;
+  overflow: hidden;
+}
+.pk-plot [hidden] { display: none !important; }
+.pk-plot-bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--pk-sp-1) var(--pk-sp-2);
+  padding: var(--pk-sp-1) var(--pk-sp-2);
+  border-bottom: 1px solid var(--pk-border);
+  background: var(--pk-bg-2);
+  font-size: var(--pk-fs-0);
+  flex: 0 0 auto; min-width: 0; max-width: 100%;
+}
+.pk-plot-bar:empty { display: none; }
+.pk-plot-bar .pk-btn, .pk-plot-bar select, .pk-plot-bar input:not([type="checkbox"]):not([type="range"]) {
+  min-height: 24px; padding-top: 1px; padding-bottom: 1px; font-size: var(--pk-fs-0);
+}
+.pk-plot-bar select { max-width: 14em; }
+.pk-plot-body { position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; }
+.pk-plot-foot {
+  display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--pk-sp-1) var(--pk-sp-3);
+  padding: 2px var(--pk-sp-2);
+  border-top: 1px solid var(--pk-border);
+  background: var(--pk-bg);
+  font-size: var(--pk-fs-0);
+  flex: 0 0 auto; min-width: 0; max-height: 34%; overflow: auto;
+}
+.pk-plot-foot:empty { display: none; }
+
+/* stacked canvases (panes/scatter.js makeStage) */
+.pk-plot-stage { position: absolute; inset: 0; overflow: hidden; background: var(--pk-plot-bg); }
+.pk-plot-stage > canvas { position: absolute; left: 0; top: 0; width: 100%; height: 100%; display: block; }
+.pk-plot-under, .pk-plot-gl, .pk-plot-trail { pointer-events: none; }
+.pk-plot-over { cursor: crosshair; touch-action: none; outline: none; }
+.pk-plot-over:focus-visible { box-shadow: inset 0 0 0 2px var(--pk-focus); }
+.pk-plot-note {
+  position: absolute; left: 50%; top: var(--pk-sp-2); transform: translateX(-50%);
+  padding: 2px var(--pk-sp-2); border-radius: var(--pk-radius);
+  background: color-mix(in srgb, var(--pk-bg) 85%, transparent); color: var(--pk-fg-2);
+  font-size: var(--pk-fs-0); pointer-events: none;
+}
+.pk-brush-modes .pk-btn { min-width: 26px; }
+.pk-preset-select { max-width: 16em; }
+
+/* ---------------------------------------------------------------- controls bar */
+.pk-controls { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--pk-sp-1) var(--pk-sp-3); min-width: 0; max-width: 100%; }
+.pk-controls[hidden] { display: none; }
+.pk-ctl-group { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--pk-sp-1) var(--pk-sp-2); min-width: 0; max-width: 100%; }
+.pk-ctl { display: inline-flex; align-items: center; gap: var(--pk-sp-1); white-space: nowrap; color: var(--pk-fg-2); }
+.pk-ctl-name { color: var(--pk-fg-2); }
+.pk-ctl-range { width: 7em; min-width: 4em; accent-color: var(--pk-accent); }
+.pk-ctl-num { width: 4.2em; }
+.pk-ctl-select { max-width: 12em; }
+.pk-ctl-expr { width: 10em; min-width: 6em; }
+.pk-ctl-chips, .pk-features, .pk-ctl-features { display: inline-flex; flex-wrap: wrap; gap: 2px; min-width: 0; max-width: 100%; }
+.pk-ctl-chips .pk-chip[aria-pressed="false"], .pk-features .pk-chip[aria-pressed="false"] { opacity: .65; }
+.pk-color-by { max-width: 12em; }
+.pk-cmap { display: inline-flex; align-items: center; gap: var(--pk-sp-1); }
+.pk-cmap-swatch {
+  display: inline-block; width: 3.2em; height: 10px; border-radius: 2px;
+  border: 1px solid var(--pk-border); vertical-align: middle;
+}
+.pk-template, .pk-templates { display: inline-flex; align-items: center; gap: var(--pk-sp-1); }
+.pk-template-grid, .pk-template-scale { max-width: 9em; }
+.pk-invalid, input.pk-invalid { border-color: var(--pk-danger) !important; box-shadow: 0 0 0 1px var(--pk-danger); }
+
+/* ---------------------------------------------------------------- axis picker */
+.pk-axis-picker { display: inline-flex; align-items: center; gap: var(--pk-sp-1); min-width: 0; max-width: 100%; flex-wrap: wrap; }
+.pk-axis-label { color: var(--pk-fg-2); font-weight: 600; }
+.pk-axis-select { max-width: 13em; min-width: 5em; }
+.pk-axis-step .pk-btn { min-width: 24px; }
+.pk-axis-play.pk-active { color: var(--pk-accent); }
+.pk-axis-expr { width: 9em; min-width: 5em; }
+.pk-axis-more { position: relative; display: inline-block; }
+.pk-axis-more > summary { list-style: none; cursor: pointer; }
+.pk-axis-more > summary::-webkit-details-marker { display: none; }
+.pk-axis-more-panel {
+  position: absolute; z-index: 20; top: calc(100% + 2px); left: 0;
+  display: flex; flex-direction: column; gap: var(--pk-sp-1);
+  padding: var(--pk-sp-2); min-width: 12em;
+  background: var(--pk-bg); border: 1px solid var(--pk-border); border-radius: var(--pk-radius);
+  box-shadow: var(--pk-shadow);
+}
+.pk-axis-opt { display: inline-flex; align-items: center; gap: var(--pk-sp-1); white-space: nowrap; }
+.pk-axis-range { display: inline-flex; align-items: center; gap: var(--pk-sp-1); }
+.pk-axis-range input { width: 5.5em; }
+
+/* ---------------------------------------------------------------- chips */
+.pk-chips { display: flex; flex-direction: column; gap: 2px; min-width: 0; max-width: 100%; }
+.pk-chips:empty { display: none; }
+.pk-chip-row { display: flex; flex-wrap: wrap; align-items: center; gap: 2px var(--pk-sp-1); min-width: 0; }
+.pk-chip-label { color: var(--pk-fg-3); margin-right: var(--pk-sp-1); white-space: nowrap; }
+.pk-chips .pk-chip { min-height: 22px; }
+.pk-chips .pk-chip[aria-pressed="false"] { opacity: .55; text-decoration: line-through; }
+.pk-chips .pk-chip.pk-on, .pk-chips .pk-chip[aria-pressed="true"] { border-color: var(--pk-accent); color: var(--pk-fg); }
+.pk-chip-n { color: var(--pk-fg-3); }
+.pk-chip-group { display: inline-flex; align-items: center; }
+.pk-chip-group > .pk-chip:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.pk-chip-x { border-top-left-radius: 0 !important; border-bottom-left-radius: 0 !important; margin-left: -1px; padding: 1px 6px; }
+.pk-chip-input { width: 9em; min-height: 22px; font-size: var(--pk-fs-0); }
+.pk-snr-chip, .pk-save-chip { border-style: dashed; }
+.pk-preset-chip { border-color: color-mix(in srgb, var(--pk-accent) 50%, var(--pk-border)); }
+
+/* ---------------------------------------------------------------- legend */
+.pk-legend { display: flex; flex-direction: column; gap: 2px; min-width: 0; max-width: 100%; }
+.pk-legend:empty { display: none; }
+.pk-legend-counts { color: var(--pk-fg-2); white-space: nowrap; }
+.pk-legend-body { display: flex; flex-wrap: wrap; align-items: center; gap: 2px var(--pk-sp-2); min-width: 0; }
+.pk-legend-title { color: var(--pk-fg-2); font-weight: 600; margin-right: var(--pk-sp-1); }
+.pk-legend-levels { display: inline-flex; flex-wrap: wrap; gap: 2px; min-width: 0; }
+.pk-legend-level[aria-pressed="false"] { opacity: .5; text-decoration: line-through; }
+.pk-legend-label { max-width: 14em; overflow: hidden; text-overflow: ellipsis; }
+.pk-legend-n { color: var(--pk-fg-3); }
+.pk-swatch {
+  display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--pk-fg) 25%, transparent); flex: 0 0 auto;
+}
+.pk-swatch-shared { border-style: dashed; }
+.pk-legend-bar {
+  display: inline-block; width: 8em; height: 10px; border-radius: 2px;
+  border: 1px solid var(--pk-border); vertical-align: middle;
+}
+.pk-legend-lo, .pk-legend-hi { color: var(--pk-fg-2); }
+.pk-legend-note { font-size: var(--pk-fs-0); }
+
+/* ---------------------------------------------------------------- histogram pane */
+.pk-hist-stage { position: relative; flex: 1 1 auto; min-width: 0; min-height: 60px; background: var(--pk-plot-bg); }
+.pk-hist-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: ew-resize; touch-action: none; outline: none; }
+.pk-hist-canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--pk-focus); }
+.pk-hist-foot { align-items: center; }
+.pk-hist-range { display: inline-flex; align-items: center; gap: var(--pk-sp-1); }
+.pk-hist-range input { width: 6em; min-height: 22px; font-size: var(--pk-fs-0); }
+.pk-hist.pk-has-range .pk-hist-range-label { color: var(--pk-sel); font-weight: 600; }
+.pk-hist-count { margin-left: auto; white-space: nowrap; }
+.pk-hist-ylog { padding: 0 var(--pk-sp-2); }
+
+@media (max-width: 600px) {
+  .pk-plot-bar select, .pk-axis-select { max-width: 9em; }
+  .pk-ctl-range { width: 5em; }
+  .pk-plot-foot { max-height: 40%; }
+}
+@media (pointer: coarse) {
+  .pk-plot-bar .pk-btn, .pk-chips .pk-chip, .pk-legend-level { min-height: 32px; }
+}

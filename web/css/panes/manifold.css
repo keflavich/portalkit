@@ -1,0 +1,15 @@
+/* Manifold pane (panes/manifold.js). The plot frame, controls, chips and legend rules are
+   in controls.css (loaded with this file). Depends on tokens.css and base.css. */
+
+.pk-manifold-stage[data-moving="1"] .pk-plot-over { cursor: progress; }
+.pk-tour-controls .pk-btn { min-width: 26px; }
+.pk-tour-play[aria-pressed="true"], .pk-tour-axis-x[aria-pressed="true"], .pk-tour-axis-y[aria-pressed="true"] {
+  color: var(--pk-accent);
+}
+.pk-manifold-dims { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 18em; }
+.pk-frame-presets { max-width: 16em; }
+
+@media (max-width: 600px) {
+  .pk-manifold-dims { display: none; }
+  .pk-frame-presets { max-width: 9em; }
+}

@@ -1,0 +1,40 @@
+/* Scatter pane (panes/scatter.js). The plot frame, controls, chips and legend rules are in
+   controls.css (loaded with this file). Depends on tokens.css and base.css. */
+
+.pk-scatter .pk-plot-stage[data-mode="binned"] .pk-plot-over { cursor: crosshair; }
+
+/* small multiples (`grid` option) */
+.pk-scatter-grid {
+  position: absolute; inset: 0;
+  display: grid; gap: var(--pk-sp-1);
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-auto-rows: minmax(150px, 1fr);
+  padding: var(--pk-sp-1);
+  overflow: auto;
+  background: var(--pk-bg);
+}
+.pk-grid-cell {
+  position: relative; min-width: 0; min-height: 0;
+  border: 1px solid var(--pk-border); border-radius: var(--pk-radius);
+  overflow: hidden; background: var(--pk-plot-bg);
+}
+.pk-grid-cell[data-error]::after {
+  content: attr(data-error);
+  position: absolute; left: var(--pk-sp-2); top: var(--pk-sp-2); right: var(--pk-sp-2);
+  color: var(--pk-danger); font-size: var(--pk-fs-0);
+}
+.pk-grid-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: crosshair; touch-action: none; }
+/* focus / hover rings and the brush preview of a cell, redrawn without the base layers */
+.pk-grid-rings { position: absolute; inset: 0; width: 100%; height: 100%; display: block; pointer-events: none; }
+.pk-stat-select[hidden] { display: none; }
+.pk-grid-expand {
+  position: absolute; top: 2px; right: 2px; z-index: 1;
+  min-height: 22px; height: 22px; min-width: 22px; padding: 0 4px;
+  opacity: .7;
+}
+.pk-grid-cell:hover .pk-grid-expand, .pk-grid-expand:focus-visible { opacity: 1; }
+.pk-plot-bar.pk-grid-mode .pk-axis-picker { display: none; }
+
+@media (max-width: 600px) {
+  .pk-scatter-grid { grid-template-columns: 1fr; grid-auto-rows: minmax(200px, auto); }
+}
