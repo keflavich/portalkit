@@ -3,15 +3,24 @@
 // DataClient ops over workers/rpc.js:
 //   open, ensure, values, project, pick, brush, query, hist, bin2d, rows, find, crossmatch,
 //   skyWindow, exportCSV, gpuColumns, cancel
-// plus id, record, export (csv|json|ids|ds9), setSel, density, info and order (argsort over all
-// rows, IMPLEMENTATION_NOTES 74).
+// plus id, ids, record, export (csv|json|ids|ds9), setSel, density, info, order (argsort over
+// all rows, IMPLEMENTATION_NOTES 74) and resolveIds (one pass over the ids, note 102).
 // createEngine() holds the state and is also used in-thread (createLocalRpc) when Workers are
 // unavailable, and by the node tests.
+//
+// Chunks (IMPLEMENTATION_NOTES 98): column chunk_files and ids.chunks follow the manifest's
+// `chunk_starts` when present (chunk 0 = the LOD base sample), else ceil(n / chunk_rows) slices.
+// Startup reads (note 99): id(i), ids(idx) and record(i) load only the ids chunks that hold the
+// rows asked for (record(i) none at all when the row chunk carries the id); find, query (text or
+// id filters), export, order('id') and resolveIds load every ids chunk. rows() and record() on the
+// quantized fallback (no row chunks) read pos only with {pos: true} or when it is already decoded.
+// Manifest prefetch (note 101): started as data.worker.js?m=<manifest url>, the worker fetches the
+// manifest from top-level code and `open` reuses that in-flight request.
 
 import {CHUNK_ROWS, SKY_MARKER_CAP} from '../core/constants.js';
 import {stepDigits} from '../core/fmt.js';
 import {decodeColumn, decodePos, decodeStr, decodeSparse, sparseKind, decodeDensity, stepOf, dequant, CAT8_MISSING, CAT16_MISSING} from '../data/codec.js';
-import {fetchBytes, fetchJSON, getStats, addDecodeMs, now, abortError, throwIfAborted} from '../data/fetch.js';
+import {fetchBytes, fetchJSON, getStats, addDecodeMs, now, abortError, throwIfAborted, FetchError} from '../data/fetch.js';
 import {compileCached, evaluate} from '../data/expr.js';
 import {serve, withTransfer} from './rpc.js';
 import {drawableXY, drawableProj, brushArrays, buildPickGrid, pickNearest} from './ops/select.js';
@@ -69,6 +78,63 @@ function raceAbort(p, signal) {
   });
 }
 
+/**
+ * First row of every chunk of a catalog (IMPLEMENTATION_NOTES 98): the manifest's `chunk_starts`
+ * (validated: integers, starting at 0, strictly increasing, every value < n), else
+ * [0, chunk_rows, 2*chunk_rows, ...] with ceil(n / chunk_rows) entries (one chunk when
+ * n <= chunk_rows, including n = 0). Throws Error on a malformed `chunk_starts`.
+ */
+export function catalogChunkStarts(man) {
+  const n = man.n;
+  const cs = man.chunk_starts;
+  if (cs !== undefined && cs !== null) {
+    if (!Array.isArray(cs) || !cs.length) throw new Error('manifest chunk_starts must be a non-empty array');
+    for (let k = 0; k < cs.length; k++) {
+      const v = cs[k];
+      const ok = Number.isInteger(v) && (k === 0 ? v === 0 : v > cs[k - 1] && v < n);
+      if (!ok) throw new Error(`manifest chunk_starts[${k}] = ${JSON.stringify(v)}: expected strictly increasing integers from 0, each < n (${n})`);
+    }
+    return cs.slice();
+  }
+  const rows = man.chunk_rows === undefined || man.chunk_rows === null ? CHUNK_ROWS : man.chunk_rows;
+  if (!(Number.isInteger(rows) && rows > 0)) throw new Error(`manifest chunk_rows = ${JSON.stringify(man.chunk_rows)}: expected a positive integer`);
+  const k = Math.max(1, Math.ceil(n / rows));
+  const out = new Array(k);
+  for (let c = 0; c < k; c++) out[c] = c * rows;
+  return out;
+}
+
+/** Index of the chunk that holds row i (the last start <= i; 0 for i below the first start). */
+export function chunkIndexOf(starts, i) {
+  let lo = 0, hi = starts.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (starts[mid] <= i) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo;
+}
+
+/**
+ * Manifest prefetch of a worker started as `data.worker.js?m=<url>` (IMPLEMENTATION_NOTES 101):
+ * {url, promise} with the fetch already running, or null when `href` carries no `m` parameter.
+ * The promise never causes an unhandled rejection; `open` reports its error (or refetches).
+ */
+export function startPrefetch(href, fopts = {}) {
+  let m = null;
+  try {
+    m = new URL(href).searchParams.get('m');
+  } catch (err) {
+    if (err instanceof TypeError) return null;   // not an absolute URL
+    throw err;
+  }
+  if (!m) return null;
+  const url = new URL(m, href).toString();
+  const promise = fetchJSON(url, fopts);
+  promise.catch(() => {});
+  return {url, promise};
+}
+
 function missingCode(enc) {
   if (enc === 'cat8') return CAT8_MISSING;
   if (enc === 'cat16') return CAT16_MISSING;
@@ -117,7 +183,8 @@ export function createEngine(opts = {}) {
     url: null,
     man: null,
     n: 0,
-    chunkRows: CHUNK_ROWS,
+    starts: [0], // first row of every catalog chunk (catalogChunkStarts)
+    idChunks: new Map(), // ids chunk index -> Promise<{start, str}>
     metas: new Map(),
     cols: new Map(), // key -> entry
     pos: null,
@@ -146,6 +213,18 @@ export function createEngine(opts = {}) {
     if (!S.man) throw new Error('catalog not open');
   }
 
+  /** Chunk starts of a file list: [0] for a single file, else the catalog chunk starts. */
+  function fileStarts(nFiles, what) {
+    if (nFiles <= 1) return [0];
+    if (nFiles === S.starts.length) return S.starts;
+    throw new Error(`${what}: ${nFiles} chunk files, expected ${S.starts.length} (one per chunk of ${S.n} rows)`);
+  }
+
+  /** [first, end) rows of chunk ci for chunk starts `starts`. */
+  function rangeOf(starts, ci) {
+    return [starts[ci], ci + 1 < starts.length ? starts[ci + 1] : S.n];
+  }
+
   async function getBytes(rel, signal) {
     return fetchBytes(resolve(rel), {...fopts, signal});
   }
@@ -164,7 +243,7 @@ export function createEngine(opts = {}) {
       meta,
       files,
       nChunks,
-      chunkRows: nChunks > 1 ? S.chunkRows : n,
+      starts: fileStarts(nChunks, `column ${key}`),
       loaded: new Uint8Array(nChunks),
       pending: new Map(),
       values: new Float32Array(n).fill(NaN),
@@ -184,8 +263,15 @@ export function createEngine(opts = {}) {
   }
 
   function chunkRange(e, ci) {
-    const a = ci * e.chunkRows;
-    return [a, Math.min(S.n, a + e.chunkRows)];
+    return rangeOf(e.starts, ci);
+  }
+
+  /** Load the chunks of column entry `e` that overlap rows [a, b). */
+  function loadRange(e, a, b) {
+    const ps = [];
+    const k0 = chunkIndexOf(e.starts, a);
+    for (let k = k0; k < e.nChunks && (k === k0 || e.starts[k] < b); k++) ps.push(loadChunk(e, k));
+    return Promise.all(ps);
   }
 
   async function loadChunk(e, ci) {
@@ -198,7 +284,7 @@ export function createEngine(opts = {}) {
         if (e.meta.validity) {
           const ve = entryFor(e.meta.validity);
           if (!ve) throw new Error(`column ${e.meta.key}: unknown validity column ${e.meta.validity}`);
-          await loadChunk(ve, ci);
+          await loadRange(ve, a, b);
           vbits = ve.bits || ve.values;
         }
         const bytes = await getBytes(e.files[ci], null);
@@ -236,10 +322,7 @@ export function createEngine(opts = {}) {
   function chunksFor(e, prefix) {
     const m = prefix === undefined || prefix === null ? S.n : Math.max(0, Math.min(S.n, prefix | 0));
     const out = [];
-    for (let ci = 0; ci < e.nChunks; ci++) {
-      const [a] = chunkRange(e, ci);
-      if (a < m) out.push(ci);
-    }
+    for (let ci = 0; ci < e.nChunks && e.starts[ci] < m; ci++) out.push(ci);
     return out;
   }
 
@@ -318,21 +401,75 @@ export function createEngine(opts = {}) {
     return raceAbort(S.posP, signal);
   }
 
+  /** Ids files and their chunk starts ({files: [], starts: []} without ids). */
+  function idGeom() {
+    const im = S.man.ids || {};
+    const files = im.file ? [im.file] : im.chunks || [];
+    return {files, starts: files.length ? fileStarts(files.length, 'ids') : []};
+  }
+
+  /** Ids chunk ci as {start, str} (fetched and decoded once). */
+  function idChunk(ci, signal) {
+    let p = S.idChunks.get(ci);
+    if (!p) {
+      const {files, starts} = idGeom();
+      const [a, b] = rangeOf(starts, ci);
+      p = (async () => {
+        const bytes = await getBytes(files[ci], null);
+        const t0 = now();
+        const str = decodeStr(bytes);
+        addDecodeMs(now() - t0);
+        if (str.n !== b - a) throw new Error(`ids chunk ${ci}: ${str.n} ids, expected ${b - a}`);
+        return {start: a, str};
+      })();
+      S.idChunks.set(ci, p);
+      p.catch(() => {
+        if (S.idChunks.get(ci) === p) S.idChunks.delete(ci);
+      });
+    }
+    return raceAbort(p, signal);
+  }
+
+  /** Id of row i, loading only the ids chunk that holds it ('' when out of range). */
+  async function idAt(i, signal) {
+    requireOpen();
+    if (S.ids) return S.ids.get(i);
+    if (!(Number.isInteger(i) && i >= 0 && i < S.n)) return '';
+    const {files, starts} = idGeom();
+    if (!files.length) return '';
+    const c = await idChunk(chunkIndexOf(starts, i), signal);
+    return c.str.get(i - c.start);
+  }
+
+  /** Ids of a list of rows, loading only the ids chunks that hold them. */
+  async function idsAt(idx, signal) {
+    requireOpen();
+    const list = Array.from(idx || []);
+    if (S.ids) return list.map((i) => S.ids.get(i));
+    const {files, starts} = idGeom();
+    const ok = (i) => Number.isInteger(i) && i >= 0 && i < S.n && files.length > 0;
+    const need = new Set();
+    for (const i of list) if (ok(i)) need.add(chunkIndexOf(starts, i));
+    const got = new Map();
+    await Promise.all(Array.from(need, async (ci) => got.set(ci, await idChunk(ci, signal))));
+    return list.map((i) => {
+      if (!ok(i)) return '';
+      const c = got.get(chunkIndexOf(starts, i));
+      return c.str.get(i - c.start);
+    });
+  }
+
+  /** Every ids chunk plus the alias file as an IdIndex (find, query, export, order, resolveIds). */
   async function ensureIds(signal) {
     if (S.ids) return S.ids;
     if (!S.idsP) {
       S.idsP = (async () => {
         const im = S.man.ids || {};
-        const files = im.file ? [im.file] : im.chunks || [];
-        const chunks = [];
-        let start = 0;
-        for (const rel of files) {
-          const str = decodeStr(await getBytes(rel, null));
-          chunks.push({start, str});
-          start += str.n;
-        }
-        let aliases = null;
-        if (im.alias_file) aliases = await fetchJSON(resolve(im.alias_file), fopts);
+        const {files} = idGeom();
+        const [chunks, aliases] = await Promise.all([
+          Promise.all(files.map((_, ci) => idChunk(ci, null))),
+          im.alias_file ? fetchJSON(resolve(im.alias_file), fopts) : null,
+        ]);
         S.ids = new IdIndex(chunks, aliases);
         return S.ids;
       })();
@@ -472,7 +609,7 @@ export function createEngine(opts = {}) {
   async function decodeChunkLocal(key, ci, signal) {
     const meta = S.metas.get(key);
     const files = meta.chunk_files || (meta.file ? [meta.file] : []);
-    const a = ci * S.chunkRows, b = Math.min(S.n, a + S.chunkRows);
+    const [a, b] = rangeOf(fileStarts(files.length, `column ${key}`), ci);
     const len = b - a;
     const bytes = await getBytes(files[ci], signal);
     const t0 = now();
@@ -515,7 +652,7 @@ export function createEngine(opts = {}) {
       await ensure([key], {signal});
       return S.cols.get(key);
     }
-    const ci = Math.min(nChunks - 1, Math.floor(i / S.chunkRows));
+    const ci = chunkIndexOf(fileStarts(nChunks, `column ${key}`), i);
     if (e && e.loaded[ci]) return e;
     const ck = `${key}\u0000${ci}`;
     let p = S.qchunks.get(ck);
@@ -531,31 +668,56 @@ export function createEngine(opts = {}) {
     return raceAbort(p, signal);
   }
 
-  async function quantizedRows(a, b, signal) {
-    await Promise.all([ensureIds(signal), S.man.pos ? ensurePos(signal) : null]);
+  /**
+   * Rows [a, b) from the column chunks that hold them (no row chunks). Each row carries its
+   * catalog id as `_id` (a stored column called 'id' cannot overwrite it; `id` holds the stored
+   * column when there is one, else the catalog id). ra/dec come from pos only when pos is
+   * already decoded or `wantPos` is set: pos is one whole-catalog file, so a first-screen or hover
+   * read never pulls it (IMPLEMENTATION_NOTES 99). Rows whose ra/dec were withheld carry
+   * ra = dec = null and `_posDeferred: true`.
+   */
+  async function quantizedRows(a, b, signal, wantPos = false) {
+    const idx = [];
+    for (let i = a; i < b; i++) idx.push(i);
+    const [idList] = await Promise.all([idsAt(idx, signal), S.man.pos && wantPos ? ensurePos(signal) : null]);
     const out = [];
-    const ch = S.chunkRows;
-    for (let c0 = a; c0 < b; c0 = (Math.floor(c0 / ch) + 1) * ch) {
-      const c1 = Math.min(b, (Math.floor(c0 / ch) + 1) * ch);
+    const starts = S.starts;
+    for (let c0 = a; c0 < b;) {
+      const ci = chunkIndexOf(starts, c0);
+      const c1 = Math.min(b, rangeOf(starts, ci)[1]);
       const srcs = await Promise.all(S.man.cols.map((c) => cellSource(c.key, c0, signal)));
       for (let i = c0; i < c1; i++) {
-        const o = {id: S.ids.get(i)};
-        if (S.pos) {
-          o.ra = Number.isFinite(S.pos.ra[i]) ? S.pos.ra[i] : null;
-          o.dec = Number.isFinite(S.pos.dec[i]) ? S.pos.dec[i] : null;
+        const cid = idList[i - a];
+        const o = {id: cid};
+        if (S.man.pos) {
+          if (S.pos) {
+            o.ra = Number.isFinite(S.pos.ra[i]) ? S.pos.ra[i] : null;
+            o.dec = Number.isFinite(S.pos.dec[i]) ? S.pos.dec[i] : null;
+          } else {
+            o.ra = null;
+            o.dec = null;
+            o._posDeferred = true;
+          }
         }
         S.man.cols.forEach((c, k) => {
           o[c.key] = cellValue(srcs[k], i);
         });
+        o._id = cid === null || cid === undefined ? null : String(cid);
         o._quantized = true;
         o._i = i;
         out.push(o);
       }
+      c0 = c1;
     }
     return out;
   }
 
-  async function rows(i0, i1, signal) {
+  /**
+   * Rows [i0, i1): exact row chunks when the manifest has them, else the quantized fallback.
+   * opts.pos: on the quantized fallback, load pos (one whole file) so ra/dec are filled; without
+   * it ra/dec are filled only when pos is already decoded.
+   */
+  async function rows(i0, i1, signal, {pos = false} = {}) {
     requireOpen();
     const a = Math.max(0, Math.min(S.n, Math.floor(+i0 || 0)));
     const b = Math.max(a, Math.min(S.n, Math.floor(+i1 || 0)));
@@ -573,15 +735,29 @@ export function createEngine(opts = {}) {
       }
       return out;
     }
-    // Quantized fallback: only the column chunks that contain [a, b) are fetched.
-    return quantizedRows(a, b, signal);
+    // Quantized fallback: only the column and ids chunks that contain [a, b) are fetched.
+    return quantizedRows(a, b, signal, !!pos);
   }
 
-  async function record(i, signal) {
-    const [r] = await rows(i, i + 1, signal);
+  /**
+   * Id carried by a rows() row: `_id` of a quantized row (from the ids chunk), or the first
+   * row-chunk column (the id key) of an exact row.
+   */
+  function carriedId(r) {
+    if (r._quantized) return r._id === null || r._id === undefined ? null : String(r._id);
+    const key = S.man.rows && Array.isArray(S.man.rows.cols) ? S.man.rows.cols[0] : null;
+    if (!key || !Object.prototype.hasOwnProperty.call(r, key)) return null;
+    const v = r[key];
+    return v === null || v === undefined ? null : String(v);
+  }
+
+  /** One row with `_id` and `_limits`. opts.pos as for rows(). */
+  async function record(i, signal, {pos = false} = {}) {
+    const [r] = await rows(i, i + 1, signal, {pos});
     if (!r) return null;
-    await ensureIds(signal);
-    r._id = S.ids.get(i);
+    // the row chunk carries the id: no ids file is read (IMPLEMENTATION_NOTES 99)
+    const cid = carriedId(r);
+    r._id = cid !== null ? cid : await idAt(r._i, signal);
     const lim = {};
     for (const c of S.man.cols) {
       if (!c.limits) continue;
@@ -801,13 +977,37 @@ export function createEngine(opts = {}) {
 
   const handlers = {
     async open({url}, ctx) {
-      S.url = new URL(url, (typeof location !== 'undefined' && location.href) || undefined).toString();
-      const man = await fetchJSON(S.url, {...fopts, signal: ctx && ctx.signal});
+      const abs = new URL(url, (typeof location !== 'undefined' && location.href) || undefined).toString();
+      const signal = ctx && ctx.signal;
+      let man = null;
+      const pf = opts.prefetch;
+      if (pf && pf.url === abs) {
+        // the manifest request started from top-level worker code (IMPLEMENTATION_NOTES 101)
+        try {
+          man = await raceAbort(pf.promise, signal);
+        } catch (err) {
+          // a failed prefetch (HTTP or network) is retried once by the normal fetch below
+          if (!(err instanceof FetchError)) throw err;
+          man = null;
+        }
+      }
+      if (!man) man = await fetchJSON(abs, {...fopts, signal});
       if (!man || !Array.isArray(man.cols) || !Number.isInteger(man.n)) throw new Error(`${url}: not a pk-catalog manifest`);
+      const starts = catalogChunkStarts(man);
+      S.url = abs;
       S.man = man;
       S.n = man.n;
-      S.chunkRows = man.chunk_rows || CHUNK_ROWS;
+      S.starts = starts;
       S.metas = new Map(man.cols.map((c) => [c.key, c]));
+      S.cols.clear();
+      S.qchunks.clear();
+      S.rowChunks.clear();
+      S.idChunks.clear();
+      S.ids = null;
+      S.idsP = null;
+      S.pos = null;
+      S.posP = null;
+      S.decIndex = null;
       return {n: man.n, manifest: man, url: S.url};
     },
 
@@ -962,22 +1162,34 @@ export function createEngine(opts = {}) {
       return withTransfer(copy, [copy]);
     },
 
-    async rows({i0, i1}, ctx) {
-      return rows(i0, i1, ctx.signal);
+    async rows({i0, i1, pos = false}, ctx) {
+      return rows(i0, i1, ctx.signal, {pos});
     },
 
-    async record({i}, ctx) {
-      return record(i, ctx.signal);
+    async record({i, pos = false}, ctx) {
+      return record(i, ctx.signal, {pos});
     },
 
     async id({i}, ctx) {
-      await ensureIds(ctx.signal);
-      return S.ids.get(i);
+      return idAt(i, ctx.signal);
     },
 
     async ids({idx}, ctx) {
-      await ensureIds(ctx.signal);
-      return Array.from(idx || [], (i) => S.ids.get(i));
+      return idsAt(idx, ctx.signal);
+    },
+
+    /**
+     * Rows of a list of ids in one pass over every ids chunk (IMPLEMENTATION_NOTES 102): exact id
+     * first (first stored row wins), then, with `aliases` (default true), the alias file.
+     * Returns an Int32Array (-1 when missing).
+     */
+    async resolveIds({ids, aliases = true}, ctx) {
+      requireOpen();
+      const list = Array.from(ids || [], (s) => String(s));
+      if (!list.length) return new Int32Array(0);
+      const ix = await ensureIds(ctx.signal);
+      const out = ix.rowsOf(list, {aliases: aliases !== false});
+      return withTransfer(out, [out]);
     },
 
     async find({text, limit = 50}, ctx) {
@@ -1037,6 +1249,7 @@ export function createEngine(opts = {}) {
 
 // Running as a module worker: serve the engine on the worker scope.
 if (typeof WorkerGlobalScope !== 'undefined' && typeof self !== 'undefined' && self instanceof WorkerGlobalScope) {
-  serve(self, createEngine().handlers, {getStats});
+  const prefetch = startPrefetch(self.location.href);
+  serve(self, createEngine({prefetch}).handlers, {getStats});
 }
 

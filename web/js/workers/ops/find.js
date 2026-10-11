@@ -119,44 +119,76 @@ export class IdIndex {
     return mask;
   }
 
-  /** Stored rows for a list of ids (exact id first, then alias); -1 when unknown. */
-  rowsOf(ids) {
-    const want = new Map();
-    ids.forEach((id, k) => {
-      const s = String(id);
-      if (!want.has(s)) want.set(s, []);
-      want.get(s).push(k);
+  /**
+   * Stored rows for a list of ids: the first stored row whose id equals the text exactly (byte
+   * comparison), then, with `aliases` (default true), the alias file entry; -1 when unknown.
+   * One pass over the ids (IMPLEMENTATION_NOTES 102): each wanted id is keyed by an FNV-1a hash
+   * of its UTF-8 bytes, rows are hashed only when their byte length is one a wanted id has, and
+   * the scan stops once every wanted id is found. Returns an Int32Array.
+   */
+  rowsOf(ids, {aliases = true} = {}) {
+    const list = Array.from(ids || [], (s) => String(s));
+    const out = new Int32Array(list.length).fill(-1);
+    if (!list.length) return out;
+    const want = new Map(); // text -> {bytes, pos: [k...], row}
+    list.forEach((s, k) => {
+      let w = want.get(s);
+      if (!w) {
+        w = {bytes: enc.encode(s), pos: [], row: -1};
+        want.set(s, w);
+      }
+      w.pos.push(k);
     });
-    const out = new Int32Array(ids.length).fill(-1);
-    // one pass over the ids with a hash lookup per row (bounded by the request size)
-    const qbytes = new Map();
-    for (const s of want.keys()) qbytes.set(s, enc.encode(s));
-    const byLen = new Map();
-    for (const [s, b] of qbytes) {
-      if (!byLen.has(b.length)) byLen.set(b.length, []);
-      byLen.get(b.length).push(s);
+    let maxLen = 0;
+    for (const w of want.values()) maxLen = Math.max(maxLen, w.bytes.length);
+    const lenOK = new Uint8Array(maxLen + 1);
+    const byHash = new Map(); // hash -> [w...]
+    for (const w of want.values()) {
+      lenOK[w.bytes.length] = 1;
+      const h = fnv1a(w.bytes, 0, w.bytes.length);
+      const l = byHash.get(h);
+      if (l) l.push(w);
+      else byHash.set(h, [w]);
     }
-    for (const c of this.chunks) {
+    let left = want.size;
+    scan: for (const c of this.chunks) {
       const {offsets, blob, n} = c.str;
       for (let i = 0; i < n; i++) {
         const a = offsets[i], len = offsets[i + 1] - a;
-        const cands = byLen.get(len);
+        if (len > maxLen || !lenOK[len]) continue;
+        const cands = byHash.get(fnv1a(blob, a, len));
         if (!cands) continue;
-        for (const s of cands) {
-          const b = qbytes.get(s);
+        for (const w of cands) {
+          if (w.row >= 0 || w.bytes.length !== len) continue;
+          const q = w.bytes;
           let k = 0;
-          for (; k < len; k++) if (blob[a + k] !== b[k]) break;
-          if (k === len) {
-            for (const pos of want.get(s)) if (out[pos] < 0) out[pos] = c.start + i;
-          }
+          while (k < len && blob[a + k] === q[k]) k++;
+          if (k !== len) continue;
+          w.row = c.start + i;
+          if (--left === 0) break scan;
         }
       }
     }
-    ids.forEach((id, k) => {
-      if (out[k] < 0) out[k] = this.alias(String(id));
-    });
+    for (const [s, w] of want) {
+      let r = w.row;
+      if (r < 0 && aliases) {
+        r = this.alias(s);
+        if (!(r >= 0 && r < this.n)) r = -1;
+      }
+      if (r >= 0) for (const k of w.pos) out[k] = r;
+    }
     return out;
   }
+}
+
+/** 32-bit FNV-1a hash of bytes [a, a + len) of `u8`. */
+export function fnv1a(u8, a, len) {
+  let h = 0x811c9dc5;
+  for (let k = a, e = a + len; k < e; k++) {
+    h ^= u8[k];
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
 }
 
 // ------------------------------------------------------------------ coordinates

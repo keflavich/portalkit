@@ -10,7 +10,8 @@
 //  5. mount the layout (pane modules imported lazily through core/registry.js)
 //  6. <body data-caps> (enabled caps, space separated) and data-tier ("pane:tier ...")
 //  7. bind hash, keys and theme; install window.__pk when ?pktest=1
-//  8. emit 'ready' {ms}
+//  8. emit 'ready' {ms}; app.afterFirstPaint() resolves once no visible pane is loading, at the
+//     next idle callback (IMPLEMENTATION_NOTES 100)
 //
 // App = {page, store, hub, layout, selections: Map<ds, Selection>, caps: Set<string>, emit, on,
 //        gpuBudget (one gl/budget.js Budget per page; panes never create one),
@@ -49,6 +50,76 @@ export const PREFETCH_IDS_MAX = 1000;
  * (DataClient.export format 'ids') instead of one DataClient.find call per id.
  */
 export const RESOLVE_BATCH_MIN = 16;
+
+/** requestIdleCallback timeout of app.afterFirstPaint (IMPLEMENTATION_NOTES 100). */
+export const FIRST_PAINT_IDLE_TIMEOUT_MS = 1500;
+
+/**
+ * Longest wait after `ready` for the visible panes to leave the loading state before
+ * app.afterFirstPaint resolves anyway (with a console warning), so a pane whose mount waits on
+ * deferred data cannot hold every deferred load back for good.
+ */
+export const FIRST_PAINT_MAX_WAIT_MS = 30000;
+
+/** True while a visible `section.pk-pane` under `root` has data-state="loading". */
+export function visiblePanesLoading(root) {
+  if (!root || typeof root.querySelectorAll !== 'function') return false;
+  for (const s of root.querySelectorAll('section.pk-pane[data-state="loading"]')) {
+    const shown = s.offsetParent !== null || (typeof s.getClientRects === 'function' && s.getClientRects().length > 0);
+    if (shown) return true;
+  }
+  return false;
+}
+
+/**
+ * Promise that resolves once (to undefined) when no visible pane under `root` is loading, at the
+ * next idle callback (`requestIdleCallback` with a FIRST_PAINT_IDLE_TIMEOUT_MS timeout; a short
+ * timer where it is missing). The pane states are re-checked on DOM attribute changes and every
+ * `poll` ms. opts: {loading(root) -> bool, idle(cb, {timeout}), poll (ms, default 100),
+ * maxWaitMs (default FIRST_PAINT_MAX_WAIT_MS), MutationObserver (null disables observing)}.
+ */
+export function whenFirstPaint(root, opts = {}) {
+  const loading = opts.loading || visiblePanesLoading;
+  const idle = opts.idle || ((cb, o) => {
+    if (typeof requestIdleCallback === 'function') requestIdleCallback(cb, o);
+    else setTimeout(cb, 16);
+  });
+  const poll = opts.poll ?? 100;
+  const maxWaitMs = opts.maxWaitMs ?? FIRST_PAINT_MAX_WAIT_MS;
+  const MO = opts.MutationObserver !== undefined ? opts.MutationObserver
+    : (typeof MutationObserver === 'function' ? MutationObserver : null);
+  return new Promise((resolve) => {
+    let done = false;
+    let timer = null;
+    let guard = null;
+    let mo = null;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      if (timer !== null) clearInterval(timer);
+      if (guard !== null) clearTimeout(guard);
+      if (mo) mo.disconnect();
+      idle(() => resolve(), {timeout: FIRST_PAINT_IDLE_TIMEOUT_MS});
+    };
+    const check = () => {
+      if (!done && !loading(root)) finish();
+    };
+    check();
+    if (done) return;
+    if (MO && root) {
+      mo = new MO(check);
+      mo.observe(root, {subtree: true, attributes: true, attributeFilter: ['data-state', 'class', 'hidden', 'style']});
+    }
+    timer = setInterval(check, poll);
+    if (Number.isFinite(maxWaitMs) && maxWaitMs >= 0) {
+      guard = setTimeout(() => {
+        if (done) return;
+        console.warn(`afterFirstPaint: panes still loading ${maxWaitMs} ms after ready; releasing deferred loads`);
+        finish();
+      }, maxWaitMs);
+    }
+  });
+}
 
 /**
  * First stored row of each wanted id in `text`, the newline-separated id list in stored order
@@ -331,6 +402,13 @@ async function bootInner(t0, hooks) {
     gpuBudget: new Budget(),
   };
 
+  // First paint signal (IMPLEMENTATION_NOTES 100): one promise per page, resolved after the
+  // 'ready' event once no visible pane is loading, at the next idle callback. Deferred loads
+  // (whole columns, pos, ids) wait on it; panes may call it during mount.
+  let firstPaintResolve;
+  const firstPaint = new Promise((r) => { firstPaintResolve = r; });
+  app.afterFirstPaint = () => firstPaint;
+
   // 3. hub + manifest prefetch -----------------------------------------------------------
   const hub = createHub(page, store);
   app.hub = hub;
@@ -347,6 +425,10 @@ async function bootInner(t0, hooks) {
       const p = Promise.resolve(hub.catalog(ds));
       app.catalogs.set(ds, p);
       p.then((client) => ensureSelection(ds, client), () => {});
+      // rows()/record() read the whole pos file only after the first paint (note 99)
+      Promise.all([p, firstPaint]).then(([client]) => {
+        if (client && typeof client.allowPositions === 'function') client.allowPositions();
+      }, () => {});
     }
     return app.catalogs.get(ds);
   };
@@ -428,23 +510,36 @@ async function bootInner(t0, hooks) {
 
   /**
    * ids -> stored row indices (-1 when not found). A row matches when its id equals the text
-   * (searched through DataClient.find, which also returns substring hits) or when the text is
-   * one of its aliases (exact lookup in the alias file). Substring hits never count.
-   * RESOLVE_BATCH_MIN or more unknown ids (or any number once the list is cached) are matched in
-   * one pass over the catalog's id list (one worker call, then kept per dataset) and then through
-   * the alias file; only ids containing line breaks (which the id list cannot hold) still go
-   * through DataClient.find one by one.
+   * exactly (first stored row wins) or when the text is one of its aliases (alias file); substring
+   * hits never count. Ids resolved before answer from a per-dataset cache; the rest go to the
+   * worker in one DataClient.resolveIds pass (IMPLEMENTATION_NOTES 102). Clients without
+   * resolveIds (test doubles) use the id-list / find path below.
    */
+  const resolved = new Map();     // ds -> Map(text -> row), exact ids and aliases
   app.resolveIds = async (ds, ids) => {
     const client = await app.catalog(ds);
     const list = Array.from(ids || [], (raw) => String(raw));
     const out = new Array(list.length).fill(-1);
     const known = idIndex.get(ds);
+    if (!resolved.has(ds)) resolved.set(ds, new Map());
+    const memo = resolved.get(ds);
     let todo = [];
     list.forEach((id, k) => {
-      const i = known && known.get(id);
+      let i = known && known.get(id);
+      if (i === undefined) i = memo.get(id);
       if (i !== undefined) out[k] = i; else todo.push(k);
     });
+    if (todo.length && typeof client.resolveIds === 'function') {
+      const uniq = Array.from(new Set(todo.map((k) => list[k])));
+      const rows = await client.resolveIds(uniq, {aliases: true});
+      const at = new Map(uniq.map((id, j) => [id, rows[j]]));
+      for (const k of todo) {
+        const i = at.get(list[k]);
+        out[k] = Number.isInteger(i) ? i : -1;
+      }
+      for (const [id, i] of at) if (Number.isInteger(i) && i >= 0) memo.set(id, i);
+      return out;
+    }
     if (todo.length && (todo.length >= RESOLVE_BATCH_MIN || idLists.has(ds)) && typeof client.export === 'function') {
       const lineSafe = (id) => !/[\r\n]/.test(id);
       const found = matchIdList(await idListText(ds, client), new Set(todo.map((k) => list[k]).filter(lineSafe)));
@@ -839,6 +934,7 @@ async function bootInner(t0, hooks) {
   const ms = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
   app.readyMs = ms;
   store.emit('ready', {ms});
+  whenFirstPaint(root).then(() => firstPaintResolve());
   return app;
 
   function openHelp() {

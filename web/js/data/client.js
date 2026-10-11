@@ -32,11 +32,20 @@ async function makeLocal(opts) {
   return {rpc: createLocalRpc(eng.handlers, {getStats, onProgress: opts._onProgress}), local: true};
 }
 
-function makeWorker(opts) {
+/**
+ * Worker script URL for a catalog: data.worker.js?m=<encodeURIComponent(manifest url)>, so the
+ * worker starts the manifest fetch from its top-level code (IMPLEMENTATION_NOTES 101).
+ */
+export function workerUrl(manifestUrl, base = import.meta.url) {
+  const u = new URL('../workers/data.worker.js', base);
+  return `${u.href}?m=${encodeURIComponent(String(manifestUrl))}`;
+}
+
+function makeWorker(opts, manifestUrl) {
   if (opts.worker === false || typeof Worker !== 'function') return null;
   let w;
   try {
-    w = new Worker(new URL('../workers/data.worker.js', import.meta.url), {type: 'module'});
+    w = new Worker(workerUrl(manifestUrl), {type: 'module'});
   } catch (err) {
     // SecurityError (file://, CSP) or TypeError (no module workers): run in-thread instead.
     if (err instanceof TypeError || (typeof DOMException === 'function' && err instanceof DOMException)) return null;
@@ -64,7 +73,7 @@ export class DataClient {
       if (progressFn) progressFn(p);
     };
     const o = {...opts, _onProgress: relay};
-    let h = makeWorker(o);
+    let h = makeWorker(o, abs);
     let info;
     if (h) {
       try {
@@ -102,6 +111,7 @@ export class DataClient {
     this._selPushed = -1;
     this._recLRU = new LRU(RECORD_LRU);
     this._recToken = 0;
+    this._posAllowed = false;
     this._recChannels = new Map(); // channel -> {ac: AbortController, superseded}
     this._applySeq = 0;
     this._idCache = new LRU(4096);
@@ -235,8 +245,35 @@ export class DataClient {
     return this._call('bin2d', {view, nx, ny, mask, xr: opts.xr ?? null, yr: opts.yr ?? null}, {signal: opts.signal});
   }
 
+  /**
+   * Rows [i0, i1) (exact row chunks, or the quantized fallback from the column chunks).
+   * opts: {signal, pos}. On the quantized fallback pos is one whole-catalog file, so ra/dec are
+   * filled only when pos is already decoded or the read asks for it: opts.pos (default: true
+   * after allowPositions(), i.e. after the page's first paint; IMPLEMENTATION_NOTES 99). Rows
+   * read without positions carry ra = dec = null and `_posDeferred: true`.
+   */
   rows(i0, i1, opts = {}) {
-    return this._call('rows', {i0, i1}, {signal: opts.signal});
+    return this._call('rows', {i0, i1, pos: this._wantPos(opts)}, {signal: opts.signal});
+  }
+
+  /**
+   * Let rows()/record() load pos by default (boot calls this after app.afterFirstPaint(),
+   * IMPLEMENTATION_NOTES 99/100). Before it, the quantized fallback leaves ra/dec null unless pos
+   * is already decoded or the caller passes {pos: true}.
+   */
+  allowPositions() {
+    this._posAllowed = true;
+  }
+
+  _wantPos(opts) {
+    return opts && opts.pos !== undefined ? !!opts.pos : this._posAllowed;
+  }
+
+  /** Cached record row for i, or undefined when absent or when it lacks positions now wanted. */
+  _cachedRecord(i, wantPos) {
+    const r = this._recLRU.get(i);
+    if (r && wantPos && r._posDeferred) return undefined;
+    return r;
   }
 
   /**
@@ -253,7 +290,8 @@ export class DataClient {
   /**
    * One row (exact chunk or quantized fallback) with `_limits`. LRU of RECORD_LRU rows.
    * Accepts record(i, opts) and record(ds, i, opts) (the ds is this client's dataset).
-   * opts: {signal, token, channel}.
+   * opts: {signal, token, channel, pos}. `pos` as for rows(): ra/dec on the quantized fallback
+   *   (a cached row read without positions is re-read when they are wanted).
    * - With `channel` (a non-empty string), a new call aborts the previous unfinished call on the
    *   same channel, which then resolves to null; calls on other channels are unaffected
    *   (IMPLEMENTATION_NOTES 73).
@@ -278,9 +316,10 @@ export class DataClient {
 
   async _recordDefault(i, opts) {
     const tok = opts.token !== undefined ? ++this._recToken : null;
-    let r = this._recLRU.get(i);
+    const pos = this._wantPos(opts);
+    let r = this._cachedRecord(i, pos);
     if (r === undefined) {
-      r = await this._call('record', {i}, {signal: opts.signal});
+      r = await this._call('record', {i, pos}, {signal: opts.signal});
       this._recLRU.set(i, r);
     }
     if (tok !== null && tok !== this._recToken) return null;
@@ -303,9 +342,10 @@ export class DataClient {
     const relay = () => entry.ac.abort();
     if (own) own.addEventListener('abort', relay, {once: true});
     try {
-      let r = this._recLRU.get(i);
+      const pos = this._wantPos(opts);
+      let r = this._cachedRecord(i, pos);
       if (r === undefined) {
-        r = await this._call('record', {i}, {signal: entry.ac.signal});
+        r = await this._call('record', {i, pos}, {signal: entry.ac.signal});
         this._recLRU.set(i, r);
       }
       if (entry.superseded) return null;
@@ -326,6 +366,19 @@ export class DataClient {
     const s = await this._call('id', {i});
     this._idCache.set(i, s);
     return s;
+  }
+
+  /**
+   * Stored rows of a list of ids in one worker pass (IMPLEMENTATION_NOTES 102): a row matches
+   * when its id equals the text (first stored row wins), else, with opts.aliases (default true),
+   * when the text is one of its aliases. Resolves to an Int32Array aligned with `ids` (-1 when
+   * missing). Loads every ids chunk (and the alias file) once. opts: {aliases, signal}.
+   */
+  async resolveIds(ids, opts = {}) {
+    const list = Array.from(ids || [], (s) => String(s));
+    if (!list.length) return new Int32Array(0);
+    const r = await this._call('resolveIds', {ids: list, aliases: opts.aliases !== false}, {signal: opts.signal});
+    return r instanceof Int32Array ? r : Int32Array.from(r || []);
   }
 
   find(text, opts = {}) {
