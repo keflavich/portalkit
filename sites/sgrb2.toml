@@ -1,0 +1,37 @@
+# Sgr B2 JWST NIRCam portal (WP20; ARCHITECTURE.md sections 4.1 and 14.7).
+# The legacy portal tree is served publicly through web/public/jwst/sgrb2 and also under
+# web/secure/jwst (exposure "both"); the unified portal is declared public. Its landing page
+# links the secure catalogue manifold, which deploy reports as a login-required link.
+family = "sgrb2"
+adapter = "adapters.sgrb2:ADAPTER"
+tier_default = "B"
+legacy_paths = ["/orange/adamginsburg/jwst/brick/analysis"]
+
+[[portal]]
+id = "sgrb2"
+title = "Sgr B2 JWST NIRCam portal"
+visibility = "public"
+legacy_dir = "/orange/adamginsburg/jwst/sgrb2/portal"
+url = "https://data.rc.ufl.edu/pub/adamginsburg/jwst/sgrb2/portal/unified/"
+inputs = [
+    "/orange/adamginsburg/jwst/sgrb2/catalogs/basic_merged_indivexp_photometry_tables_merged_resbgsub_m8_dedup.fits",
+    "/orange/adamginsburg/jwst/sgrb2/portal/data/mapccd/*.f32.gz",
+    "/orange/adamginsburg/jwst/sgrb2/portal/data/mapccd/manifest.json",
+    "/orange/adamginsburg/jwst/sgrb2/portal/sgrb2_seds/sources.json",
+]
+
+[[portal.page]]
+id = "index"
+legacy = ["index.html"]
+
+[[portal.page]]
+id = "sgrb2_map"
+legacy = ["sgrb2_map.html"]
+
+[[portal.page]]
+id = "sgrb2_map_ccd"
+legacy = ["sgrb2_map_ccd.html"]
+
+[[portal.page]]
+id = "sgrb2_seds"
+legacy = ["sgrb2_seds/index.html"]
