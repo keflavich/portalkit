@@ -21,8 +21,9 @@ export const PANE_MODULES = Object.freeze(Object.fromEntries(PANE_TYPES.map((t) 
  * that includes the ui/controls.js widget rules the plot, SED and spectrum panes share
  * (.pk-models, .pk-ctl-group, .pk-ctl-template, .pk-template-scale, .pk-feat-chip,
  * .pk-feat-toggles; IMPLEMENTATION_NOTES 108), so no entry here lists ui.css and no pane sheet
- * repeats those rules. Boot attaches ui.css after mountLayout, so load() also attaches it
- * (WIDGET_CSS) before a pane in WIDGET_PANES mounts; loadCSS reuses the one <link> by href.
+ * repeats those rules. Boot loads ui.css with the base sheets before mountLayout; load() still
+ * attaches it (WIDGET_CSS) before a pane in WIDGET_PANES mounts, as a safety net for panes
+ * mounted outside boot; loadCSS reuses the one <link> by href.
  */
 export const PANE_CSS = Object.freeze({
   list: ['../../css/panes/list.css'],

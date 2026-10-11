@@ -274,7 +274,7 @@ starting.
 108. **Widget CSS.** Shared widget rules (`.pk-models`, `.pk-ctl-group`, `.pk-ctl-template`, `.pk-template-scale`,
     `.pk-feat-chip`, `.pk-feat-toggles`) live only in `css/panes/ui.css`, which boot always loads.
 109. **Aladin prefetch.** A failed fire-and-forget prefetch does not poison later loads: the first sky pane that mounts
-    after a failed prefetch retries once (`loadAladin({retry:true})`).
+    after a failed prefetch retries once (`retryAladinOnce(page)` in sky/aladin.js; sky and wavelength panes use it).
 110. **Extinction vector need.** `extinction_vectors_on_ccd` needs an extinction dataset (`caps.NEEDS`), like note 89; the
     shared `{res}` extinction document satisfies it when it is attachable. A page where the cap stays on always draws
     a vector by default: resolver-built scatter/manifold leaves list `<law>_vector` (note 88), and wavelength/narrative
