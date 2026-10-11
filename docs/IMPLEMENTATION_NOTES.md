@@ -149,7 +149,8 @@ starting.
     when f32 would reorder samples or err by >1% of the smallest spacing). pki1 u8 codes map NaN to 0 (same as lo).
 52. **Images.** Width and height live per role (`roles[role].{url,w,h,thumb}`). `ImageSetSpec.join` naming an item tag
     means "look up `tags[join]`"; otherwise the lookup uses `item.id`. `CatalogResult.row_of` resolves aliases.
-53. **`exact_gpu`** is read with `getattr(col or spec, 'exact_gpu', True)`; it is not yet a `spec.py` field.
+53. **`exact_gpu`** is a field on `CatalogSpec` (default True) and `ColumnSpec` (None inherits the catalog value;
+    False lets a `value` column use f32).
 54. **Filter key resolution** (`resolveKey` / `filters.resolve_key`, goldens in `tests/golden/physics/resolve_key.json`):
     colmap, exact, unique case-insensitive, unique alias, then short-name probes `lower(name)`, the text after the
     last `_`, and `shortName(lower(name))`, each with a `label` tie-break when candidates are filter entries. The
@@ -168,10 +169,10 @@ starting.
     with a single channel `k` and meta `{law, rv}` (no flux channel). Template grid descriptors are
     `templates/grid_<g>.<h8>.json`.
 58. **publish-res.** WP13 calls `portalkit.physics.write_shared(dest, ledger=...)`, which returns `{kind: path relative
-    to dest}`; `res_refs` URLs prepend `{res}/`. A filter's `trans` path is relative to the filters document URL.
-59. **Isochrone documents.** `config.isochrones_document`/`isochrones_file` and `physics.isochrones` produce
-    byte-identical output (tested). `physics.isochrones` is the implementation of record; config delegation is a
-    follow-up.
+    to dest}`; `res_refs` URLs are `"{res}" + path` with no separator (as in §4.3), and `page.res` ends with `/`.
+    A filter's `trans` path is relative to the filters document URL.
+59. **Isochrone documents.** `physics.isochrones.build_document` is the single builder; `config.isochrones_document`
+    calls it and validates the result.
 60. **Picking.** A pick ViewRef carries `kx`, `ky` (pixels per data unit, per decade on log axes);
     `DataClient.pick` rejects without them. Plot panes (WP07/WP08/WP09/WP10) add them.
 61. **Projections.** `DataClient.project(spec, {token, pane})` caches per pane+token; a `{kind:'proj'}` ViewRef looks
@@ -187,3 +188,54 @@ starting.
     them.
 67. **Sky brushes.** The worker treats a sky ViewRef as `{kind:'xy', x:'ra', y:'dec'}` in degrees, with no RA wrap or
     cos(dec) scaling. Current portal fields do not cross RA=0; a wrap-aware sky ViewRef is a follow-up.
+68. **Shared GPU budget.** `boot.js` owns one `Budget` per page as `app.gpuBudget`; panes read it and never create one.
+69. **Pane CSS.** The pane CSS loader maps scatter/manifold/hist to `[<pane>.css, controls.css]`; every UI widget style
+    lives in `css/panes/ui.css`.
+70. **Category `default_off`.** The filter owner (`hub.js` category filters, initialised at boot from the manifest)
+    applies `default_off`; `ui/chips.js` only renders the state.
+71. **Narrative events** (add to §6.10): `narrative:highlight {pane, ds, ids, beat, goto?}` and `narrative:sync {pane}`.
+    Scatter, manifold and sky panes listen for both.
+72. **Empty overlay list.** `ovl=-` encodes an explicitly empty overlay list; an absent `ovl` means the layout default.
+73. **Record channels.** `DataClient.record(ds, i, {channel})` cancels only the previous request on the same channel.
+74. **Sorting.** `DataClient.order(key, dir)` returns a worker-side argsort (Int32Array of rows); list and gallery use
+    it. Id sort uses the same call with `key:'id'`.
+75. **Model controls.** A_V / R_V / template / feature toggles have one implementation (`ui/controls.js`); sed.js and
+    spec/features.js mount it.
+76. **Legend helpers.** `ui/legend.js` exports `isCategory`, `levelColors` and the GPU colour helpers; panes import them.
+77. **Pane titles.** Panes call `ctx.setTitle`; `options.title` seeds the initial title.
+78. **Raster options** accept `x`, `y`, `cell`; detail templates accept `photometry` and `compact`.
+79. **spectrum2d** writes `spec.xr` when `link1d` is on (two-way x link with spectrum1d; add to §6.2).
+80. **Lightbox.** Providers may define `ready`/`encode`/`decode`. `lb=<set>,<k>` opens images.json item k; a null set
+    prefers the Gallery set.
+81. **Image URLs.** images.json item URLs and pki1 `png` sidecar URLs resolve against the page URL (§4.3), with
+    `{res}`/`{assets}` substituted; detail product links resolve against the records index URL.
+82. **Aladin.** The library loads once per page; each sky pane owns one viewer.
+83. **Annotation CSV** header: `id,Target,Program,Object,SlitID,Observation,Visit,VisitGroup,Filename,checklist`.
+84. **Gallery focus** without a catalog is `{ds:<images ds>, i, id}`.
+85. **Landing search** opens one worker per search manifest, lazily on first keystroke.
+86. **Distance modulus.** Scatter folds `dm` into linear-magnitude axes and passes `dm=0` to overlays. The manifold
+    manifest has no `overlays` key; the pane reads `cfg.overlays`.
+87. **Vendored GC renderer** keeps the visibility mask in category slot 3 and supports 4 colormaps.
+88. **Default layout overlays and dims.** `caps.py` default layout gives scatter (and manifold) `options.overlays`
+    (isochrone track ids and `<law>_vector`) when iso/ext datasets are present and the caps are on, and gives the
+    manifold `options.dims` from its manifest on every page (the build already writes it on gc-query/kv-view pages).
+89. **Caps rules need datasets.** `hips_layer_stacking` requires a HiPS document; `live_sed_viewer` requires a filters
+    dataset; `labeled_features_overlay` requires a features dataset.
+90. **Legacy hash mapping.** `boot.js` calls `mapLegacy(grammar, {hash, search, page})`. gc-query `rv=1`, `g`, `fa` are
+    consumed and dropped (no canonical key; canonical `rv` is numeric R_V). Unmappable index params stay in the URL.
+    `+` stays literal in bare-name/specviewer hashes; only query strings and kv-view hashes decode `+` as space.
+91. **Manifold presets.** `<manifold>.frame=<preset>` accepts `axes` presets (two dims with unit weights) as well as
+    `frame` presets.
+92. **Selection hash form.** `hash.js` picks the `sel=` encoding from the selection alone (the shorter of `r:` and
+    `bits:`), so a restored selection writes the same form before and after a reload.
+93. **CSV import.** `app.importCsv(text, {mode})` is the runtime entry; the dialog calls it.
+94. **Test fixtures.** Browser fixtures live in `tests/conftest_browser.py`, registered as a plugin by `tests/e2e` and
+    `tests/perf` conftests. Synthetic fixture stamps hash `portalkit/**/*.py` and `web/**` as well as the generator.
+95. **Build check** expects vendored assets at `_pk/v<ver>/js/core/boot.js`. `check_build` lives in `build.py`;
+    `SiteConfig`/`PortalConfig`/`PageConfig` live in `context.py`. `portalkit.deploy` re-exports `raise_for_plan`.
+96. **GC catalogs.** The build passes an explicit ref to the generated `data/<k>/manifest.json`. The GC u8 tile index
+    is widened to a u16 file in the dataset dir; other GC files are referenced in place.
+97. **Perf budget host.** Measured on a 2-CPU cgroup slice of a loaded 128-core node with SwiftShader WebGL. At the
+    WP12 measurement, 1M brush commit 1.35 s and 1M pan settle 0.48 s met budget; 50k (T1) pan settle 6.6 s and 1M
+    first-paint bytes 2.95 MB (startup fetch of `ids` 5.0 MB and one full column) missed. `PK_PERF_SCALE` scales time
+    budgets only.
