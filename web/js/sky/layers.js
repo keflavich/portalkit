@@ -10,7 +10,7 @@
 // The panel offers a base picker, per-layer toggles and opacity sliders, FITS toggles,
 // bookmarks, and the "Overlays off" / "Defaults" buttons.
 
-import {addImageLayer, hasOpacity, removeImageLayer, setBaseLayer, setLayerOpacity} from './aladin.js';
+import {addImageLayer, hasOpacity, removeImageLayer, setBaseLayer, setLayerOpacity, surveyUrl} from './aladin.js';
 import {escapeHtml} from '../core/fmt.js';
 
 const FITS_ON_OPACITY = 0.9;
@@ -56,7 +56,8 @@ export class SkyLayers {
     this.hips = opts.hips || {base: [], overlays: [], fits: []};
     this.vector = opts.vector || null;
     this.prefix = opts.prefix || 'pk';
-    this.resolve = opts.resolve || ((u) => u);
+    const resolve = opts.resolve || ((u) => u);
+    this.resolve = (u) => surveyUrl(u, resolve);
     this.onChange = opts.onChange || (() => {});
     this.onGoto = opts.onGoto || null;
     this.toast = opts.toast || (() => {});

@@ -221,6 +221,22 @@ export function layerOpacity(layer) {
   return null;
 }
 
+// A CDS HiPS identifier such as `CDS/P/DSS2/color`, `P/2MASS/color` or `ov-gso/P/GLIMPSE/irac1`
+// (no scheme): Aladin resolves it through the MocServer, so it stays as written. Bundle paths never
+// take this shape (they start with data/, _res/ or {assets}).
+const SURVEY_ID = /^(?:[A-Za-z0-9][\w.+-]*\/)?P\/[^\s?#:]+$/;
+
+/** Whether `url` is a CDS HiPS identifier. */
+export function isSurveyId(url) {
+  return typeof url === 'string' && SURVEY_ID.test(url) && !/^(?:data|_res)\//.test(url);
+}
+
+/** A pk-hips/1 layer url for Aladin: CDS ids pass through, everything else resolves with `resolve`. */
+export function surveyUrl(url, resolve) {
+  if (isSurveyId(url)) return url;
+  return resolve ? String(resolve(url)) : url;
+}
+
 /** A HiPS image layer object for `url` (null when the build only takes URL strings). */
 export function makeHiPS(al, A, url, name, opts = {}) {
   const o = Object.assign({name}, opts);

@@ -20,7 +20,7 @@
 import {SETTLE_MS} from '../core/constants.js';
 import {fmtCount, fmtRA, fmtDec, fmtAngle, escapeHtml} from '../core/fmt.js';
 import {aladinFor, addImageLayer, errorNote, errorText, hasOpacity, libState, removeImageLayer, retryAladinOnce,
-  setLayerOpacity} from '../sky/aladin.js';
+  setLayerOpacity, surveyUrl} from '../sky/aladin.js';
 import {defaultBase} from '../sky/layers.js';
 import {SkyMarkers} from '../sky/markers.js';
 import {initialView} from './sky.js';
@@ -153,7 +153,7 @@ export function mount(el, ctx) {
     let r = S.mounted.get(i);
     if (r) return r;
     const g = S.rungs[i];
-    const url = hub.resolve(g.url).toString();
+    const url = surveyUrl(g.url, hub.resolve);
     const layer = addImageLayer(al, A, url, layerName(i), {maxOrder: g.maxOrder, imgFormat: g.format});
     r = {layer, alpha: null, seq: ++S.seq};
     S.mounted.set(i, r);
@@ -377,7 +377,7 @@ export function mount(el, ctx) {
     S.home = initialView(null, hips, null);
     const usingRungs = !!(hips && Array.isArray(hips.rungs) && hips.rungs.length);
     const backdrop = usingRungs ? defaultBase(hips) : S.rungs[0];
-    const survey = backdrop ? hub.resolve(backdrop.url).toString() : null;
+    const survey = backdrop ? surveyUrl(backdrop.url, hub.resolve) : null;
     const hd = aladinFor(id, {page: app.page, view, survey});
     S.h = hd;
     hd.attach(stage);

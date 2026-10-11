@@ -761,6 +761,8 @@ A density grid file holds `nx*ny` u16 values (2-plane shuffled, gz). Counts are 
 | `features.<h8>.json` (res) | `pk-features/1` | `{families:{ice:[{name,w_um,label,kind}],...}}` |
 | `products` record (json) | `products/1` | `{items:[{label,url,kind:"fits"|"png"|"mast"|"link",size?,auth:"public"|"secure"}]}` |
 
+`pk-hips/1` base, overlay and rung `url` values are either a HiPS URL (absolute, or relative to the page) or a CDS HiPS identifier such as `CDS/P/DSS2/color` or `P/2MASS/color`. Identifiers pass through to Aladin unresolved (`isSurveyId` / `surveyUrl` in `web/js/sky/aladin.js`); bundle paths under `data/` or `_res/` are always resolved against the page.
+
 Shared resources (`templates`, `filters`, `extinction`, `features`) are published once to `/orange/adamginsburg/web/public/portalkit-res/` (URL `https://data.rc.ufl.edu/pub/adamginsburg/portalkit-res/`) by `portalkit publish-res`. Content-hashed names make them immutable. A portal built with `--vendor-assets` copies them into `<target>/res/`. This fixes the W51 archive_colors page, which referenced a missing `../templates`.
 
 ### 5.11 Size budgets (checked by `portalkit check`; hard failures unless marked soft)
