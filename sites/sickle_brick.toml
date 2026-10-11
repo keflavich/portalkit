@@ -1,0 +1,93 @@
+# Sickle (JWST 3958) and Brick2221 MIRI F1500W SED portals (WP26; ARCHITECTURE.md 14.8).
+#
+# Two portals, one adapter (adapters/sickle_brick.py), one SESHAT classification table
+# (seshat_results_f1500w_all.csv) and one F2550W mosaic:
+#
+#   sickle     jwst/sickle/sed_portal (a real directory, served publicly through the
+#              web/public/jwst/sickle symlink and under web/secure/jwst, exposure "both").
+#              Declared public to match that exposure (ARCHITECTURE Q1; the intent may be
+#              private, which is an open question). Pages: landing, SED map explorer, manifold.
+#   brick2221  web/public/jwst/brick_2221. The directory also holds the ccds_cmds,
+#              nirspec_6927 and cloudc galleries of dirgallery_sites (WP23), so this family
+#              deploys to unified/sickle_brick/. Pages: landing, F1500W explorer, SED gallery.
+#
+# Directories considered and their owners:
+#   jwst/sickle/sed_portal/*.html                                 sickle (this file)
+#   jwst/sickle/sed_figures_f1500w_all/*.png                      sickle images (no legacy page)
+#   web/public/jwst/brick_2221/sed_figures_f1500w_all/*.html      brick2221 (this file)
+#   web/public/jwst/brick_2221/sed_figures_top100_f1500w/gallery.html   brick2221 (top100 preset);
+#       its nested duplicate subdirectory sed_figures_top100_f1500w/ is never read
+#   web/public/jwst/brick_2221/ccds_cmds, nirspec_6927, cloudc   dirgallery_sites (WP23)
+#
+# Legacy deep links: the map and F1500W explorer read `#<rank>` or `#<name>` (bare-name; the
+# rank is the catalogue alias); the manifold wrote `#view=..&x=..&y=..&c=..&star=..` (kv-view).
+family = "sickle_brick"
+adapter = "adapters.sickle_brick:ADAPTER"
+tier_default = "B"
+legacy_paths = ["/orange/adamginsburg/jwst/brick/analysis"]
+
+[[portal]]
+id = "sickle"
+title = "Sickle MIRI SED portal"
+visibility = "public"
+legacy_dir = "/orange/adamginsburg/jwst/sickle/sed_portal"
+url = "https://data.rc.ufl.edu/pub/adamginsburg/jwst/sickle/sed_portal/unified/"
+inputs = [
+    "/blue/adamginsburg/adamginsburg/jwst/brick/seshat_results_f1500w_all.csv",
+    "/orange/adamginsburg/jwst/sickle/sed_portal/sickle_miri_sed_map.html",
+    "/orange/adamginsburg/jwst/sickle/sed_portal/sickle_miri_sed_manifold.html",
+    "/orange/adamginsburg/jwst/sickle/sed_portal/sickle_miri_seds.ecsv",
+    "/orange/adamginsburg/jwst/sickle/sed_figures_f1500w_all/sed_rank*_F1500W*.png",
+    "/orange/adamginsburg/jwst/sickle/images/brick_f2550w_i2d.fits",
+]
+
+[[portal.page]]
+id = "index"
+legacy = []
+
+[[portal.page]]
+id = "sickle_miri_sed_map"
+legacy = ["sickle_miri_sed_map.html"]
+grammar = ["bare-name"]
+
+[[portal.page]]
+id = "sickle_miri_sed_manifold"
+legacy = ["sickle_miri_sed_manifold.html"]
+grammar = ["kv-view", "bare-name"]
+
+[[portal]]
+id = "brick2221"
+title = "Brick2221 MIRI F1500W SED portal"
+visibility = "public"
+legacy_dir = "/orange/adamginsburg/web/public/jwst/brick_2221"
+target_dir = "/orange/adamginsburg/web/public/jwst/brick_2221/unified/sickle_brick"
+url = "https://data.rc.ufl.edu/pub/adamginsburg/jwst/brick_2221/unified/sickle_brick/"
+inputs = [
+    "/blue/adamginsburg/adamginsburg/jwst/brick/seshat_results_f1500w_all.csv",
+    "/orange/adamginsburg/web/public/jwst/brick_2221/sed_figures_f1500w_all/gallery.html",
+    "/orange/adamginsburg/web/public/jwst/brick_2221/sed_figures_f1500w_all/all_f1500w_sources_summary.fits",
+    "/orange/adamginsburg/web/public/jwst/brick_2221/sed_figures_f1500w_all/brick2221_f1500w_seds.ecsv",
+    "/orange/adamginsburg/web/public/jwst/brick_2221/sed_figures_f1500w_all/sed_rank*_F1500W*.png",
+    "/orange/adamginsburg/web/public/jwst/brick_2221/sed_figures_top100_f1500w/sed_rank*_F1500W*.png",
+    "/orange/adamginsburg/jwst/sickle/images/brick_f2550w_i2d.fits",
+]
+
+[[portal.page]]
+id = "index"
+legacy = []
+
+[[portal.page]]
+id = "f1500w_explorer"
+legacy = ["sed_figures_f1500w_all/gallery.html"]
+grammar = ["bare-name"]
+
+# One gallery page serves both jQuery galleries. gallery_legacy.html stays untouched (it is the
+# generator's backup of the first gallery); the top-100 stub opens the top100 facet on the
+# top-100 render role. fac= is b64url('{"top100":["yes"]}').
+[[portal.page]]
+id = "f1500w_gallery"
+legacy = [
+    {file = "sed_figures_f1500w_all/gallery_legacy.html", replace = false},
+    {file = "sed_figures_top100_f1500w/gallery.html", preset = "role=top100&fac=eyJ0b3AxMDAiOlsieWVzIl19"},
+]
+grammar = ["bare-name"]
