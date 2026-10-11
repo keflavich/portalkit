@@ -1,0 +1,149 @@
+/* Sky pane (web/js/panes/sky.js) and the shared sky stage used by the wavelength pane.
+   Colours come from the --pk-* tokens only. */
+
+.pk-sky-pane {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column;
+  min-width: 0; min-height: 0;
+  background: var(--pk-bg);
+  color: var(--pk-fg);
+  font: var(--pk-fs-1)/1.4 var(--pk-font);
+  overflow: hidden;
+}
+
+.pk-sky-stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0; min-height: 120px;
+  background: var(--pk-plot-bg);
+  overflow: hidden;
+}
+
+.pk-aladin-host {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+}
+
+/* Density raster above the Aladin canvas (which draws the HiPS and the catalog markers; at T2
+   only the selected rows are markers, and markers.js redraws those on the raster). It takes no
+   pointer events. The brush layer is above everything. */
+.pk-sky-density {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  pointer-events: none;
+  z-index: 2;
+}
+.pk-sky-brush {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  z-index: 4;
+  pointer-events: none;
+  touch-action: none;
+}
+.pk-sky-brush.pk-active { pointer-events: auto; cursor: crosshair; }
+
+.pk-sky-skel {
+  position: absolute; inset: var(--pk-sp-3);
+  display: flex; align-items: center; justify-content: center;
+  color: var(--pk-fg-3);
+  z-index: 1;
+}
+
+.pk-sky-stage > .pk-error-note,
+.pk-sky-error {
+  position: absolute; left: var(--pk-sp-3); right: var(--pk-sp-3); top: var(--pk-sp-3);
+  z-index: 6;
+  max-width: 560px;
+}
+.pk-sky-error-detail {
+  margin-top: var(--pk-sp-1);
+  color: var(--pk-fg-2);
+  font: var(--pk-fs-0)/1.4 var(--pk-mono);
+  overflow-wrap: anywhere;
+}
+.pk-sky-failed { background: var(--pk-bg-2); }
+
+.pk-sky-notice {
+  flex: 0 0 auto;
+  padding: var(--pk-sp-1) var(--pk-sp-2);
+  background: var(--pk-bg-2);
+  border-top: 1px solid var(--pk-border);
+  color: var(--pk-fg-2);
+  font-size: var(--pk-fs-0);
+  overflow-wrap: anywhere;
+}
+.pk-sky-coord {
+  position: absolute; left: var(--pk-sp-2); bottom: var(--pk-sp-2);
+  z-index: 5;
+  padding: 2px var(--pk-sp-1);
+  border-radius: var(--pk-radius);
+  background: color-mix(in srgb, var(--pk-bg) 80%, transparent);
+  color: var(--pk-fg-2);
+  font: var(--pk-fs-0)/1.3 var(--pk-mono);
+  pointer-events: none;
+  max-width: calc(100% - 2 * var(--pk-sp-2));
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.pk-sky-coord:empty { display: none; }
+.pk-sky-pane > .pk-warn-note { flex: 0 0 auto; margin: var(--pk-sp-1) var(--pk-sp-2); }
+
+/* Brush toolbar in the pane header. */
+.pk-sky-brushbar .pk-btn { padding-inline: var(--pk-sp-2); }
+
+/* Layers panel: an overlay card at the top right of the stage. */
+.pk-sky-panel {
+  position: absolute; top: var(--pk-sp-2); right: var(--pk-sp-2);
+  z-index: 7;
+  width: min(300px, calc(100% - 2 * var(--pk-sp-2)));
+  max-height: calc(100% - 2 * var(--pk-sp-2));
+  overflow: auto;
+  background: var(--pk-bg);
+  color: var(--pk-fg);
+  border: 1px solid var(--pk-border);
+  border-radius: var(--pk-radius);
+  box-shadow: var(--pk-shadow);
+}
+.pk-sky-layers {
+  display: flex; flex-direction: column; gap: var(--pk-sp-2);
+  padding: var(--pk-sp-2) var(--pk-sp-3);
+  font-size: var(--pk-fs-0);
+}
+.pk-sky-sec {
+  margin: var(--pk-sp-1) 0 0;
+  color: var(--pk-fg-3);
+  font-size: var(--pk-fs-0);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.pk-sky-row {
+  display: flex; align-items: center; gap: var(--pk-sp-2);
+  min-width: 0;
+}
+.pk-sky-row select { flex: 1 1 auto; min-width: 0; }
+.pk-sky-row input[type="range"] { flex: 0 1 90px; min-width: 50px; accent-color: var(--pk-accent); }
+.pk-sky-lab { flex: 0 0 auto; color: var(--pk-fg-2); }
+.pk-sky-chk {
+  display: flex; align-items: center; gap: var(--pk-sp-1);
+  flex: 1 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  cursor: pointer;
+}
+.pk-sky-chk input { accent-color: var(--pk-accent); flex: 0 0 auto; }
+.pk-sky-fits-status { flex: 0 0 auto; color: var(--pk-fg-3); }
+.pk-sky-fits-status[data-status="error"] { color: var(--pk-danger); }
+.pk-sky-fits-status[data-status="ready"] { color: var(--pk-ok); }
+.pk-sky-btns { display: flex; flex-wrap: wrap; gap: var(--pk-sp-1); }
+.pk-sky-warn { color: var(--pk-warn); }
+.pk-sky-warn:empty { display: none; }
+.pk-sky-pane select,
+.pk-sky-panel select {
+  background: var(--pk-bg-2); color: var(--pk-fg);
+  border: 1px solid var(--pk-border); border-radius: var(--pk-radius);
+  font: inherit; padding: 2px var(--pk-sp-1);
+}
+
+@media (max-width: 600px) {
+  .pk-sky-panel { left: var(--pk-sp-2); width: auto; }
+  .pk-sky-stage { min-height: 200px; }
+}

@@ -1,0 +1,84 @@
+/* Wavelength pane (web/js/panes/wavelength.js). The stage itself is styled by sky.css. */
+
+.pk-wl-pane {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column;
+  min-width: 0; min-height: 0;
+  background: var(--pk-bg);
+  color: var(--pk-fg);
+  font: var(--pk-fs-1)/1.4 var(--pk-font);
+  overflow: hidden;
+  outline: none;
+}
+.pk-wl-pane:focus-visible { box-shadow: inset 0 0 0 2px var(--pk-focus); }
+
+.pk-wl-rail {
+  flex: 0 0 auto;
+  display: flex; flex-direction: column; gap: var(--pk-sp-1);
+  padding: var(--pk-sp-2) var(--pk-sp-3) var(--pk-sp-2);
+  background: var(--pk-bg-2);
+  border-top: 1px solid var(--pk-border);
+  min-width: 0;
+}
+
+.pk-wl-labels {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--pk-sp-2);
+  min-width: 0;
+}
+.pk-wl-now { font-size: var(--pk-fs-2); font-weight: 600; color: var(--pk-fg); }
+.pk-wl-fade { color: var(--pk-fg-2); font-size: var(--pk-fs-0); }
+
+.pk-wl-track { position: relative; min-width: 0; }
+.pk-wl-slider {
+  display: block;
+  width: 100%;
+  margin: 0;
+  accent-color: var(--pk-accent);
+}
+.pk-wl-notches {
+  position: relative;
+  height: 1.9em;
+  margin: 2px 9px 0;
+}
+.pk-wl-notch {
+  position: absolute; top: 0;
+  left: var(--pk-wl-at, 0%);
+  transform: translateX(-50%);
+  max-width: 7em;
+  padding: 1px var(--pk-sp-1);
+  border: 1px solid transparent;
+  border-radius: var(--pk-radius);
+  background: transparent;
+  color: var(--pk-fg-2);
+  font: var(--pk-fs-0)/1.3 var(--pk-font);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  cursor: pointer;
+}
+.pk-wl-notch::before {
+  content: "";
+  position: absolute; left: 50%; top: -4px;
+  width: 1px; height: 4px;
+  background: var(--pk-fg-3);
+}
+.pk-wl-notch:hover { color: var(--pk-fg); background: var(--pk-bg-3); }
+.pk-wl-notch[aria-pressed="true"] {
+  color: var(--pk-accent-fg);
+  background: var(--pk-accent);
+  border-color: var(--pk-accent);
+}
+.pk-wl-notch:focus-visible { outline: 2px solid var(--pk-focus); outline-offset: 1px; }
+
+.pk-wl-ctrls { display: flex; flex-wrap: wrap; align-items: center; gap: var(--pk-sp-2); }
+.pk-wl-speed {
+  background: var(--pk-bg); color: var(--pk-fg);
+  border: 1px solid var(--pk-border); border-radius: var(--pk-radius);
+  font: inherit; padding: 2px var(--pk-sp-1);
+}
+.pk-wl-note { color: var(--pk-fg-2); font-size: var(--pk-fs-0); overflow-wrap: anywhere; }
+.pk-wl-note:empty { display: none; }
+.pk-wl-warn { margin: 0; }
+
+@media (max-width: 600px) {
+  .pk-wl-rail { padding-inline: var(--pk-sp-2); }
+  .pk-wl-notch { max-width: 4.5em; }
+}

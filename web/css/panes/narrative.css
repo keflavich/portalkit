@@ -1,0 +1,84 @@
+/* Narrative pane (web/js/panes/narrative.js): scrolling beats beside a sticky sky or scatter pane. */
+
+.pk-nar-pane {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column;
+  min-width: 0; min-height: 0;
+  background: var(--pk-bg);
+  color: var(--pk-fg);
+  font: var(--pk-fs-2)/1.6 var(--pk-font);
+}
+
+.pk-nar-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto; overflow-x: hidden;
+  padding: 0 var(--pk-sp-4);
+  outline: none;
+  scroll-behavior: smooth;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pk-nar-scroll { scroll-behavior: auto; }
+}
+.pk-nar-scroll:focus-visible { box-shadow: inset 0 0 0 2px var(--pk-focus); }
+
+/* Room above the first beat and below the last one, so each can reach the middle band. */
+.pk-nar-spacer-top { height: 30%; min-height: var(--pk-sp-5); }
+.pk-nar-spacer-bottom { height: 55%; min-height: var(--pk-sp-5); }
+
+.pk-nar-skel { margin: var(--pk-sp-4) 0; }
+
+.pk-nar-beat {
+  margin: 0 0 var(--pk-sp-5);
+  padding: var(--pk-sp-3) var(--pk-sp-4);
+  min-height: 40%;
+  border-left: 3px solid var(--pk-border);
+  border-radius: 0 var(--pk-radius) var(--pk-radius) 0;
+  background: var(--pk-bg);
+  opacity: .55;
+  transition: opacity .25s ease, border-color .25s ease, background .25s ease;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.pk-nar-beat.pk-live {
+  opacity: 1;
+  border-left-color: var(--pk-accent);
+  background: var(--pk-bg-2);
+  cursor: auto;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pk-nar-beat { transition: none; }
+}
+
+.pk-nar-title,
+.pk-nar-body h1, .pk-nar-body h2, .pk-nar-body h3 {
+  margin: 0 0 var(--pk-sp-2);
+  font-size: var(--pk-fs-3);
+  line-height: 1.3;
+  color: var(--pk-fg);
+}
+.pk-nar-body h3 { font-size: var(--pk-fs-2); }
+.pk-nar-body p { margin: 0 0 var(--pk-sp-3); color: var(--pk-fg); }
+.pk-nar-body a { color: var(--pk-accent); }
+.pk-nar-body code { font-family: var(--pk-mono); font-size: .9em; background: var(--pk-bg-3); padding: 0 3px; border-radius: 3px; }
+.pk-nar-body img, .pk-nar-body figure { max-width: 100%; height: auto; }
+.pk-nar-body table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; font-size: var(--pk-fs-1); }
+.pk-nar-body th, .pk-nar-body td { border: 1px solid var(--pk-border); padding: 2px var(--pk-sp-2); }
+.pk-nar-body ul, .pk-nar-body ol { padding-left: 1.4em; margin: 0 0 var(--pk-sp-3); }
+
+/* Text-to-sky phrases. */
+.pk-nar-body [data-ids] {
+  cursor: help;
+  border-bottom: 1px dashed var(--pk-focus);
+}
+.pk-nar-body [data-ids]:hover,
+.pk-nar-body [data-ids].pk-on {
+  background: var(--pk-focus);
+  color: var(--pk-bg);
+  border-bottom-color: transparent;
+}
+
+@media (max-width: 600px) {
+  .pk-nar-scroll { padding: 0 var(--pk-sp-2); }
+  .pk-nar-beat { padding: var(--pk-sp-2) var(--pk-sp-3); }
+}
