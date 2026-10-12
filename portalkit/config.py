@@ -58,15 +58,16 @@ from typing import Any, Iterable, Mapping
 from . import caps as capsmod
 from .caps import CapsResult, CatInfo, PageData, iter_panes, page_data
 from .render import markdown_lite
-from .schema import OPTIONAL_PANE_OPTIONS, validate_hips, validate_isochrones, \
-    validate_narrative, validate_overlays, validate_page
+from .schema import OPTIONAL_PANE_OPTIONS, foreign_base_error, validate_hips, \
+    validate_isochrones, validate_narrative, validate_overlays, validate_page
 from .spec import (CatalogSpec, DatasetSpec, ExtinctionSpec, HipsSpec, ImageSetSpec,
                    IsochroneSpec, NarrativeSpec, OverlaySpec, PageSpec, ReadmeSpec, RecordSetSpec)
 from .version import VERSION, asset_base, res_base
 
 __all__ = [
     "ConfigError", "KNOWN_PREFIXES", "ALADIN_CDN", "ALADIN_MIRROR", "README_INLINE_MAX",
-    "RES_KINDS", "assemble", "dataset_ref", "check_url", "validate_keys", "readme_html",
+    "RES_KINDS", "assemble", "dataset_ref", "check_url", "check_foreign_url",
+    "foreign_records_ref", "validate_keys", "readme_html",
     "readme_file_name", "hips_document", "overlays_document", "narrative_document",
     "isochrones_document", "isochrones_file", "SECURE_PREFIX", "PROVENANCE_MAX",
     "provenance_summary",
@@ -144,6 +145,8 @@ def dataset_ref(ds: str, spec: DatasetSpec, refs: Mapping[str, Mapping] | None =
             ref["context"] = True
         return ref
     if kind == "records":
+        if getattr(spec, "foreign", None) is not None:
+            return foreign_records_ref(ds, spec)
         return {"kind": "records", "url": f"data/{ds}/index.json", "catalog": spec.catalog,
                 "record": spec.kind}
     if kind == "images":
@@ -172,6 +175,42 @@ def _dot_segment(path: str) -> bool:
     p = path.split("#", 1)[0].split("?", 1)[0]
     p = urllib.parse.unquote(p).replace("\\", "/")
     return ".." in p.split("/")
+
+
+def foreign_records_ref(ds: str, spec: RecordSetSpec) -> dict:
+    """The page.json DatasetRef of a foreign record set (section 5.6, contract (A)).
+
+    ``url`` is the foreign index (``<base><key>/index.json``), ``base`` the foreign portal's
+    ``data/`` prefix (the JS resolves shard URLs against the index URL, which lies under
+    ``base``) and ``id_column`` the catalog column holding the foreign record id. Raises
+    ValueError for a filesystem path, a missing trailing '/' or an empty/unsafe key."""
+    fr = spec.foreign
+    err = foreign_base_error(fr.base)
+    if err is not None:
+        raise ValueError(f"dataset {ds!r}: foreign records base {err}")
+    if not isinstance(fr.key, str) or not fr.key or "/" in fr.key or "\\" in fr.key \
+            or fr.key in (".", ".."):
+        raise ValueError(f"dataset {ds!r}: foreign records key {fr.key!r} must be one path segment")
+    ref = {"kind": "records", "url": f"{fr.base}{fr.key}/index.json", "catalog": spec.catalog,
+           "record": spec.kind, "base": fr.base}
+    if fr.id_column:
+        ref["id_column"] = fr.id_column
+    return ref
+
+
+def check_foreign_url(url: Any, known_prefixes: Iterable[str] = ()) -> str | None:
+    """:func:`check_url` for a foreign records URL: a page-relative URL may climb out of
+    the staged tree with leading ``..`` segments (to a sibling portal on the same host);
+    everything else follows :func:`check_url` (no filesystem paths, absolute URLs under a
+    known exposure prefix)."""
+    if isinstance(url, str) and not re.match(r"[A-Za-z][A-Za-z0-9+.-]*:", url) \
+            and not url.startswith(("/", "\\")):
+        rest = url
+        while rest.startswith("../"):
+            rest = rest[3:]
+        if rest != url:
+            return check_url(rest, known_prefixes) if rest else "foreign URL has no path"
+    return check_url(url, known_prefixes)
 
 
 def check_url(url: Any, known_prefixes: Iterable[str] = ()) -> str | None:
@@ -390,6 +429,25 @@ def _provenance(pd: PageData, cats: Iterable[str]) -> dict:
 # key validation
 # ---------------------------------------------------------------------------
 
+def _dim_alias_errors(alias: Mapping, pd: PageData) -> list[str]:
+    """``page.legacy.dim_alias`` (contract (B)): every value must be a dim of the page's
+    dataset (a stored or virtual key of a foreground catalog on the page)."""
+    errs: list[str] = []
+    keys: set[str] = set()
+    for k in pd.ids:
+        info = pd.cats.get(k)
+        if info is not None and not info.context:
+            keys |= set(info.cols) | set(info.virtual) | set(info.manifold_dims or ())
+    for lk, uk in alias.items():
+        if not isinstance(lk, str) or not lk:
+            errs.append(f"page.legacy.dim_alias: legacy key {lk!r} must be a non-empty string")
+        elif not isinstance(uk, str) or uk not in keys:
+            errs.append(f"page.legacy.dim_alias.{lk}: {uk!r} is not a dim of the page's dataset "
+                        f"({', '.join(sorted(keys)[:12]) or 'no catalog'}"
+                        f"{', ...' if len(keys) > 12 else ''})")
+    return errs
+
+
 def _pane_catalog(leaf: Mapping, pd: PageData, refs: Mapping[str, Mapping]) -> str | None:
     ds = leaf.get("dataset")
     if isinstance(ds, str):
@@ -562,9 +620,10 @@ def validate_keys(doc: Mapping, pd: PageData) -> list[str]:
                     need(f"{path}.dims", cat, d)
             _check_dim_overlays(errs, path, o, dim_ids)
             fr = o.get("frame")
-            if isinstance(fr, str) and fr != "pca" and info is not None and fr not in info.frames:
+            if isinstance(fr, str) and fr != "pca" and info is not None \
+                    and fr not in info.frames and fr not in info.axes_presets:
                 errs.append(f"{path}.frame: unknown frame preset {fr!r} (known: "
-                            f"{', '.join(['pca'] + sorted(info.frames))})")
+                            f"{', '.join(['pca'] + sorted(info.frames | info.axes_presets))})")
             bg = o.get("background")
             if isinstance(bg, str) and bg in cats and info is not None:
                 if isinstance(dims, list):
@@ -626,9 +685,12 @@ def validate_keys(doc: Mapping, pd: PageData) -> list[str]:
             cat = _pane_catalog(leaf, pd, refs)
             info = cats.get(cat) if cat else None
             preset = v.get("preset") if isinstance(v, Mapping) else v
+            # a manifold's initial view may be a named frame or an axes preset (a 2-D
+            # projection onto two dims; the JS applies both kinds through the preset chips)
             if isinstance(preset, str) and preset != "pca" and not preset.startswith("b64:") \
-                    and info is not None and preset not in info.frames:
-                errs.append(f"state.{key}.preset: unknown frame preset {preset!r}")
+                    and info is not None and preset not in info.frames \
+                    and preset not in info.axes_presets:
+                errs.append(f"state.{key}.preset: unknown frame or axes preset {preset!r}")
             if isinstance(v, Mapping):
                 for d in v.get("dims") or []:
                     need(f"state.{key}.dims", cat, d)
@@ -884,6 +946,10 @@ def assemble(page: PageSpec, datasets: Mapping[str, DatasetSpec], manifests: Map
                    if k in lg["files"]}
         if presets:
             lg["presets"] = presets
+        alias = dict(getattr(page.legacy, "dim_alias", None) or {})
+        if alias:
+            errs.extend(_dim_alias_errors(alias, pd))
+            lg["dim_alias"] = alias
         doc["page"]["legacy"] = lg
     if page.links:
         doc["links"] = dict(page.links)
@@ -933,7 +999,16 @@ def assemble(page: PageSpec, datasets: Mapping[str, DatasetSpec], manifests: Map
 
     seen_urls: dict[str, str] = {}
     for k, ref in ds_refs.items():
-        fetched(f"datasets.{k}.url", ref.get("url"))
+        if ref.get("kind") == "records" and "base" in ref:
+            u = ref.get("url")
+            msg = check_foreign_url(u, known_prefixes)
+            if msg:
+                errs.append(f"datasets.{k}.url: {msg}")
+            elif public and isinstance(u, str) and u.startswith(SECURE_PREFIX):
+                errs.append(f"datasets.{k}.url: public page fetches foreign records {u!r} from "
+                            f"the secure tree (section 11.2)")
+        else:
+            fetched(f"datasets.{k}.url", ref.get("url"))
         u = ref.get("url")
         if isinstance(u, str) and ref.get("kind") not in RES_KINDS:
             if u in seen_urls and ref.get("kind") != "isochrones":

@@ -11,11 +11,27 @@ VECTORS = json.loads((Path(__file__).resolve().parents[1] / "fixtures" / "legacy
                       / "hash_vectors.json").read_text())
 
 
+# Grammars whose shared vectors are pending in hash_vectors.json (owned by the fixture WP);
+# tests/py/test_wpe6.py and tests/js/wpe5.test.mjs cover them until the vectors land.
+PENDING_VECTORS = {"spherex-colours"}
+
+# These shared vectors predate the canonical `speed` key (contract (D)): both mirrors now map
+# their ?speed=2 to speed=2 (tests/js/legacyhash.test.mjs carries the same table). Remove the
+# entries once hash_vectors.json is regenerated.
+SPEED_DIVERGENT = {"wavelength kv + speed": {"speed": "2"},
+                   "wavelength speed only on canonical hash": {"speed": "2"}}
+
+
 @pytest.mark.parametrize("case", VECTORS["cases"], ids=[c["name"] for c in VECTORS["cases"]])
 def test_vectors(case):
     r = hm.map_legacy(case["grammars"], case["loc"])
     assert r["consumedSearch"] == case["consumedSearch"]
-    assert set(r["hash"]) == set(case["hash"])
+    want = dict(case["hash"])
+    if case["name"] in SPEED_DIVERGENT and "speed" not in want:
+        want.update(SPEED_DIVERGENT[case["name"]])
+    assert set(r["hash"]) == set(want)
+    if "speed" in want:
+        assert r["hash"]["speed"] == want["speed"]
     for k, v in case["hash"].items():
         if k == "sel" and v.startswith("r:"):
             assert hm.decode_recipe(r["hash"][k]) == case["decoded"]["sel"]
@@ -27,7 +43,7 @@ def test_vectors(case):
 
 def test_vectors_cover_grammars():
     used = {g for c in VECTORS["cases"] for g in c["grammars"]}
-    assert set(hm.GRAMMAR_NAMES) <= used
+    assert set(hm.GRAMMAR_NAMES) - PENDING_VECTORS <= used
     assert set(hm.GRAMMARS) == set(hm.GRAMMAR_NAMES)
 
 

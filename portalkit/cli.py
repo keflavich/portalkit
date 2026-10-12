@@ -364,12 +364,24 @@ def _norm_key(v: Any) -> str:
     return s
 
 
+def _path_suffix(v: Any, n: int = 2) -> str:
+    """The last ``n`` components of a path (``/``- or ``\\``-separated): the checklist holds
+    absolute ``Filename`` paths and the served catalogue (and so the export) relative ones."""
+    parts = [x for x in str(v or "").strip().replace("\\", "/").split("/") if x not in ("", ".")]
+    return "/".join(parts[-n:])
+
+
 def checklist_diff(export_text: str, checklist_text: str, *, checklist_name: str = "checklist",
                    column: str | None = None) -> tuple[str, list[str]]:
     """Unified diff that applies the codes of an annotation export (``id, <keys>, <code
     column>``) to the checklist rows matching all :data:`CHECKLIST_KEYS`. Returns ``(diff,
     notes)``. The code goes to ``column``, else to the export's code column when the
-    checklist has it, else to the first non-key checklist column."""
+    checklist has it, else to the first non-key checklist column.
+
+    ``Filename`` matches by path suffix: the basename plus its parent directory (the MAST
+    observation directory), so an absolute checklist path and the served relative path of
+    the same spectrum match. A ``Filename`` with no parent directory on either side matches
+    by basename. The checklist file is never written; the diff goes to stdout."""
     from .deploy import UsageError
     ex_rows = list(csv.reader(io.StringIO(export_text)))
     if not ex_rows:
@@ -398,13 +410,25 @@ def checklist_diff(export_text: str, checklist_text: str, *, checklist_name: str
         raise UsageError(f"checklist has no column {column!r}")
     ci = hdr.index(column)
     kidx = [hdr.index(k) for k in CHECKLIST_KEYS]
+    fpos = CHECKLIST_KEYS.index("Filename")
+
+    def keys_of(row: list[str], idx: list[int]) -> tuple[tuple, tuple]:
+        """(key with the 2-component Filename suffix, key with the basename only)"""
+        vals = [row[i] if i < len(row) else "" for i in idx]
+        k = [_norm_key(v) for v in vals]
+        k2, k1 = list(k), list(k)
+        k2[fpos], k1[fpos] = _path_suffix(vals[fpos], 2), _path_suffix(vals[fpos], 1)
+        return tuple(k2), tuple(k1)
+
     index: dict[tuple, list[int]] = {}
+    by_base: dict[tuple, list[int]] = {}
     for ln in range(1, len(lines)):
         if not lines[ln].strip():
             continue
         row = next(csv.reader([lines[ln]]))
-        key = tuple(_norm_key(row[i]) if i < len(row) else "" for i in kidx)
-        index.setdefault(key, []).append(ln)
+        k2, k1 = keys_of(row, kidx)
+        index.setdefault(k2, []).append(ln)
+        by_base.setdefault(k1, []).append(ln)
     ex_k = [ex_hdr.index(k) for k in CHECKLIST_KEYS]
     ex_c = ex_hdr.index(code_col)
     new = list(lines)
@@ -412,9 +436,15 @@ def checklist_diff(export_text: str, checklist_text: str, *, checklist_name: str
     for r in ex_rows[1:]:
         if not r or not any(x.strip() for x in r):
             continue
-        key = tuple(_norm_key(r[i]) if i < len(r) else "" for i in ex_k)
+        key, key1 = keys_of(r, ex_k)
         code = r[ex_c].strip() if ex_c < len(r) else ""
         hits = index.get(key)
+        if not hits and "/" not in key[fpos]:
+            hits = by_base.get(key1)            # export Filename without a parent directory
+        if not hits:
+            # checklist Filename without a parent directory
+            hits = [ln for ln in by_base.get(key1, [])
+                    if "/" not in keys_of(next(csv.reader([lines[ln]])), kidx)[0][fpos]]
         if not hits:
             notes.append(f"no checklist row matches {r[0] if r else '?'} ({', '.join(key[:2])})")
             continue

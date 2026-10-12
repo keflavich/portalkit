@@ -456,13 +456,12 @@ starting.
     `replace = false`, as are the critic's galleries and the robitaille pages. Deploy stubs use relative URLs,
     and deploy refuses symlink components (§11.3), so a stub there could not be written safely.
 
-    Cross-visibility links take two forms:
-    - portal.json `related` (`build.py` `portal_doc`) lists every other portal of the site as
-      `{title, url, auth}`. dirgallery_sites has 9 portals of mixed visibility, so its public portals link to
-      secure gallery URLs. These are links only, with no data or counts.
-    - Each landing page has cards for the other gallery sets (`adapters/dirgallery_sites.py`). These cards also
-      link public portals to secure gallery URLs, marked "login required"; only the URL and title cross the
-      visibility boundary.
+    The cross-visibility links WP23 adds are the landing cards: each landing page has one card per other
+    gallery set (`adapters/dirgallery_sites.py` `pages()`, `{href, title, auth}`, text "Gallery set (login
+    required)" for a secure set). dirgallery_sites has 9 portals of mixed visibility, so a public landing links
+    to secure gallery URLs; only the URL and title cross the visibility boundary, with no data or counts.
+    portal.json `related` (`build.py` `portal_doc`) is generic: the builder lists every other portal of any
+    site there as `{title, url, auth}`, so the nav carries the same links; WP23 adds nothing to it.
 130. **Narrative activation order (WPE4; fixes the WPE2 todo).** With instant scrolling (`prefers-reduced-motion`
     gives `.pk-nar-scroll` `scroll-behavior: auto`), `activate(k, {scroll: true, keep})` used to call
     `scrollIntoView` and `arrived()` before setting `S.current`. `arrived()` → `unpin()` → `pickActive()` then
@@ -500,3 +499,74 @@ starting.
 
     `htaccess._write_owned` compares bytes, so an owned file with undecodable bytes after the marker is
     rewritten instead of raising `UnicodeDecodeError`.
+
+## Resolved in WPE6 (wave-3/4 adapter contract issues)
+
+134. **Foreign record sets (WPE6 item 1; ARCHITECTURE §4.3, §5.6).** `RecordSetSpec.foreign =
+    ForeignRecords(base, key, id_column=None)` points a page at another portal's `data/<key>/` record set.
+    The "portal.json" of the contract is read as the page's DatasetRef (`page.json datasets`), the place
+    every other records ref lives; `portal.json` itself carries no dataset refs. The build writes no shards
+    and no stand-in index; the build report lists the set with `files: 0, foreign: true`.
+    - `config.foreign_records_ref` builds `{kind:"records", url: base+key+"/index.json", catalog, record,
+      base[, id_column]}`; `schema.foreign_base_error` refuses a base that is empty, lacks the trailing `/`,
+      starts with `/`, holds a backslash, or starts with `file:` or another scheme-like segment (http(s) is
+      allowed). `url` must start with `base`; `id_column` is allowed only with `base`.
+    - `config.check_foreign_url` drops leading `../` segments before the usual §9.3 URL check, so a relative
+      base into a sibling portal passes and an absolute filesystem path still fails.
+    - Visibility (`build.foreign_records_exposure`): the ref is resolved against the portal URL (same host
+      only) and classified (§11.2). Secure portals accept public or secure bases; public portals accept public
+      bases only and raise `ExposureRefusal` (exit 3) for a secure one. `config.assemble` also reports a
+      public page whose foreign URL starts with the secure prefix.
+    - `id_column` must be a column of the set's catalog (`ValueError` at build).
+    - `portalkit check` counts foreign refs under `stats["foreign"]` and skips their local-file check; catalog
+      `links.records` URLs starting with `../../` are not reported as unstaged.
+    - `verify --http` HEADs each foreign index found in the deployed pages (`verify.check_foreign_records`).
+    - JS (`data/records.js`, `data/hub.js`) needs the `base` resolution and the `id_column` lookup; WPE5 owns
+      those files (contract issue).
+135. **Legacy dim alias (WPE6 item 2B).** `[[portal.page]] dim_alias` and `PageSpec.legacy.dim_alias` merge
+    (the site entry wins per key) into `page.legacy.dim_alias`. `context.PageConfig` has no field for it, so
+    `build._site_dim_alias` reads it from the raw `[[portal.page]]` table. Values must be stored, virtual or
+    manifold dims of a foreground catalog on the page. `legacy/hashmap.py` applies the alias to `kv-view`
+    x/y/c and `gc-query` y; `spherex-colours` and the `speed` key (items C, D) are parsed only in
+    `legacyhash.js` (WPE5), and the Python mirror and `hash_vectors.json` follow once that lands.
+136. **Axes presets as a manifold frame (WPE6 item 3).** `caps.CatInfo.axes_presets` lists the catalog's
+    presets of kind `axes`; `config.py` accepts them for the manifold pane option `frame` and for
+    `state["frame:<pane>"].preset`. The error for an unknown name reads "unknown frame or axes preset".
+137. **HST filters (WPE6 item 4).** `portalkit/data/filters_registry.ecsv` gains 10 SVO rows:
+    WFC3/IR F110W, F125W, F127M, F139M, F153M, F160W; WFC3/UVIS2 F555W, F814W; ACS/WFC F555W, F814W (Vega
+    zero points, pivots and transmission curves from the SVO VOTables). `physics.filters.read_svo_cache`
+    reads raw `*.xml`/`*.vot` VOTables as well as the pickles, and `regenerate_registry` carries over registry
+    rows whose key is not in the cache (`carry_over=REGISTRY_PATH`), so regeneration from a cache that lacks
+    the HST VOTables is byte-identical. Aliases: `WFC3_F160W`, `ACS_F814W`, ... Labels: "WFC3 F160W",
+    "ACS F814W". Two files owned elsewhere derive from the registry and need regeneration
+    (`portalkit/data/g23_alav.ecsv` via `extinction.regenerate_alav_table()`, and
+    `tests/golden/physics/resolve_key.json` via `tests/golden/physics/generate.py`).
+138. **Virtual colours from manifold payloads (WPE6 item 5).** `manifold_payload.convert` (and
+    `detect_virtual_colours`) turns a dim that equals `a - b` of two other dims into
+    `VirtualDim("<a>-<b>")`. Rules: the candidate has no limit codes, is not a log dim and has at least 3
+    values; `a`, `b` are stored non-log dims with one unit; the candidate is missing exactly where `a` or `b`
+    is; the tolerance is half the sum of the three rounding steps plus 1e-6. Colour-like dims (`c_*`, a `-`
+    in key or label) are tried first, and a dim used as a base is never made virtual. The stored column
+    and its `__lim` sibling are dropped; presets, groups, density grids and manifold dims name the virtual
+    key. A negative legacy scale still flips frame weights but no longer sets `invert` (VirtualDim has no
+    such field). `convert(..., virtual_colours=False)` keeps the old behaviour.
+139. **Template `high` records (WPE6 item 6).** `extend_to_um` used to continue every grid at its own log
+    step, so the R=2700 `high` records grew to 46-49 kB (soft limit 40,960). `load_source` now extends with
+    `min_dlog = EXTEND_MIN_DLOG = 4e-4` (the `medium` step): the `high` extension keeps every 3rd Brick2221
+    sample plus the last one (values at the kept wavelengths are unchanged), and records are 32-35 kB.
+    `prism` and `medium` keep every sample. `build_extended_templates` (Brick2221 parity) is unchanged.
+140. **`sedcurve` channels (WPE6 item 7).** `encode_pks1(..., kind="sedcurve")` accepts any non-empty
+    channel set; `kind="pks1"` still needs `flux`. `RecordSetSpec` writers pass the kind through.
+141. **All-missing catalog fields (WPE6 item 8).** `catalog_from_rows` used to type a field whose values
+    are all `None` as `str`. Such a field now gets the declared role's type: a masked float64 NaN column for
+    `mag`/`flux`/`color`/`value`/`error`, a masked bool column for `flag`; other roles keep `str`.
+142. **Checklist Filename match (WPE6 item 9).** `checklist_diff` matches `Filename` by path suffix (basename
+    plus parent directory), so the checklist's absolute x1d paths match the served `<stem>/<x1d>` paths of an
+    export. A `Filename` without a parent directory on either side matches by basename. Other key columns
+    still match exactly (after `_norm_key`). The checklist CSV is never written.
+143. **WPE4 leftovers (WPE6 item 10).** `check_manifest_denied` already reported a 5xx as undecided (WPE4);
+    it now also warns on a 5xx when the target holds any portalkit `.htaccess` (`htaccess_present`), not only
+    when the deny rule is expected. `htaccess_owned` reads the first line as bytes, `_owned_bytes` feeds
+    both `_owned_text` (decoded with `errors="replace"`) and `_write_owned` (byte comparison), so a
+    non-UTF-8 owned file is never a crash and is rewritten.
+

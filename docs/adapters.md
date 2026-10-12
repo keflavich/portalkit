@@ -89,18 +89,33 @@ A family with several portals (for example a public and a secure one) lists seve
   and a `filter` key such as `"JWST/NIRCam.F410M"`; the capability resolver enables CMDs,
   SED overlays and extinction vectors from these.
 - Legacy manifold payloads: `portalkit.legacy.manifold_payload.convert(payload)` returns
-  `(CatalogSpec, ManifoldSpec)`.
+  `(CatalogSpec, ManifoldSpec)`. Dims that equal the difference of two other dims (the
+  pairwise `c_<a>_<b>` colours) become virtual dims `"<a>-<b>"` instead of stored columns;
+  pass `virtual_colours=False` to keep them stored.
 - Existing GC tile manifests: a `CatalogSpec` with `foreign=ForeignRef("gc-manifest-1",
   url_base, manifest_path)`; the build writes a schema-2 manifest that points at the
   existing tiles (`portalkit.legacy.gc_manifest`).
 - Per-source spectra: `RecordSetSpec(kind="pks1", catalog=..., ids=..., loader=fn)`. The
   loader returns a `Spectrum` (wavelength in um, ascending per segment) or `None` to skip.
+  `kind="sedcurve"` takes any channel names (for example `SPHEREx` and `IRS`); `pks1`
+  needs a `flux` channel.
+- Spectra another portal already serves: `RecordSetSpec(..., foreign=ForeignRecords(
+  base="../../wd2_2640/unified/data/", key="spec", id_column="SrcName"))`. The build
+  writes no shards; the page reads `<base><key>/index.json`. `base` ends in `/` and is
+  relative to the page or an absolute https URL on the same host. With `id_column`, the
+  record of a row is looked up by that column's value instead of the row id. A public
+  portal may only reference a public base (the build refuses a secure one, exit 3).
 - Image directories: `portalkit.legacy.dirgallery.scan(directory, pattern, ...)` builds an
   `ImageSetSpec` from file names (named groups `id` and `kind` in the regex).
   `portalkit thumbs FAMILY` caches thumbnails for local images.
 - Shared physics: `TemplateSpec()`, `FilterSetSpec(keys)` without `extra` and
   `ExtinctionSpec()` with defaults resolve to the shared `{res}` bundle. Non-default specs
-  are written into the portal under `data/res/<key>/`.
+  are written into the portal under `data/res/<key>/`. The filter registry holds the
+  JWST, Roman, Spitzer, 2MASS, UKIRT and Paranal sets plus HST WFC3/IR (F110W, F125W, F127M, F139M, F153M,
+  F160W), WFC3/UVIS2 and ACS/WFC (F555W, F814W), keyed by SVO id
+  (`HST/WFC3_IR.F160W`) with aliases such as `WFC3_F160W` and `ACS_F814W`.
+- Catalog fields whose values are all missing get the declared role's type (float for
+  numeric roles, bool for `flag`), so an empty band stays a numeric column.
 - `ReadmeSpec(markdown=...)` becomes the landing page text; `HipsSpec`, `OverlaySpec`,
   `NarrativeSpec` and `IsochroneSpec` cover the remaining page types.
 
@@ -110,7 +125,9 @@ A family with several portals (for example a public and a secure one) lists seve
 manifold, spectra and gallery pages from the datasets. Return explicit `PageSpec` objects
 for custom titles, layouts, `state` or `caps_disable` entries. `[[portal.page]]` entries in
 the site registry fill `PageSpec.legacy` (legacy files and hash grammars) when the adapter
-leaves it empty.
+leaves it empty. `dim_alias = {legacy_dim = "dim"}` in a `[[portal.page]]` entry (or
+`LegacyRef.dim_alias`) maps the dim keys of legacy hashes to the page's dims, for example
+`{c_F162M_F210M = "f162m-f210m"}`; every value must be a dim of the page's catalogs.
 
 ## Build, check, inspect
 

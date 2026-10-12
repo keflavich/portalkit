@@ -25,7 +25,10 @@ F_nu. The Brick2221 code originally used ``B_lambda``, which under-predicts the 
 5.3 um (by a factor ~24 at 26 um for the last prism sample); Brick2221 now uses ``B_nu`` as
 well, and the default output equals its ``build_extended_templates`` JSON content
 (whitespace/float formatting is not compared). ``planck="lambda"`` reproduces the older
-B_lambda curves.
+B_lambda curves. :func:`build_extended_templates` writes every Brick2221 extension sample;
+the portal records (:func:`load_source`, :func:`write`) keep the extension of a grid finer
+than :data:`EXTEND_MIN_DLOG` at every k-th of those samples (the R=2700 ``high`` grid keeps
+every 3rd), so a ``high`` record stays under :data:`TEMPLATE_FILE_SOFT_MAX`.
 """
 
 from __future__ import annotations
@@ -43,11 +46,16 @@ from . import PhysicsResult, _writer
 
 __all__ = ["DEFAULT_SOURCE", "LAW_KEYS", "load_source", "source_label", "extend_templates",
            "build_extended_templates", "templates_document", "write", "planck_lambda",
-           "planck_nu", "TEMPLATE_FILE_SOFT_MAX"]
+           "planck_nu", "TEMPLATE_FILE_SOFT_MAX", "EXTEND_MIN_DLOG"]
 
 DEFAULT_SOURCE = Path("/orange/adamginsburg/jwst/spectra/templates/jwst_template_spectra.json")
 LAW_KEYS = {"k31": 3.1, "k55": 5.5}
 TEMPLATE_FILE_SOFT_MAX = 40 * 1024
+#: Finest log-wavelength step of the part of a grid that ``extend_to_um`` adds (the
+#: ``medium`` grid's native step). The ``high`` grid's extension keeps every 3rd Brick2221
+#: sample, which brings its records from 46-49 kB to about 35 kB; ``prism`` and ``medium``
+#: keep every sample.
+EXTEND_MIN_DLOG = 4.0e-4
 
 _PLANCK_H = 6.62607015e-34
 _PLANCK_C = 2.99792458e8
@@ -101,10 +109,39 @@ def _extend_template_flux(w_native: Any, f_native: Any, teff_K: float, w_new: np
     return scale * bb(teff_K, w_new)
 
 
-def extend_templates(doc: Mapping, wmax_um: float, planck: str = "nu") -> dict:
+def _extension_stride(w_native: Any, min_dlog: float | None) -> int:
+    """Keep every k-th extension sample so the extension's log step is at least ``min_dlog``
+    (1 = keep all; a grid already that coarse is not decimated)."""
+    if not min_dlog:
+        return 1
+    dlogw = float(np.median(np.diff(np.log(np.asarray(w_native, dtype=float)))))
+    return max(1, int(np.ceil(min_dlog / dlogw - 1e-3)))
+
+
+def _decimate(w_new: np.ndarray, k: int) -> np.ndarray:
+    """Every k-th sample of ``w_new`` (the k-th first), always keeping the last one (the
+    sample at or beyond ``wmax_um``)."""
+    if k <= 1 or w_new.size == 0:
+        return w_new
+    idx = np.arange(k - 1, w_new.size, k)
+    if idx.size == 0 or idx[-1] != w_new.size - 1:
+        idx = np.append(idx, w_new.size - 1)
+    return w_new[idx]
+
+
+def extend_templates(doc: Mapping, wmax_um: float, planck: str = "nu",
+                     min_dlog: float | None = None) -> dict:
     """Copy of a template document with every grid, curve and template flux extended to
     ``wmax_um`` (see module docstring). ``planck`` is ``"nu"`` (default) or ``"lambda"``
-    (the legacy Brick2221 behaviour)."""
+    (the legacy Brick2221 behaviour).
+
+    ``min_dlog`` (default ``None``: the Brick2221 output, every grid continued at its own
+    step) decimates the extension of a grid whose log step is finer than ``min_dlog``: only
+    every k-th Brick2221 extension sample is kept (and the last one), so the kept values equal
+    the Brick2221 values at those wavelengths. The extension is a smooth blackbody and
+    power-law extinction, so the coarser step loses no spectral detail. :func:`load_source`
+    uses :data:`EXTEND_MIN_DLOG`, which keeps the R=2700 ``high`` records under
+    :data:`TEMPLATE_FILE_SOFT_MAX`."""
     if planck not in ("nu", "lambda"):
         raise ValueError("planck must be 'nu' or 'lambda'")
     d = copy.deepcopy(dict(doc))
@@ -114,7 +151,8 @@ def extend_templates(doc: Mapping, wmax_um: float, planck: str = "nu") -> dict:
         w_native = grid["w"]
         if not wmax_um > float(w_native[-1]):
             raise ValueError(f"extend_to_um={wmax_um} must exceed the grid end {w_native[-1]}")
-        w_new = _extend_grid_wavelengths(w_native, wmax_um)
+        w_new = _decimate(_extend_grid_wavelengths(w_native, wmax_um),
+                          _extension_stride(w_native, min_dlog))
         new_w[gkey] = w_new
         k31_ext = _extend_extinction_curve(w_native, grid["k31"], w_new)
         k55_ext = _extend_extinction_curve(w_native, grid["k55"], w_new)
@@ -196,7 +234,7 @@ def load_source(spec: Any = None, *, planck: str = "nu",
     if isinstance(spec, Mapping):
         ext = spec.get("extend_to_um")
     if ext is not None:
-        d = extend_templates(d, float(ext), planck=planck)
+        d = extend_templates(d, float(ext), planck=planck, min_dlog=EXTEND_MIN_DLOG)
     d.setdefault("meta", {})["source"] = source_label(path, labeler)
     return d
 

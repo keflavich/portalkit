@@ -280,6 +280,7 @@ class CatInfo:
     presets: list[dict] = field(default_factory=list)      # manifest-shaped presets
     manifold_dims: list[str] | None = None
     frames: set[str] = field(default_factory=set)          # named frames (presets, manifold.frames)
+    axes_presets: set[str] = field(default_factory=set)    # kind 'axes' preset keys (valid frame names too)
     extra_keys: set[str] = field(default_factory=set)      # id/ra/dec/row-chunk fields
 
     def role_keys(self, *roles: str) -> list[str]:
@@ -346,6 +347,8 @@ def catalog_info(ds: str, spec: CatalogSpec | None, manifest: Mapping | None = N
             info.frames |= {k for k in man["frames"] if isinstance(k, str)}
         info.frames |= {p["key"] for p in info.presets
                         if p.get("kind") == "frame" and isinstance(p.get("key"), str)}
+        info.axes_presets = {p["key"] for p in info.presets
+                             if p.get("kind") == "axes" and isinstance(p.get("key"), str)}
         info.has_id = manifest.get("ids") is not None or bool(info.role_keys("id"))
         info.has_pos = manifest.get("pos") is not None or bool(info.role_keys("ra") and info.role_keys("dec"))
         rows = manifest.get("rows")
@@ -371,6 +374,7 @@ def catalog_info(ds: str, spec: CatalogSpec | None, manifest: Mapping | None = N
         info.manifold_dims = list(spec.manifold.dims)
         info.frames |= set(spec.manifold.frames)
     info.frames |= {p["key"] for p in info.presets if p.get("kind") == "frame"}
+    info.axes_presets = {p["key"] for p in info.presets if p.get("kind") == "axes"}
     info.has_id = bool(spec.id)
     info.has_pos = bool(spec.ra and spec.dec)
     info.extra_keys |= {k for k in (spec.id, spec.ra, spec.dec) if k}

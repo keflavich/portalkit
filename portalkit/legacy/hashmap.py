@@ -7,6 +7,21 @@ implementations. Encoded values (``f=``, ``sel=r:``, ``<pane>.frame=b64:``) are 
 same way; ``sel=r:`` payloads use zlib raw deflate here and the hand-written deflate of
 ``selection.js`` in the browser, so they agree after inflating, byte for byte only in the
 decoded JSON.
+
+Shared contracts of wave E (ARCHITECTURE sections 4.1 and 6.4), mirrored here:
+
+* (B) legacy dim alias: ``page.legacy.dim_alias`` (or ``loc['dimAlias']`` /
+  ``loc['dim_alias']``) maps legacy dim keys onto unified ones; kv-view applies it to its
+  ``x`` / ``y`` / ``z`` values and to the column part of ``c=<by>[~cmap~lo~hi]``, and
+  spherex-colours to its filter and colour names (gc-query indexes dims by position and its
+  ``y`` band name is not aliased, as in the browser).
+* (C) the ``spherex-colours`` grammar (query string of the legacy SPHEREx colours.html).
+* (D) the canonical ``speed`` key: the wavelength and kv-view grammars map a legacy
+  ``?speed=`` query parameter (consumed, also under a canonical hash) and a legacy ``speed=``
+  hash value onto it.
+
+``map_legacy`` returns ``{"hash", "consumedSearch"}``; the browser's ``mapLegacy`` also
+returns ``fromHash``, which only ``boot.js`` uses.
 """
 
 from __future__ import annotations
@@ -23,12 +38,12 @@ from urllib.parse import unquote, unquote_plus
 __all__ = ["CANONICAL_KEYS", "GRAMMAR_NAMES", "GRAMMARS", "SEL_RADIUS_ARCSEC",
            "DEFAULT_FOV_DEG", "map_legacy", "is_canonical_hash", "encode_json", "decode_json",
            "encode_frame", "decode_frame", "encode_recipe", "decode_recipe", "b64url_encode",
-           "b64url_decode", "legacy_context", "layout_info", "js_number"]
+           "b64url_decode", "legacy_context", "layout_info", "js_number", "dim_alias"]
 
-CANONICAL_KEYS = ("id", "sel", "f", "c", "av", "rv", "dm", "tpl", "feat", "spec", "wl",
-                  "sky", "base", "ovl", "rung", "beat", "role", "fac", "lb", "view")
+CANONICAL_KEYS = ("id", "sel", "f", "c", "av", "rv", "dm", "speed", "tpl", "feat", "spec",
+                  "wl", "sky", "base", "ovl", "rung", "beat", "role", "fac", "lb", "view")
 _CANON = set(CANONICAL_KEYS)
-_PANE_KEY = re.compile(r"^(.+)\.(x|y|frame)$")
+_PANE_KEY = re.compile(r"^(.+)\.(x|y|frame|xr|yr|raster|ovl)$")
 SEL_RADIUS_ARCSEC = 0.5
 DEFAULT_FOV_DEG = 0.25
 _OPEN_LO = -1e300
@@ -265,6 +280,36 @@ def legacy_context(loc: Mapping) -> dict:
     return ctx
 
 
+def dim_alias(loc: Mapping) -> dict[str, str]:
+    """The legacy -> unified dim key map (``page.legacy.dim_alias``, contract (B)) from
+    ``loc['dimAlias']`` (the browser's name) or ``loc['dim_alias']``, else the page document
+    ``loc['page']``."""
+    al = loc.get("dimAlias")
+    if not isinstance(al, Mapping):
+        al = loc.get("dim_alias")
+    if not isinstance(al, Mapping):
+        page = loc.get("page")
+        pg = page.get("page") if isinstance(page, Mapping) else None
+        lg = pg.get("legacy") if isinstance(pg, Mapping) else None
+        al = lg.get("dim_alias") if isinstance(lg, Mapping) else None
+    if not isinstance(al, Mapping):
+        return {}
+    return {str(k): str(v) for k, v in al.items() if isinstance(v, str)}
+
+
+def _alias_dim(alias: Mapping[str, str], key: str) -> str:
+    return alias.get(key, key)
+
+
+def _scatter_panes(loc: Mapping) -> list[dict]:
+    """Scatter panes of the page layout in layout order: ``[{id, options}]``."""
+    page = loc.get("page")
+    if not isinstance(page, Mapping) or not page.get("layout"):
+        return []
+    return [{"id": p.get("id") or p["pane"], "options": p.get("options") or {}}
+            for p in _panes(page["layout"]) if p["pane"] == "scatter"]
+
+
 def _dim_at(ctx: Mapping, i: int | None) -> dict | None:
     dims = ctx.get("dims")
     if not dims or i is None or i < 0 or i >= len(dims):
@@ -281,7 +326,9 @@ def _w(d: Mapping) -> float:
 # grammars: each returns (hash, consumed) or None
 # ---------------------------------------------------------------------------
 
-Result = tuple[dict, list]
+# (hash, consumed) or (hash, consumed, search_hash): search_hash holds keys mapped from the
+# query string by a 'both' rule, merged whether or not the hash was mapped
+Result = tuple
 
 
 def _bare_name(loc: Mapping) -> Result | None:
@@ -295,7 +342,32 @@ def _bare_name(loc: Mapping) -> Result | None:
 _KV_ID_KEYS = ("name", "src", "source", "id", "star", "obj", "target")
 
 
+def _speed_text(v: Any) -> str | None:
+    """A positive speed multiplier as hash text, or None."""
+    sp = _num(v)
+    return _fmt(sp) if sp is not None and sp > 0 else None
+
+
+def _search_speed(loc: Mapping) -> tuple[dict, list]:
+    """Legacy ``?speed=`` -> canonical ``speed`` (contract (D)); an unreadable value is
+    consumed and dropped."""
+    q = _parse_search(loc)
+    if "speed" not in q:
+        return {}, []
+    sp = _speed_text(q["speed"])
+    return ({"speed": sp} if sp is not None else {}), ["speed"]
+
+
 def _kv_view(loc: Mapping) -> Result | None:
+    # the query-string part (legacy ?speed=) applies also under a canonical hash
+    sh, consumed = _search_speed(loc)
+    res = _kv_view_hash(loc)
+    if res is None and not consumed:
+        return None
+    return (res if res is not None else {}), consumed, sh
+
+
+def _kv_view_hash(loc: Mapping) -> dict | None:
     h = _hash_text(loc)
     if not h or "=" not in h or is_canonical_hash(h):
         return None
@@ -305,6 +377,20 @@ def _kv_view(loc: Mapping) -> Result | None:
         if kv.get(k):
             out["id"] = kv[k]
             break
+    alias = dim_alias(loc)
+    for k in ("x", "y", "z"):
+        if kv.get(k):
+            kv[k] = _alias_dim(alias, kv[k])
+    if kv.get("c"):
+        # colour-by: <by>[~cmap~lo~hi]; only the column part is a dim name
+        by, sep, rest = kv["c"].partition("~")
+        c = _alias_dim(alias, by) + sep + rest
+        if c != kv["c"]:
+            out["c"] = c
+    if "speed" in kv:
+        sp = _speed_text(kv.pop("speed"))
+        if sp is not None:
+            out["speed"] = sp
     info = layout_info(loc)
     v = kv.get("view")
     if v:
@@ -318,16 +404,17 @@ def _kv_view(loc: Mapping) -> Result | None:
         ctx = legacy_context(loc)
         if ctx["dims"]:
             keys = [d["key"] for d in ctx["dims"]]
-            if kv["x"] in keys and kv["y"] in keys:
+            kx, ky = kv["x"], kv["y"]
+            if kx in keys and ky in keys:
                 D = len(keys)
-                ix, iy = keys.index(kv["x"]), keys.index(kv["y"])
+                ix, iy = keys.index(kx), keys.index(ky)
                 F = [0.0] * (2 * D)
                 F[ix] = _w(ctx["dims"][ix])
                 F[D + iy] = _w(ctx["dims"][iy])
                 out[f"{ctx['pane']}.frame"] = encode_frame(F)
     if not out:
         return None
-    return {**_passthrough(kv), **out}, []
+    return {**_passthrough(kv), **out}
 
 
 _WL_COMPACT = re.compile(r"^[^,]+(,[-+0-9.eE]+){2,3}$")
@@ -346,14 +433,19 @@ def _wavelength(loc: Mapping) -> Result | None:
     out: dict[str, str] = {}
     if kv.get("rung"):
         out["rung"] = kv["rung"]
+    if "speed" in kv:
+        # legacy speed= in the hash: the tour / playback speed (contract (D))
+        sp = _speed_text(kv.pop("speed"))
+        if sp is not None:
+            out["speed"] = sp
     ra, dec = _num(kv.get("ra")), _num(kv.get("dec"))
     if ra is not None and dec is not None:
         fov = _num(kv.get("fov"))
         out["sky"] = f"{_fmt(ra)},{_fmt(dec)},{_fmt(fov if fov is not None and fov > 0 else DEFAULT_FOV_DEG)}"
-    consumed = ["speed"] if "speed" in _parse_search(loc) else []
+    sh, consumed = _search_speed(loc)
     if not out and not consumed:
         return None
-    return ({**_passthrough(kv), **out} if out else {}), consumed
+    return ({**_passthrough(kv), **out} if out else {}), consumed, sh
 
 
 def _beat(loc: Mapping) -> Result | None:
@@ -443,8 +535,9 @@ def _gc_query(loc: Mapping) -> Result | None:
             use("a", "b", "m", "p")
     if q.get("y") and ctx["dims"]:
         keys = [d["key"] for d in dims]
-        if q["y"] in keys and D >= 2:
-            iy = keys.index(q["y"])
+        qy = q["y"]
+        if qy in keys and D >= 2:
+            iy = keys.index(qy)
             F = [0.0] * (2 * D)
             F[0] += _w(dims[0])
             F[1] -= _w(dims[1])
@@ -508,15 +601,133 @@ def _gc_query(loc: Mapping) -> Result | None:
     return out, consumed
 
 
+# ---------------------------------------------------------------------------
+# spherex-colours (contract (C)): the query string of the legacy SPHEREx colours.html
+#   ax, ay   CCD x axis = colour ax - ay       bx, by   CCD y axis = colour bx - by
+#   c        colour-by column                  band     CMD magnitude band (CMD y axis)
+#   cmd=1    CMD panel shown                   zoom     x0,x1,y0,y1 of the CCD
+#   yoo      Yoo overlay: '1' = every yoo_* layer of the CCD, else a comma list of layer ids
+#   hide     k1|k2 hidden levels of the colour-by category
+# dim_alias maps the colour c_<A>_<B> and the magnitude m_<A> onto unified dims, else the
+# colour is <a>-<b> of the lower-cased names. The CMD shares the CCD x colour. On a page with
+# a single scatter pane band and cmd are consumed and dropped.
+# ---------------------------------------------------------------------------
+
+_SPHX_KEYS = ("ax", "ay", "bx", "by", "c", "band", "cmd", "zoom", "yoo", "hide")
+
+
+def _sphx_mag(alias: Mapping[str, str], f: str) -> str:
+    if f"m_{f}" in alias:
+        return str(alias[f"m_{f}"])
+    if f in alias:
+        return str(alias[f])
+    return str(f).lower()
+
+
+def _sphx_colour(alias: Mapping[str, str], a: str, b: str) -> str:
+    k = f"c_{a}_{b}"
+    if k in alias:
+        return str(alias[k])
+    return f"{_sphx_mag(alias, a)}-{_sphx_mag(alias, b)}"
+
+
+def _colour_by_of(opts: Mapping) -> str | None:
+    c = opts.get("color") if isinstance(opts, Mapping) else None
+    if isinstance(c, str) and c:
+        return c
+    if isinstance(c, Mapping) and isinstance(c.get("by"), str) and c["by"]:
+        return c["by"]
+    return None
+
+
+def _spherex_colours(loc: Mapping) -> Result | None:
+    q = _parse_search(loc)
+    if not any(k in q for k in _SPHX_KEYS):
+        return None
+    alias = dim_alias(loc)
+    sc = _scatter_panes(loc)
+    ccd_p = (next((p for p in sc if p["id"] == "ccd"), None) or (sc[0] if sc else None)
+             or {"id": "ccd", "options": {}})
+    # The CMD keys need a second scatter pane; without one they are consumed and dropped. A
+    # page without layout info keeps the legacy pane ids ccd / cmd.
+    if sc:
+        cmd_p = (next((p for p in sc if p["id"] == "cmd" and p is not ccd_p), None)
+                 or next((p for p in sc if p is not ccd_p), None))
+    else:
+        cmd_p = {"id": "cmd", "options": {}}
+    ccd = ccd_p["id"]
+    cmd = cmd_p["id"] if cmd_p else None
+    out: dict[str, str] = {}
+    consumed: list[str] = []
+
+    def use(*ks: str) -> None:
+        for k in ks:
+            if k in q and k not in consumed:
+                consumed.append(k)
+
+    xcol = None
+    if q.get("ax") and q.get("ay"):
+        xcol = _sphx_colour(alias, q["ax"], q["ay"])
+        out[f"{ccd}.x"] = xcol
+    if q.get("bx") and q.get("by"):
+        out[f"{ccd}.y"] = _sphx_colour(alias, q["bx"], q["by"])
+    use("ax", "ay", "bx", "by")
+    if q.get("band") and cmd:
+        out[f"{cmd}.y"] = _sphx_mag(alias, q["band"])
+        if xcol:
+            out[f"{cmd}.x"] = xcol
+    use("band")
+    if cmd and q.get("cmd") in ("1", "true"):
+        out["view"] = f"{cmd}:half"
+    use("cmd")
+    by = None
+    if q.get("c"):
+        by = _alias_dim(alias, q["c"])
+        out["c"] = by
+    use("c")
+    if q.get("zoom"):
+        p = [_num(x) for x in q["zoom"].split(",")]
+        if len(p) == 4 and all(v is not None for v in p):
+            out[f"{ccd}.xr"] = f"{_fmt(p[0])},{_fmt(p[1])}"
+            out[f"{ccd}.yr"] = f"{_fmt(p[2])},{_fmt(p[3])}"
+    use("zoom")
+    ov = ccd_p["options"].get("overlays") if isinstance(ccd_p["options"], Mapping) else None
+    ovls = [str(o) for o in ov] if isinstance(ov, list) else []
+    yoo_all = [o for o in ovls if o.startswith("yoo_")]
+    if yoo_all:
+        y = q.get("yoo")
+        if y in ("1", "true"):
+            on = list(yoo_all)
+        elif y:
+            want = [w if w.startswith("yoo_") else f"yoo_{w}"
+                    for w in (t.strip() for t in y.split(",")) if w]
+            on = [o for o in yoo_all if o in want]
+        else:
+            on = []
+        lst = [o for o in ovls if not o.startswith("yoo_") or o in on]
+        out[f"{ccd}.ovl"] = ",".join(lst) if lst else "-"
+    use("yoo")
+    if q.get("hide"):
+        key = by or _colour_by_of(ccd_p["options"])
+        levels = [t.strip() for t in q["hide"].split("|") if t.strip()]
+        if key and levels:
+            out["f"] = encode_json({"cats": {key: levels}})
+    use("hide")
+    if not out and not consumed:
+        return None
+    return out, consumed
+
+
 _RULES: dict[str, tuple[str, Callable[[Mapping], Result | None]]] = {
     "bare-name": ("hash", _bare_name),
-    "kv-view": ("hash", _kv_view),
+    "kv-view": ("both", _kv_view),
     "gc-query": ("search", _gc_query),
     "wavelength": ("both", _wavelength),
     "beat": ("hash", _beat),
     "gallery-index": ("hash", _gallery_index),
     "w51-rowid": ("hash", _w51_rowid),
     "specviewer": ("hash", _specviewer),
+    "spherex-colours": ("search", _spherex_colours),
 }
 
 GRAMMAR_NAMES = tuple(_RULES)
@@ -525,7 +736,7 @@ GRAMMAR_NAMES = tuple(_RULES)
 def _wrap(fn: Callable[[Mapping], Result | None]) -> Callable[[Mapping], dict | None]:
     def g(loc: Mapping) -> dict | None:
         r = fn(loc or {})
-        return None if r is None else r[0]
+        return None if r is None else {**r[0], **(r[2] if len(r) > 2 else {})}
     return g
 
 
@@ -549,12 +760,15 @@ def map_legacy(grammars: Iterable[str] | str, loc: Mapping) -> dict:
         res = fn({**loc, "hash": ""}) if (source == "both" and hash_done) else fn(loc)
         if res is None:
             continue
-        hsh, cons = res
-        if source != "search" and hsh and not hash_done:
+        hsh, cons = res[0], res[1]
+        if source == "search":
+            out = {**out, **hsh}
+        elif hsh and not hash_done:
             out = {**hsh, **out}
             hash_done = True
-        elif source == "search":
-            out = {**out, **hsh}
+        if len(res) > 2 and res[2]:
+            # the query-string part of a 'both' rule merges whether or not the hash was mapped
+            out = {**out, **res[2]}
         for k in cons:
             if k not in consumed:
                 consumed.append(k)

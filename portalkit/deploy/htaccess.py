@@ -98,11 +98,12 @@ def htaccess_owned(path: os.PathLike | str) -> bool:
     if not stat.S_ISREG(st.st_mode):
         return False
     try:
-        with open(p, encoding="utf-8", errors="replace") as fh:
-            first = fh.readline().rstrip("\r\n")
+        with open(p, "rb") as fh:
+            first = fh.readline(len(MARKER) + 3).rstrip(b"\r\n")
     except OSError:
         return False
-    return first == MARKER
+    # bytes, like _write_owned: an owned file with undecodable bytes stays owned
+    return first == MARKER.encode("utf-8")
 
 
 def denied(rel: str) -> bool:
@@ -112,14 +113,22 @@ def denied(rel: str) -> bool:
     return _DENY.search(p) is not None
 
 
-def _owned_text(path: Path) -> str | None:
-    """Content of ``path`` when it is a portalkit-owned regular file, else ``None``."""
+def _owned_bytes(path: Path) -> bytes | None:
+    """Raw content of ``path`` when it is a portalkit-owned regular file, else ``None``."""
     if not htaccess_owned(path):
         return None
     try:
-        return path.read_text(encoding="utf-8", errors="replace")
+        return path.read_bytes()
     except OSError:
         return None
+
+
+def _owned_text(path: Path) -> str | None:
+    """Content of ``path`` when it is a portalkit-owned regular file, else ``None``.
+    Undecodable bytes become U+FFFD (the managed blocks are ASCII, so a damaged file reads
+    as an older owned variant and is rewritten)."""
+    data = _owned_bytes(path)
+    return None if data is None else data.decode("utf-8", errors="replace")
 
 
 def htaccess_state(target: os.PathLike | str) -> str:
@@ -204,8 +213,9 @@ def _write_owned(tgt: Path, text: str, *, dry_run: bool) -> Path | None:
         if not htaccess_owned(path):
             raise OwnershipConflict(".htaccess exists and was not written by portalkit",
                                     [str(path)])
-        # bytes, so an owned file with undecodable bytes is rewritten instead of raising
-        if path.read_bytes() == text.encode("utf-8"):
+        # bytes (same reader as htaccess_owned/_owned_text), so an owned file with
+        # undecodable bytes is rewritten instead of raising
+        if _owned_bytes(path) == text.encode("utf-8"):
             return None
     if dry_run:
         return path

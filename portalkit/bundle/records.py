@@ -202,16 +202,21 @@ def _g(obj: Any, name: str, default: Any = None) -> Any:
 
 def encode_pks1(rec_id: str, spec: Any, enc: Mapping[str, str] | None = None,
                 grids: Mapping[str, np.ndarray] | None = None, unit_w: str = "um",
-                default_enc: str = "f32") -> bytes:
+                default_enc: str = "f32", kind: str = "pks1") -> bytes:
     """Encode a ``Spectrum`` (section 9.1; dict with the same keys also accepted) as pks1.
 
     Returns the raw (uncompressed) record. ``enc`` maps channel -> ``f32`` | ``u16q`` |
-    ``u16log``; unlisted channels use ``default_enc``.
+    ``u16log``; unlisted channels use ``default_enc``. A ``pks1`` spectrum needs a ``flux``
+    channel; a ``sedcurve`` record takes any non-empty channel set (the channel names are
+    the legend, e.g. ``SPHEREx``/``IRS``).
     """
     wave = np.asarray(_g(spec, "wave"), dtype=np.float64).ravel()
     n = int(wave.size)
     chans = _g(spec, "channels") or {}
-    if "flux" not in chans:
+    if kind == "sedcurve":
+        if not chans:
+            raise BundleError(f"record {rec_id!r}: a sedcurve record needs at least one channel")
+    elif "flux" not in chans:
         raise BundleError(f"record {rec_id!r}: channel 'flux' is required")
     units = dict(_g(spec, "units") or {"flux": "Jy"})
     enc = dict(enc or {})
@@ -538,12 +543,16 @@ def write(spec: Any, dest: str | Path | BundleWriter, *,
             skipped.append(rid)
             continue
         if kind in ("pks1", "sedcurve"):
-            raw = encode_pks1(rid, rec, enc, grids, default_enc=default_enc)
+            raw = encode_pks1(rid, rec, enc, grids, default_enc=default_enc, kind=kind)
             for name in (_g(rec, "channels") or {}):
                 if not _is_err(name) and name not in variants:
                     variants.append(name)
             if unit_f is None:
-                unit_f = (_g(rec, "units") or {"flux": "Jy"}).get("flux")
+                units = _g(rec, "units") or {"flux": "Jy"}
+                unit_f = units.get("flux")
+                if unit_f is None and kind == "sedcurve":
+                    unit_f = next((units[c] for c in (_g(rec, "channels") or {})
+                                   if not _is_err(c) and c in units), None)
         elif kind == "pki1":
             raw = encode_pki1(rid, rec, enc.get("data", "u8"), grids)
         else:

@@ -32,7 +32,7 @@ if TYPE_CHECKING:  # pragma: no cover
 __all__ = [
     "Role", "ROLES", "NUMERIC_ROLES", "TierUnavailable",
     "ColumnSpec", "VirtualDim", "Group", "Preset", "DensitySpec", "ManifoldSpec", "ForeignRef",
-    "CatalogSpec", "Spectrum", "Image2D", "RecordSetSpec", "ImageItem", "ImageSetSpec",
+    "CatalogSpec", "Spectrum", "Image2D", "ForeignRecords", "RecordSetSpec", "ImageItem", "ImageSetSpec",
     "TemplateSpec", "FilterSetSpec", "ExtinctionSpec", "Track", "IsochroneSpec", "HipsSpec",
     "OverlaySpec", "NarrativeSpec", "ReadmeSpec", "DatasetSpec", "LegacyFile", "LegacyRef",
     "PageSpec",
@@ -196,6 +196,20 @@ class Image2D:
 
 
 @dataclass
+class ForeignRecords:
+    """Another portal's record shards, referenced instead of written (section 5.6, (A)).
+
+    ``base`` is the URL prefix of the foreign portal's ``data/`` directory, ending in '/':
+    page-relative (``'../../wd2_2640/unified/data/'``) or an absolute https URL on the same
+    host. ``key`` is the record-set key in that portal (its ``data/<key>/index.json``).
+    ``id_column`` names the catalog column whose value is the foreign record id; None means
+    the row id is the record id."""
+    base: str
+    key: str
+    id_column: str | None = None
+
+
+@dataclass
 class RecordSetSpec:
     key: str
     kind: Literal["pks1", "pki1", "json", "sedcurve"]
@@ -209,6 +223,8 @@ class RecordSetSpec:
     legacy_json: tuple[str, str] | None = None         # (dir_url, pattern) Tier A/B only
     # landing-card nouns (singular, plural) for portal.json counts; None -> the kind default
     noun: tuple[str, str] | None = None
+    # another portal's shards: the build writes none (ids/loader are then unused)
+    foreign: ForeignRecords | None = None
 
 
 @dataclass
@@ -392,6 +408,8 @@ class LegacyRef:
     grammar: list[str] = field(default_factory=list)
     preset: str = ""
     presets: dict[str, str] = field(default_factory=dict)   # file -> per-file stub preset
+    # legacy dim key -> unified dim key of the page's dataset (page.legacy.dim_alias, (B))
+    dim_alias: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -481,6 +499,10 @@ def _is_missing(v: Any) -> bool:
 #: A string field with at most this many distinct values (and at least one repeat) is
 #: inferred as ``category`` by :func:`catalog_from_rows`.
 CATEGORY_MAX_LEVELS = 32
+
+
+#: roles stored as float64 when a field has no values to infer a dtype from
+_FLOAT_ROLES: tuple[str, ...] = NUMERIC_ROLES + ("error",)
 
 
 def _column_from_values(name: str, values: list) -> tuple[Any, str]:
@@ -580,6 +602,13 @@ def catalog_from_rows(rows: list[dict], id: str, ra: str | None = None, dec: str
         role = _lookup(roles, nm, inferred)
         if role not in ROLES:
             raise ValueError(f"unknown role {role!r} for field {nm!r}")
+        if rows and all(_is_missing(v) for v in vals):
+            # no value to infer a type from: the declared role decides (float / flag)
+            allm = np.ones(len(vals), dtype=bool)
+            if role in _FLOAT_ROLES:
+                cols_out[-1] = MaskedColumn(np.full(len(vals), np.nan), name=rename[nm], mask=allm)
+            elif role == "flag":
+                cols_out[-1] = MaskedColumn(np.zeros(len(vals), dtype=bool), name=rename[nm], mask=allm)
         kw = dict(_lookup(columns, nm, {}))
         for ref in ("err", "limit", "validity"):
             if kw.get(ref) in rename:

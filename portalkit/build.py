@@ -479,19 +479,82 @@ def _merge_legacy(page: PageSpec, portal: Any) -> PageSpec:
     pc = portal.page(page.id) if portal is not None else None
     if pc is None:
         return page
+    alias = _site_dim_alias(portal, page.id)
     if page.legacy is None:
-        if not (pc.legacy or pc.grammar or pc.preset):
+        if not (pc.legacy or pc.grammar or pc.preset or alias):
             return page
         leg = LegacyRef(files=list(pc.legacy), grammar=list(pc.grammar), preset=pc.preset,
-                        presets=pc.presets())
+                        presets=pc.presets(), dim_alias=alias)
     else:
         files = list(page.legacy.files) or list(pc.legacy)
         presets = {**pc.presets(), **(page.legacy.presets or {})}
         leg = LegacyRef(files=files,
                         grammar=list(page.legacy.grammar) or list(pc.grammar),
                         preset=page.legacy.preset or pc.preset,
-                        presets={k: v for k, v in presets.items() if k in files})
+                        presets={k: v for k, v in presets.items() if k in files},
+                        # the site entry wins over the adapter's PageSpec (section 4.1)
+                        dim_alias={**(getattr(page.legacy, "dim_alias", None) or {}), **alias})
     return dataclasses.replace(page, legacy=leg)
+
+
+def _records_link(r: str, spec: RecordSetSpec) -> str:
+    """``links.records`` entry of a catalog manifest (relative to ``data/<catalog>/``)."""
+    fr = getattr(spec, "foreign", None)
+    if fr is None:
+        return f"../{r}/index.json"
+    url = f"{fr.base}{fr.key}/index.json"
+    if url.lower().startswith(("http://", "https://")):
+        return url
+    return "../../" + url
+
+
+def _site_dim_alias(portal: Any, page_id: str) -> dict[str, str]:
+    """``dim_alias`` of the ``[[portal.page]]`` entry ``page_id`` (read from the raw site
+    registry entry: :class:`~portalkit.context.PageConfig` does not carry it)."""
+    raw = getattr(portal, "raw", None) or {}
+    for g in raw.get("page", []) or []:
+        if isinstance(g, Mapping) and g.get("id") == page_id and isinstance(g.get("dim_alias"), Mapping):
+            return {str(k): str(v) for k, v in g["dim_alias"].items()}
+    return {}
+
+
+def foreign_records_exposure(portal: Any, ds: str, spec: RecordSetSpec,
+                             emap: ExposureMap | None = None) -> str:
+    """Apply the foreign record-set visibility rule (contract (A)) and return the resolved
+    absolute index URL.
+
+    The base is resolved against the portal URL (pages sit at the portal root) and must be
+    on the portal's host. A secure portal may reference secure or public bases; a public
+    portal only public bases. Raises :class:`ExposureRefusal` (exit 3) otherwise and
+    ValueError for a malformed base."""
+    from urllib.parse import urljoin, urlsplit
+    from .deploy import ExposureRefusal
+    from .deploy.exposure import classify_url
+    ref = configmod.foreign_records_ref(ds, spec)
+    purl = getattr(portal, "url", "") or ""
+    vis = getattr(portal, "visibility", "public")
+    resolved = urljoin(purl, ref["url"])
+    if urlsplit(resolved).netloc != urlsplit(purl).netloc:
+        raise ExposureRefusal(
+            f"dataset {ds!r}: foreign records base {spec.foreign.base!r} resolves to {resolved!r}, "
+            f"not on the portal's host {urlsplit(purl).netloc!r}")
+    kind = classify_url(resolved, emap)
+    pkind = classify_url(purl, emap)
+    allowed = {"public": ("public",), "secure": ("public", "secure")}.get(vis, ("public",))
+    if pkind == "external" and kind == "external":
+        # a portal served by another host (served_by external): the URL prefixes cannot
+        # tell public from secure there; only a path under a 'secure' segment is refused
+        # for a public portal
+        if vis == "public" and "/secure/" in urlsplit(resolved).path:
+            kind = "secure"
+        else:
+            return resolved
+    if kind not in allowed:
+        raise ExposureRefusal(
+            f"dataset {ds!r}: {vis} portal {getattr(portal, 'id', '?')!r} references foreign "
+            f"records at {resolved!r} ({kind}); a {vis} portal may reference only "
+            f"{' or '.join(allowed)} record shards. Keep a local copy or make the portal secure.")
+    return resolved
 
 
 def _copy_web(dest: Path, ledger: Ledger) -> int:
@@ -604,13 +667,19 @@ class _PortalBuild:
         self.ds = {k: ds[k] for k in need}
         recs = [k for k in need if isinstance(ds[k], RecordSetSpec)]
         imgs = [k for k in need if isinstance(ds[k], ImageSetSpec)]
+        foreign_recs = [k for k in recs if getattr(ds[k], "foreign", None) is not None]
+        foreign_urls: dict[str, str] = {}
+        for k in foreign_recs:
+            # visibility first: ExposureRefusal (exit 3) propagates out of the build
+            foreign_urls[k] = foreign_records_exposure(self.portal, k, ds[k], fb.emap)
+            self._check_id_column(k, ds[k], ds)
         prov = fb.provenance()
         for k in need:
             spec = ds[k]
             if not isinstance(spec, CatalogSpec):
                 continue
             links: dict[str, Any] = {}
-            rl = {r: f"../{r}/index.json" for r in recs if ds[r].catalog == k}
+            rl = {r: _records_link(r, ds[r]) for r in recs if ds[r].catalog == k}
             if rl:
                 links["records"] = rl
             il = [i for i in imgs if ds[i].catalog == k]
@@ -637,7 +706,20 @@ class _PortalBuild:
 
         # records and images: independent writers (thread pool with jobs > 1)
         jobs: list[tuple[str, Callable[[Ledger], tuple[Any, Any, dict]]]] = []
-        for k in recs + imgs:
+        for k in foreign_recs:
+            spec = ds[k]
+            ref = configmod.foreign_records_ref(k, spec)
+            self.refs[k] = ref
+            # no index is written or read: a stand-in for caps (kind) and the landing count
+            man: dict[str, Any] = {"kind": spec.kind, "foreign": True}
+            if spec.ids:
+                man["n"] = len(spec.ids)
+            self.manifests[k] = man
+            self.ds_report[k] = {"kind": "records", "record": spec.kind, "files": 0,
+                                 "foreign": True, "base": spec.foreign.base,
+                                 "index": foreign_urls.get(k), "warnings": []}
+            fb.log(f"[{self.pid}] records {k}: foreign ({ref['url']})")
+        for k in [r for r in recs if r not in foreign_recs] + imgs:
             spec = ds[k]
             cat = self.cat_results.get(spec.catalog) if spec.catalog else None
             row_of = cat.row_of if cat is not None and cat.id_to_row else None
@@ -708,6 +790,18 @@ class _PortalBuild:
                     self.ds_report[k] = {"kind": kind, "shared": False, "files": len(pr.files)}
             elif isinstance(spec, ReadmeSpec):
                 self.ds_report[k] = {"kind": "readme"}
+
+    @staticmethod
+    def _check_id_column(k: str, spec: RecordSetSpec, ds: Mapping[str, Any]) -> None:
+        col = spec.foreign.id_column
+        cat = ds.get(spec.catalog) if spec.catalog else None
+        if not col or not isinstance(cat, CatalogSpec) or cat.table is None:
+            return
+        # the served keys: the writer stores only the declared columns (plus the id)
+        keys = {c.key for c in cat.columns} | {cat.id}
+        if col not in keys:
+            raise ValueError(f"dataset {k!r}: foreign id_column {col!r} is not a served column "
+                             f"of catalog {spec.catalog!r}")
 
     # -- pages -----------------------------------------------------------
     def _page_refs(self, page: PageSpec, enabled: Iterable[str]) -> dict[str, dict]:
@@ -1368,6 +1462,11 @@ def _check_portal(pdir: Path, gate: str | None, rep: CheckReport) -> None:
                     msg = f"{where}: shared resource {url} not found under res/ or ../{RES_DIRNAME}/"
                     (errors if str(page.get("res", "")).startswith("./") else warnings).append(msg)
                 continue
+            if kind == "records" and "base" in ref:
+                # foreign record set (contract (A)): another portal's shards, not staged
+                # here; validate_page has checked base/url (no filesystem paths)
+                stats["foreign"] = stats.get("foreign", 0) + 1
+                continue
             if not _is_local_ref(url):
                 continue
             p = pdir / _strip(url)
@@ -1460,6 +1559,8 @@ def _check_doc(p: Path, kind: str | None, dsid: str, gate: str | None, fp_by_ds:
                 warnings.append(f"{where}: N={n} is above the 5M first-paint budget table")
         lk = doc.get("links") or {}
         for rel in list((lk.get("records") or {}).values()) + ([lk["images"]] if lk.get("images") else []):
+            if isinstance(rel, str) and rel.startswith("../../"):
+                continue          # a foreign record set (another portal's data/)
             if _is_local_ref(rel) and not (base / _strip(rel)).is_file():
                 warnings.append(f"{where}: link {rel} is not staged")
     elif kind == "records":

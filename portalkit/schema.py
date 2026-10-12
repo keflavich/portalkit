@@ -70,6 +70,7 @@ __all__ = [
     "validate",
     "assert_valid",
     "json_errors",
+    "foreign_base_error",
 ]
 
 # ---------------------------------------------------------------------------
@@ -97,7 +98,7 @@ DATASET_KINDS = ("catalog", "records", "images", "templates", "filters", "extinc
 RECORD_KINDS = ("pks1", "pki1", "json", "sedcurve")
 
 GRAMMARS = ("bare-name", "kv-view", "gc-query", "wavelength", "beat", "gallery-index",
-            "w51-rowid", "specviewer")
+            "w51-rowid", "specviewer", "spherex-colours")
 
 CLIP_MODES = ("none", "saturate", "drop")
 VISIBILITIES = ("public", "secure")
@@ -416,6 +417,41 @@ def _relpath(e: _E, path: str, v: Any, allow_url: bool = True, allow_parent: boo
     return True
 
 
+def foreign_base_error(base: Any) -> str | None:
+    """Why ``base`` is not a valid foreign records base, or None (section 4.3 (A)).
+
+    A base is a URL prefix ending in '/': a page-relative path ('..' allowed, no leading '/',
+    no backslash) or an absolute ``https://`` URL. Plain ``http://`` bases (which the build's
+    exposure check refuses too), filesystem paths (leading '/', 'file:', drive letters) and
+    other schemes are rejected.
+    """
+    if not isinstance(base, str) or not base:
+        return "expected a non-empty string"
+    if not base.endswith("/"):
+        return f"{base!r} must end in '/'"
+    if base.startswith("https://"):
+        return None
+    if base.lower().startswith("http://"):
+        return f"{base!r}: an absolute foreign base must be an https:// URL"
+    low = base.lower()
+    if base.startswith("/") or "\\" in base or low.startswith("file:") or ":" in base.split("/")[0]:
+        return f"{base!r} must be a page-relative path or an https:// URL (no filesystem paths)"
+    return None
+
+
+def _foreign_base(e: _E, dp: str, ref: dict) -> None:
+    base = ref.get("base")
+    err = foreign_base_error(base)
+    if err is not None:
+        e(_p(dp, "base"), err)
+        return
+    url = ref.get("url")
+    if isinstance(url, str) and not url.startswith(base):
+        e(_p(dp, "url"), f"foreign records url {url!r} must start with base {base!r}")
+    if "id_column" in ref:
+        _str(e, _p(dp, "id_column"), ref["id_column"])
+
+
 def _unique_ids(e: _E, path: str, items: Any, key: str = "id") -> set:
     seen: set = set()
     if not _is_list(items):
@@ -598,7 +634,10 @@ def validate_site(obj: Any, stem: str | None = None) -> list[str]:
             gp = _p(_p(pp, "page"), j)
             if not _obj(e, gp, pg):
                 continue
-            _keys(e, gp, pg, ("id",), ("legacy", "preset", "grammar"))
+            _keys(e, gp, pg, ("id",), ("legacy", "preset", "grammar", "dim_alias"))
+            if "dim_alias" in pg and _obj(e, _p(gp, "dim_alias"), pg["dim_alias"]):
+                for k, v in pg["dim_alias"].items():
+                    _str(e, _p(_p(gp, "dim_alias"), k), v)
             _str(e, _p(gp, "id"), pg.get("id"))
             if "legacy" in pg:
                 _legacy_files(e, _p(gp, "legacy"), pg["legacy"])
@@ -699,7 +738,7 @@ def validate_portal(obj: Any) -> list[str]:
 
 _DSREF_KEYS = {
     "catalog": (("kind", "url"), ("context",)),
-    "records": (("kind", "url", "catalog", "record"), ()),
+    "records": (("kind", "url", "catalog", "record"), ("base", "id_column")),
     "images": (("kind", "url"), ("catalog",)),
     "templates": (("kind", "url"), ()),
     "filters": (("kind", "url"), ()),
@@ -976,7 +1015,7 @@ def validate_page(obj: Any) -> list[str]:
         _opt_str(e, "page", pg, "subtitle", nonempty=False)
         if "legacy" in pg and pg["legacy"] is not None and _obj(e, "page.legacy", pg["legacy"]):
             lg = pg["legacy"]
-            _keys(e, "page.legacy", lg, ("files",), ("grammar", "preset", "presets"))
+            _keys(e, "page.legacy", lg, ("files",), ("grammar", "preset", "presets", "dim_alias"))
             if "files" in lg:
                 _strlist(e, "page.legacy.files", lg["files"])
             if "presets" in lg and _obj(e, "page.legacy.presets", lg["presets"]):
@@ -989,6 +1028,10 @@ def validate_page(obj: Any) -> list[str]:
                 for i, g in enumerate(lg["grammar"]):
                     if g not in GRAMMARS:
                         e(_p("page.legacy.grammar", i), f"unknown grammar {g!r}")
+            if "dim_alias" in lg and _obj(e, "page.legacy.dim_alias", lg["dim_alias"]):
+                for k, v in lg["dim_alias"].items():
+                    if _str(e, _p("page.legacy.dim_alias", k), v) and not k:
+                        e("page.legacy.dim_alias", "empty legacy dim key")
     datasets = obj.get("datasets")
     if datasets is None or not _obj(e, "datasets", datasets):
         datasets = {}
@@ -1006,6 +1049,10 @@ def validate_page(obj: Any) -> list[str]:
             _bool(e, _p(dp, "context"), ref["context"])
         if kind == "records":
             _str(e, _p(dp, "record"), ref.get("record"), choices=RECORD_KINDS)
+            if "base" in ref:
+                _foreign_base(e, dp, ref)
+            elif "id_column" in ref:
+                e(_p(dp, "id_column"), "only a foreign records entry (with 'base') takes id_column")
         if "catalog" in ref and ref["catalog"] is not None:
             c = ref["catalog"]
             if _str(e, _p(dp, "catalog"), c):

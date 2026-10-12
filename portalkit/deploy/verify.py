@@ -338,7 +338,8 @@ ALLOWOVERRIDE_HINT = ("the portalkit .htaccess is probably rejected by AllowOver
 def check_manifest_denied(base_url: str, manifest_rel: str, *, visibility: str,
                           deny_expected: bool, auth: str | None = None,
                           timeout: float = DEFAULT_TIMEOUT,
-                          opener: urllib.request.OpenerDirector | None = None
+                          opener: urllib.request.OpenerDirector | None = None,
+                          htaccess_present: bool = False
                           ) -> tuple[bool | None, int | None, str | None]:
     """HEAD ``<base_url>/<manifest_rel>`` (the ownership manifest, docs/deploy.md
     ".htaccess") and return ``(denied, status, warning)``.
@@ -348,8 +349,10 @@ def check_manifest_denied(base_url: str, manifest_rel: str, *, visibility: str,
     401 from a secure portal checked without credentials: Apache applies a ``.htaccess``
     ``RedirectMatch`` after authentication). ``warning`` is set when the manifest is served (or the check failed)
     while ``deny_expected`` (the target holds the portalkit deny rule), when it is served
-    without the rule, and for a 5xx while ``deny_expected`` (Apache rejecting the
-    ``.htaccess``: :data:`ALLOWOVERRIDE_HINT`); ``None`` otherwise."""
+    without the rule, and for a 5xx while ``deny_expected`` or ``htaccess_present`` (the
+    target holds a portalkit ``.htaccess``, with or without the deny rule): Apache rejecting
+    the ``.htaccess`` (:data:`ALLOWOVERRIDE_HINT`). A 5xx is never reported as served;
+    ``None`` otherwise."""
     opener = opener or urllib.request.build_opener()
     url = file_url(base_url, manifest_rel)
     send = auth if visibility == "secure" else None
@@ -365,7 +368,7 @@ def check_manifest_denied(base_url: str, manifest_rel: str, *, visibility: str,
         return None, st, None
     if st is not None and 500 <= st < 600:
         return None, st, (f"{url} answered {st}: {ALLOWOVERRIDE_HINT}"
-                          if deny_expected else None)
+                          if deny_expected or htaccess_present else None)
     if st is None or not 200 <= st < 300:
         # neither served nor denied (urllib follows redirects, so this is e.g. 400 or 410)
         return None, st, (f"{url} answered {st} (expected 403); the deny rule was not "
@@ -376,6 +379,67 @@ def check_manifest_denied(base_url: str, manifest_rel: str, *, visibility: str,
                            "and its absolute paths are served")
     return False, st, (f"{url} answered {st}: the target has no portalkit .htaccess deny "
                        "rule (a foreign .htaccess?), so the ownership manifest is served")
+
+
+def foreign_record_urls(base_url: str, target: os.PathLike | str,
+                        files: Mapping[str, Mapping]) -> list[tuple[str, str]]:
+    """``[(label, absolute index URL)]`` of the foreign record sets (page.json records refs
+    with ``base``, contract (A)) of the deployed pages among ``files``, resolved against the
+    page URL under ``base_url``. Unreadable pages are skipped."""
+    from ..legacy.extract import LegacyExtractError, script_json
+    base = base_url if base_url.endswith("/") else base_url + "/"
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for rel in sorted(files):
+        if not rel.endswith(".html"):
+            continue
+        try:
+            page = script_json(Path(target) / rel, "pk-page")
+        except (LegacyExtractError, OSError, UnicodeDecodeError):
+            continue
+        dsets = page.get("datasets") if isinstance(page, Mapping) else None
+        for ds, ref in (dsets or {}).items():
+            if not (isinstance(ref, Mapping) and ref.get("kind") == "records"
+                    and isinstance(ref.get("base"), str) and isinstance(ref.get("url"), str)):
+                continue
+            url = urljoin(file_url(base, rel), ref["url"])
+            if url not in seen:
+                seen.add(url)
+                out.append((f"foreign records {ds} ({rel})", url))
+    return out
+
+
+def check_foreign_records(base_url: str, target: os.PathLike | str,
+                          files: Mapping[str, Mapping], *, visibility: str,
+                          auth: str | None = None, timeout: float = DEFAULT_TIMEOUT,
+                          opener: urllib.request.OpenerDirector | None = None
+                          ) -> list[FileCheck]:
+    """HEAD the index of every foreign record set the deployed pages reference.
+
+    A public index must answer 200. A secure portal may reference secure indexes: without
+    credentials 401 counts as reachable, with ``auth`` (sent only from a secure portal)
+    200 is expected. Anything else (404, 5xx, unreachable) fails the check."""
+    opener = opener or urllib.request.build_opener()
+    checks: list[FileCheck] = []
+    with tempfile.TemporaryDirectory(prefix="pk-verify-") as tmpdir:
+        for label, url in foreign_record_urls(base_url, target, files):
+            chk = FileCheck(path=label, url=url)
+            send = auth if visibility == "secure" else None
+            st, hdrs, _, _, err = _fetch(url, auth=send, method="HEAD", timeout=timeout,
+                                         tmpdir=tmpdir, opener=opener)
+            chk.status = st
+            if err:
+                chk.fail(err)
+            elif st == 401 and visibility == "secure" and not send:
+                chk.problems.append("answered 401 (secure; not checked without credentials)")
+            elif st != 200:
+                chk.fail(f"foreign record index answered {st} (expected 200"
+                         + (" or 401" if visibility == "secure" and not send else "") + ")")
+            if hdrs:
+                chk.content_type = hdrs.get("Content-Type")
+                chk.cache_control = hdrs.get("Cache-Control")
+            checks.append(chk)
+    return checks
 
 
 # ---------------------------------------------------------------------------
@@ -435,10 +499,15 @@ def verify(family: str, site: Any, *, portal_id: str | None = None,
         if rep.htaccess is False:
             rep.notes.append(".htaccess cache headers are not in effect (AllowOverride?); "
                              "the viewer works either way")
+        fchecks = check_foreign_records(url, tgt, man.get("files", {}), visibility=visibility,
+                                        auth=auth, timeout=timeout)
+        rep.checks.extend(fchecks)
+        if fchecks:
+            rep.notes.append(f"{len(fchecks)} foreign record index(es) HEAD-checked")
         mrel = os.path.relpath(manifest_path_for(tgt, family, pid), tgt).replace(os.sep, "/")
         denied, mst, warn = check_manifest_denied(
             url, mrel, visibility=visibility, deny_expected=has_deny_rule(tgt), auth=auth,
-            timeout=timeout)
+            timeout=timeout, htaccess_present=htaccess_state(tgt) in ("cache", "deny"))
         rep.manifest_denied = denied
         if warn and warn not in rep.warnings:
             rep.warnings.append(warn)

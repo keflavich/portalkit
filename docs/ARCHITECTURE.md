@@ -147,6 +147,7 @@ portalkit/                                   repo root
     legacy/hashmap.py               WP13   legacy hash/query grammar registry (Python side, for tests and stubs)
     legacy/dirgallery.py            WP13   directory scan -> ImageSetSpec with regex facets
     legacy/importshim.py            WP13   tracked import of legacy generator modules
+    legacy/nirspec.py               WP25   shared NIRSpec helpers: grating cuts, pks1 segments, stitched pki1 s2d
     data/expr_vectors.json          WP03   shared expression test vectors (Python and JS)
     data/filters_registry.ecsv      WP02   filter metadata table
     data/g23_alav.ecsv              WP02   A_lambda/A_V per filter for R_V 3.1, 5.5
@@ -415,6 +416,8 @@ Legacy items (WPE1). Each `legacy` item is a string (a path relative to `legacy_
 - `replace = false` keeps the file out of `--replace` stubbing and backups (default `true`). Use it for a legacy file reached through a served symlink (for example robitaille `imaging/ -> modelgrids/imaging_run/png`), which §11.3 would otherwise refuse. `deploy` lists such files as a plan warning; `status` still reports them.
 - A file is listed at most once per page and must be relative without `..` components. Python: `portalkit.spec.LegacyFile`; `PageConfig.legacy` stays the list of file names and `PageConfig.files` holds the `LegacyFile` items.
 
+Legacy dim alias (WPE6). `[[portal.page]] dim_alias = {legacy_dim_key = "unified_dim_key", ...}` (or `PageSpec.legacy.dim_alias`; the two merge, the site entry winning) maps the dim keys a legacy hash or query carries to the unified page's dims, for example `{c_F162M_F210M = "f162m-f210m", m_F162M = "f162m"}`. `config.py` checks that every value is a stored, virtual or manifold dim of a foreground catalog on the page and writes the map unchanged as `page.legacy.dim_alias`. `legacyhash.js` applies it to the `kv-view` x/y/z keys, to the column part of `kv-view` `c=<by>[~cmap~lo~hi]`, and to `spherex-colours`; `legacy/hashmap.py` mirrors the same rules. `gc-query` indexes dims by position and does not alias its `y` band name.
+
 Rules:
 - `target_dir` defaults to `<legacy_dir>/unified/`. When two families share a `legacy_dir`, each family uses `<legacy_dir>/unified/<family>/`. This applies to WD2 and NIRSpec 2640 in `web/public/jwst/wd2/nirspec_2640`.
 - `status = "excluded"` records out-of-scope pages, such as the jwst-gc monitor, so that `portalkit status` lists them.
@@ -452,7 +455,7 @@ Top-level keys (all required unless marked optional):
 | `assets` | URL ending in `/` | asset base (default `https://data.rc.ufl.edu/pub/adamginsburg/portalkit/v<pk>/`; with `--vendor-assets`: `./_pk/v<pk>/`) |
 | `res` | URL ending in `/` | shared resource base (`https://data.rc.ufl.edu/pub/adamginsburg/portalkit-res/` or `./res/`) |
 | `portal` | `{id,title,visibility,nav:"portal.json"}` | |
-| `page` | `{id,archetype,title,subtitle?,legacy?:{files:[..],grammar:[..],preset?,presets?:{file:preset}}}` | `files` are the legacy file names (strings); `presets` holds the per-file stub presets of §4.1 legacy tables (keys ⊆ `files`) |
+| `page` | `{id,archetype,title,subtitle?,legacy?:{files:[..],grammar:[..],preset?,presets?:{file:preset},dim_alias?:{legacy_dim:dim}}}` | `files` are the legacy file names (strings); `presets` holds the per-file stub presets of §4.1 legacy tables (keys ⊆ `files`); `dim_alias` maps legacy dim keys to unified dim keys (§4.1, §6.4) |
 | `datasets` | `{dsId: DatasetRef}` | see below |
 | `layout` | LayoutNode | pane tree |
 | `state` | object | initial store values (§6.2 keys); validated against dataset columns |
@@ -467,6 +470,8 @@ Top-level keys (all required unless marked optional):
 ```json
 {"kind":"catalog",   "url":"data/src/manifest.json", "context":false}
 {"kind":"records",   "url":"data/spec/index.json", "catalog":"src", "record":"pks1"}   // also pki1 | json | sedcurve
+{"kind":"records",   "url":"../../wd2_2640/unified/data/spec/index.json", "base":"../../wd2_2640/unified/data/",
+                     "catalog":"src", "record":"pks1", "id_column":"SrcName"}                // foreign (WPE6)
 {"kind":"images",    "url":"data/img/images.json", "catalog":"src"}
 {"kind":"templates", "url":"{res}templates/index.3f9a2b1c.json"}
 {"kind":"filters",   "url":"{res}filters.1c2d3e4f.json"}
@@ -478,6 +483,12 @@ Top-level keys (all required unless marked optional):
 {"kind":"narrative", "url":"data/narrative.json"}
 {"kind":"portal",    "url":"portal.json"}
 ```
+
+Foreign record sets (WPE6). A `RecordSetSpec(..., foreign=ForeignRecords(base, key, id_column=None))` names another portal's record set instead of writing its own. The build writes no shards, index or stand-in files for it; the page's records ref carries `base` (the URL prefix of the other portal's `data/` directory, ending in `/`) and `url = base + key + "/index.json"`, plus `id_column` when set. Everything below `base` is the other portal's own `data/<key>/` layout (§5.6).
+- `base` is relative to the page (for example `../../wd2_2640/unified/data/`) or an absolute `https://` URL. A leading `/`, a backslash, `file:` or another scheme-like first segment is refused (`schema.foreign_base_error`), so no absolute filesystem path reaches a page.
+- `data/records.js` resolves every record URL of the set (index, shards, `r/` files) against `base` when present, else against the portal's own `data/`. With `id_column`, the record of a row is looked up by that catalog column's value instead of the row id; the column must exist in the set's catalog.
+- Visibility: the build resolves the ref against the portal URL and classifies it (§11.2). A secure portal may reference secure or public bases; a public portal may reference public bases only, and the build refuses a secure one with `ExposureRefusal` (exit 3). A cross-host absolute URL is refused.
+- `portalkit check` accepts a foreign entry without local files (it is counted under `foreign`) and still rejects absolute filesystem paths. `verify --http` HEADs each foreign index (200 required; a 401 from a secure base without credentials is reported as a note).
 
 `{res}` and `{assets}` are substituted client-side. Relative URLs resolve against the page URL.
 
@@ -718,6 +729,8 @@ data/<set>/r/<h8>.bin             one gzip member per file (layout "file")
 
 `json-legacy` mode: `{"kind":"json-legacy","dir":"<url>","pattern":"{id}.json"}`. This mode is accepted only when the build tier is A or B and the portal has not passed G2. `portalkit check --gate G2` fails while any `json-legacy` set remains.
 
+Foreign sets (WPE6, §4.3) have no files in this portal: the ref's `base` points at the other portal's `data/`, and the index, shards and `r/` files are read from `<base><key>/`. A catalog manifest's `links.records` entry for a foreign set is the ref URL (relative ones gain `../../`, since the manifest sits two levels below the page).
+
 ### 5.7 `pks1` record (1D spectrum; also `sedcurve`)
 
 After gunzip:
@@ -746,7 +759,7 @@ Header:
 ```
 
 - Channels with `enc` `u16q`/`u16log` follow §5.3 (code 0 = missing). `f32` uses NaN for missing.
-- `sedcurve` is a pks1 file with `u16log` flux channels, which gives compact Robitaille SED curves.
+- `sedcurve` is a pks1 file with `u16log` flux channels, which gives compact Robitaille SED curves. A `sedcurve` record may carry any non-empty channel set (WPE6; for example `SPHEREx` and `IRS` legend channels); a plain `pks1` record needs a `flux` channel. Without a `flux` unit the index `unit_f` comes from the first channel that is not an error channel.
 
 ### 5.8 `pki1` record (2D spectrum) and PNG mode
 
@@ -861,6 +874,7 @@ Panes never call each other. They read and write store keys, call the DataClient
 | `frame:<pane>` | `{preset?:string, F?:number[] (2·D), dims:string[]}` | `<pane>.frame=` (preset name or `b64:` f32) | manifold, tour, controls | manifold, compass |
 | `color` | `{by: key|expr|null, cmap, lo?, hi?}` | `c=` | controls, legend | all plots, sky markers |
 | `av`, `rv`, `dm` | number | `av=`, `rv=`, `dm=` | controls (rAF-throttled) | sed, spectrum1d templates, overlays, isochrones |
+| `speed` | number > 0 (tour / playback speed multiplier, default 1) | `speed=` | wavelength and tour controls, legacy `?speed=` / `speed=` (§6.4) | wavelength, manifold tour |
 | `template` | `{key, grid, scale:"auto"|number, bands?:string[]}` or null | `tpl=` | controls | spectrum1d, sed |
 | `features` | string[] (atlas families on) | `feat=` | controls | spectrum1d, sed |
 | `spec` | `{pinned:string[] (≤ 8), variant, xr?:[w0,w1], yr?:[..], segments?:{label:bool}, vel?:km/s}` | `spec=`, `wl=` | spectrum1d, controls | spectrum1d, spectrum2d (x-link) |
@@ -958,14 +972,15 @@ export function mapLegacy(grammars: string[], loc): {hash: Record<string,string>
 - `#sky=..&beat=b3` keeps the hash view: at load and on hash navigation the narrative pane computes `explicitSky(sky, pageSky, {beatSet})` and keeps the explicit parts over the beat's, with no highlight goto for a kept view;
 - `narrative:highlight` carries `goto: true` only for a beat with a highlight, no `view.sky`, no `suppress_view`, and no kept explicit view (docs/js.md).
 
-Grammar names (WP13 implements all of them; WP12 tests one fixture per name):
+Grammar names (WP13 implements all of them; WP12 tests one fixture per name; WPE6 registers `spherex-colours` in `schema.GRAMMARS`, WPE5 implements its parser in `legacyhash.js`, and `legacy/hashmap.py` mirrors it). The canonical hash key `speed` (a float, the tour speed multiplier) is the target of the legacy `?speed=` and `speed=` forms (WPE6, item D).
 
 | Grammar | Legacy form | Maps to |
 |---|---|---|
 | `bare-name` | `#name` | `id=` via id/alias |
 | `kv-view` | `#view=..&name=..` | `id=`, `view=` |
 | `gc-query` | `?a=&b=&m=&p=&x1=&x2=&y1=&y2=&cb=&cd=&cm=&cl=&ch=&g=&rv=&fa=&sel=` and treasury `y,g,rv,fa` | `manifold.frame`, `axes`, `color`, `rv`, `filters`, `sel=r:` |
-| `wavelength` | `#rung=&ra=&dec=&fov=`, `?speed=` | `rung=`, `sky=` |
+| `wavelength` | `#rung=&ra=&dec=&fov=`, `?speed=` or `#speed=` | `rung=`, `sky=`, `speed=` |
+| `spherex-colours` | `?ax=&ay=&bx=&by=&c=&band=&cmd=&zoom=&yoo=&hide=` (legacy SPHEREx `colours.html` query state) | CCD panel axes (`ax`,`ay`), second panel axes (`bx`,`by`), `color` (`c`), CMD band (`band`), CMD panel on/off (`cmd`), `xr`/`yr` (`zoom`), the `yoo_*` overlay layers that are on (`yoo`, comma list), hidden levels of the colour-by category (`hide`); dims pass through `dim_alias` |
 | `beat` | `#beat=` | `beat=` |
 | `gallery-index` | `#<index>` or `#img=` | `lb=` |
 | `w51-rowid` | `#W51-000123` | alias lookup |
@@ -1470,6 +1485,10 @@ class RecordSetSpec:
     layout: Literal["shard","file"] = "shard"
     legacy_json: tuple[str, str] | None = None         # (dir_url, pattern) Tier A/B only
     noun: tuple[str, str] | None = None   # landing-card nouns (§4.2)
+    foreign: ForeignRecords | None = None # another portal's set; no shards written (§4.3, WPE6)
+
+@dataclass
+class ForeignRecords: base: str; key: str; id_column: str | None = None   # base ends in '/'
 
 @dataclass
 class ImageItem:    id: str; roles: dict[str, str]; caption: str = ""; tags: dict[str, str] = field(default_factory=dict); w: int | None = None; h: int | None = None
@@ -1505,6 +1524,7 @@ DatasetSpec = (CatalogSpec | RecordSetSpec | ImageSetSpec | TemplateSpec | Filte
 
 @dataclass
 class LegacyRef:      files: list[str]; grammar: list[str] = field(default_factory=list); preset: str = ""
+                      dim_alias: dict[str, str] = field(default_factory=dict)   # §4.1 legacy dim alias
 @dataclass
 class PageSpec:
     id: str
@@ -2524,7 +2544,7 @@ Waves:
   - `tests/adapters/test_jwst_archive.py`
   - `tests/e2e/test_port_jwst_archive.py`
   - `tests/py/test_no_checklist_write.py`
-- description: Two [[portal]] entries: the archive portal (secure, jwst/spectra/portal/unified) and the W51 archive_colors build (secure, w51/portal/archive_colors/unified) with the W51 photometry as context dataset. Spectra ids are derived from the x1d filename prefix (fixes 695/1539 stale idx). Band-coverage validity bits. One archive gallery with facets replaces 11 legacy galleries (the PNGs are public through the web/public/jwst/spectra symlink, so the gallery portal is public and links to the secure colour portal). Checklist annotate mode plus archive-checklist-diff; never writes jwst_archive_spectra_checklist.csv (test enforces).
+- description: Two [[portal]] entries: the archive portal (secure, jwst/spectra/portal_unified) and the W51 archive_colors build (secure, w51/portal/archive_colors/unified) with the W51 photometry as context dataset. Spectra ids are derived from the x1d filename prefix (fixes 695/1539 stale idx). Band-coverage validity bits. One archive gallery with facets replaces 11 legacy galleries (the PNGs are public through the web/public/jwst/spectra symlink, so the gallery portal is public and links to the secure colour portal). Checklist annotate mode plus archive-checklist-diff; never writes jwst_archive_spectra_checklist.csv (test enforces).
 
 ### WP29 — Adapter: w51 (wave 5)
 

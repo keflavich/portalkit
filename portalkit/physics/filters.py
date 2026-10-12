@@ -24,6 +24,12 @@ NIRSpec dispersers and the Roman WFI prism/grism are excluded (spectroscopic mod
 Reading the cache (pickled ``requests.Response`` objects) only happens in
 :func:`regenerate_registry`; normal builds read the vendored ECSV.
 
+The cache directory may also hold raw SVO VOTables (``*.xml``/``*.vot``, the body of
+``fps.php?ID=<filterID>``): the HST rows (WFC3/IR, WFC3/UVIS2, ACS/WFC; added for wd2) came
+from such files, since the astroquery cache had no HST data. Rows of the current registry
+whose key the cache does not provide are carried over unchanged (``carry_over``), so a
+regeneration from a cache without them keeps them.
+
 :func:`write` emits ``filters.<h8>.json`` plus one ``filters/<slug>.<h8>.json`` per
 transmission curve (``{"w":[..],"t":[..]}``); ``trans`` URLs are relative to the
 directory of ``filters.<h8>.json``.
@@ -369,15 +375,20 @@ def read_svo_cache(cache_dir: str | Path = SVO_CACHE_DIR) -> tuple[dict[str, dic
 
     meta: dict[str, dict] = {}
     curves: dict[str, tuple] = {}
-    for fn in sorted(Path(cache_dir).glob("*.pickle")):
-        with open(fn, "rb") as fh:
-            try:
-                resp = pickle.load(fh)  # noqa: S301 - local astroquery cache
-            except (pickle.UnpicklingError, EOFError, AttributeError, ModuleNotFoundError,
-                    ImportError) as err:
-                warnings.warn(f"skipping unreadable SVO cache file {fn.name}: {err}")
-                continue
-        content = getattr(resp, "content", None)
+    cdir = Path(cache_dir)
+    files = sorted(list(cdir.glob("*.pickle")) + list(cdir.glob("*.xml")) + list(cdir.glob("*.vot")))
+    for fn in files:
+        if fn.suffix == ".pickle":
+            with open(fn, "rb") as fh:
+                try:
+                    resp = pickle.load(fh)  # noqa: S301 - local astroquery cache
+                except (pickle.UnpicklingError, EOFError, AttributeError, ModuleNotFoundError,
+                        ImportError) as err:
+                    warnings.warn(f"skipping unreadable SVO cache file {fn.name}: {err}")
+                    continue
+            content = getattr(resp, "content", None)
+        else:
+            content = fn.read_bytes()
         if not isinstance(content, (bytes, bytearray)) or b"<TABLE" not in content.upper():
             continue
         with warnings.catch_warnings():
@@ -403,7 +414,12 @@ def read_svo_cache(cache_dir: str | Path = SVO_CACHE_DIR) -> tuple[dict[str, dic
 
 _LABEL_PREFIX = {"NIRCam": "", "NIRCam2025": "", "MIRI": "", "NIRISS": "NIRISS ",
                  "2MASS": "2MASS ", "IRAC": "IRAC ", "MIPS": "MIPS ", "WFI": "WFI ",
-                 "VISTA": "VISTA ", "WFCAM": "WFCAM ", "UKIDSS": "UKIDSS "}
+                 "VISTA": "VISTA ", "WFCAM": "WFCAM ", "UKIDSS": "UKIDSS ",
+                 "WFC3_IR": "WFC3 ", "WFC3_UVIS1": "WFC3 ", "WFC3_UVIS2": "WFC3 ",
+                 "ACS_WFC": "ACS "}
+
+#: extra short aliases of the HST cameras (``WFC3_F160W``, ``ACS_F814W``)
+_HST_ALIAS = {"WFC3_IR": "WFC3", "WFC3_UVIS2": "WFC3", "ACS_WFC": "ACS"}
 
 
 def _label_instrument(fid: str) -> tuple[str, str, str]:
@@ -435,6 +451,8 @@ def _aliases(fid: str, instrument: str) -> list[str]:
         out.append(f"MIPS{band[:-2]}")
     if inst == "IRAC":
         out += [f"IRAC{band[1:]}", f"I{band[1:]}"]
+    if inst in _HST_ALIAS:
+        out.append(f"{_HST_ALIAS[inst]}_{band}")
     seen: list[str] = []
     for a in out:
         if a not in seen and a != fid:
@@ -460,8 +478,12 @@ def _str_meta(m: Mapping, k: str, default: str = "") -> str:
     return v.decode() if isinstance(v, bytes) else str(v)
 
 
-def build_registry_table(cache_dir: str | Path = SVO_CACHE_DIR, zp_ecsv: str | Path = JWST_ZP_ECSV):
-    """Registry :class:`astropy.table.Table` from the SVO cache and the JWST zero points."""
+def build_registry_table(cache_dir: str | Path = SVO_CACHE_DIR, zp_ecsv: str | Path = JWST_ZP_ECSV,
+                         carry_over: str | Path | None = None):
+    """Registry :class:`astropy.table.Table` from the SVO cache and the JWST zero points.
+
+    ``carry_over`` (a registry ECSV) contributes its rows whose key the cache does not
+    provide, unchanged."""
     from astropy.table import Table
 
     meta, curves = read_svo_cache(cache_dir)
@@ -501,9 +523,15 @@ def build_registry_table(cache_dir: str | Path = SVO_CACHE_DIR, zp_ecsv: str | P
             "aliases": " ".join(_aliases(fid, instrument)),
             "trans_w": tw, "trans_t": tt,
         })
-    rows.sort(key=lambda r: (r["wl_um"], r["key"]))
     names = ["key", "label", "instrument", "facility", "wl_um", "weff_um", "lam_eff_um", "zp_jy",
              "zp_source", "system", "aliases", "trans_w", "trans_t"]
+    if carry_over is not None and Path(carry_over).is_file():
+        have = {r["key"] for r in rows}
+        old = Table.read(str(carry_over), format="ascii.ecsv")
+        for r in old:
+            if str(r["key"]) not in have:
+                rows.append({n: (r[n].item() if hasattr(r[n], "item") else r[n]) for n in names})
+    rows.sort(key=lambda r: (r["wl_um"], r["key"]))
     t = Table(rows=[[r[n] for n in names] for r in rows], names=names)
     for c, u in (("wl_um", "um"), ("weff_um", "um"), ("lam_eff_um", "um"), ("zp_jy", "Jy")):
         t[c].unit = u
@@ -520,9 +548,11 @@ def build_registry_table(cache_dir: str | Path = SVO_CACHE_DIR, zp_ecsv: str | P
 
 
 def regenerate_registry(path: str | Path = REGISTRY_PATH, cache_dir: str | Path = SVO_CACHE_DIR,
-                        zp_ecsv: str | Path = JWST_ZP_ECSV) -> Path:
-    """Rebuild ``filters_registry.ecsv`` from the SVO cache (see module docstring)."""
-    t = build_registry_table(cache_dir, zp_ecsv)
+                        zp_ecsv: str | Path = JWST_ZP_ECSV,
+                        carry_over: str | Path | None = REGISTRY_PATH) -> Path:
+    """Rebuild ``filters_registry.ecsv`` from the SVO cache (see module docstring); rows of
+    ``carry_over`` (default: the vendored registry) missing from the cache are kept."""
+    t = build_registry_table(cache_dir, zp_ecsv, carry_over=carry_over)
     if len(t) == 0:
         raise RuntimeError(f"no filters found in {cache_dir}")
     path = Path(path)

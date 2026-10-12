@@ -22,6 +22,13 @@ categories}`` in their page:
 sparse limits table. Presets with one unit weight per axis become ``axes`` presets; any
 other weighting becomes a ``frame`` preset whose ``F`` reproduces the legacy projection in
 portalkit's standardization (the writer's median / 1.4826 MAD statistics).
+
+Virtual colours: a dim whose values equal the difference of two other stored dims (for
+example ``c_F162M_F210M = m_F162M - m_F210M``, the pairwise colour dims of the NIRSpec and
+WD2 manifolds) becomes a :class:`~portalkit.spec.VirtualDim` ``"<a>-<b>"`` over the two
+stored columns instead of a stored column (:func:`detect_virtual_colours`;
+``virtual_colours=False`` keeps every dim stored). Presets, groups, density grids and the manifold dims then name the
+virtual key, and the client folds it into the base weights (ARCHITECTURE section 7.3).
 """
 
 from __future__ import annotations
@@ -34,10 +41,11 @@ import numpy as np
 
 from ..bundle.codec import col_stats
 from ..constants import T0_MAX
-from ..spec import (CatalogSpec, DensitySpec, Group, ManifoldSpec, Preset, catalog_from_rows,
-                    safe_key)
+from ..spec import (CatalogSpec, DensitySpec, Group, ManifoldSpec, Preset, VirtualDim,
+                    catalog_from_rows, safe_key)
 
-__all__ = ["ManifoldPayloadError", "LIMIT_SUFFIX", "limit_code", "convert", "preset_frame"]
+__all__ = ["ManifoldPayloadError", "LIMIT_SUFFIX", "MAX_QUANTUM", "limit_code", "convert",
+           "preset_frame", "detect_virtual_colours"]
 
 #: suffix of the sibling limit-code column of every dim
 LIMIT_SUFFIX = "__lim"
@@ -92,6 +100,16 @@ def _weights(w: Any) -> dict[str, float] | None:
     raise ManifoldPayloadError(f"preset weights must be a dict or a dim key, got {type(w).__name__}")
 
 
+def _relabel(w: Mapping[str, float], labels: Mapping[str, str]) -> dict[str, float]:
+    """Preset weights keyed by the converted dim keys; weights on two legacy keys that name
+    one dim (a duplicated colour) add up."""
+    out: dict[str, float] = {}
+    for k, v in w.items():
+        lk = labels.get(k, k)
+        out[lk] = out.get(lk, 0.0) + v
+    return out
+
+
 def preset_frame(x: Mapping[str, float], y: Mapping[str, float], dims: list[str],
                  factor: Mapping[str, float]) -> list[float]:
     """``F`` (length ``2*len(dims)``) for legacy weights ``x``/``y``; ``factor[d]`` converts a
@@ -106,10 +124,95 @@ def preset_frame(x: Mapping[str, float], y: Mapping[str, float], dims: list[str]
     return F
 
 
+def _quantum(v: np.ndarray) -> float:
+    """Rounding step of the finite values of ``v`` (``10**-k`` for the smallest ``k`` <= 6
+    that makes every value an integer multiple; 0 when none does)."""
+    f = v[np.isfinite(v)]
+    for k in range(7):
+        q = 10.0 ** -k
+        if np.all(np.abs(f / q - np.round(f / q)) < 1e-6):
+            return q
+    return 0.0
+
+
+#: largest rounding step (see :func:`_quantum`) of a dim that may take part in a virtual
+#: colour; coarser dims (integers: step 1) are never matched
+MAX_QUANTUM = 0.01
+
+
+def _colour_like(key: str, label: str) -> bool:
+    return key.startswith("c_") or "-" in key or "-" in label or "\u2212" in label
+
+
+def detect_virtual_colours(dims: Mapping[str, Mapping[str, Any]], order: list[str], *,
+                    min_rows: int = 3) -> dict[str, tuple[str, str]]:
+    """Detect dims that are the difference of two other dims; returns ``{dim: (a, b)}`` with
+    ``dim == a - b`` on every star.
+
+    ``dims[k]`` holds ``v`` (float array, NaN for missing), ``lim`` (limit codes), ``unit``,
+    ``log`` and ``label``. A candidate has no limit codes, is not a log dim, and has at least
+    ``min_rows`` finite values; ``a`` and ``b`` are stored (not themselves virtual), are not
+    log dims, share one unit (the candidate's unit is that unit or empty), and the candidate
+    is missing exactly where ``a`` or ``b`` is. The match tolerance is half the sum of the
+    three dims' rounding steps (plus 1e-6), so legacy values rounded to 3 decimals match
+    within 1.5e-3.
+
+    Only colour-like dims (``c_*`` keys, a ``-`` in the key, a ``-`` or U+2212 in the label)
+    are candidates, so a magnitude (or any other stored quantity) is never re-expressed as a
+    magnitude minus a colour. Dims whose rounding step exceeds :data:`MAX_QUANTUM` (integer
+    counts, flags, bins) are neither candidates nor bases: their match tolerance would be of
+    the order of one unit and would accept differences that are off by one. Two candidates
+    may map to the same ``(a, b)`` pair (a colour stored under two keys); :func:`convert`
+    serves them as one virtual dim."""
+    keys = [k for k in order if k in dims]
+    q = {k: _quantum(np.asarray(dims[k]["v"], dtype=np.float64)) for k in keys}
+    ok = {k: (not dims[k].get("log")) and q[k] <= MAX_QUANTUM for k in keys}
+    cand = [k for k in keys if ok[k] and _colour_like(k, str(dims[k].get("label") or ""))
+            and not any(dims[k].get("lim") or [])
+            and int(np.isfinite(dims[k]["v"]).sum()) >= min_rows]
+    out: dict[str, tuple[str, str]] = {}
+    used_as_base: set[str] = set()
+    for d in cand:
+        if d in used_as_base:
+            continue
+        base = [k for k in keys if ok[k] and k != d and k not in out]
+        if len(base) < 2:
+            continue
+        vd = np.asarray(dims[d]["v"], dtype=np.float64)
+        fd = np.isfinite(vd)
+        rows = np.flatnonzero(fd)
+        s = rows[:8]
+        M = np.array([np.asarray(dims[k]["v"], dtype=np.float64) for k in base])
+        T = M[:, s] - vd[s]                          # (a, rows): a - d, must equal b
+        tol_s = 0.5 * 1.01 * (q[d] + np.array([q[k] for k in base])) + 1e-6
+        with np.errstate(invalid="ignore"):
+            close = np.abs(M[None, :, s] - T[:, None, :]) <= (tol_s[:, None, None]
+                                                               + tol_s[None, :, None])
+        ia, ib = np.nonzero(np.all(close, axis=2))
+        unit_d = str(dims[d].get("unit") or "")
+        for i, j in zip(ia.tolist(), ib.tolist()):
+            a, b = base[i], base[j]
+            if a == b:
+                continue
+            ua, ub = str(dims[a].get("unit") or ""), str(dims[b].get("unit") or "")
+            if ua != ub or unit_d not in ("", ua):
+                continue
+            fa, fb = np.isfinite(M[i]), np.isfinite(M[j])
+            if not np.array_equal(fa & fb, fd):
+                continue
+            tol = 0.5 * 1.01 * (q[d] + q[a] + q[b]) + 1e-6
+            if np.all(np.abs((M[i] - M[j])[fd] - vd[fd]) <= tol):
+                out[d] = (a, b)
+                used_as_base.update((a, b))
+                break
+    return out
+
+
 def convert(payload: Mapping, *, key: str = "src", title: str = "",
             id_field: str | None = None, default_frame: str | None = None,
             roles: Mapping[str, str] | None = None, columns: Mapping[str, dict] | None = None,
-            density_min_n: int | None = None) -> tuple[CatalogSpec, ManifoldSpec]:
+            density_min_n: int | None = None,
+            virtual_colours: bool = True) -> tuple[CatalogSpec, ManifoldSpec]:
     """Convert a legacy manifold payload; returns ``(catalog_spec, manifold_spec)``.
 
     ``catalog_spec.manifold`` is set to the returned ManifoldSpec. ``id_field`` overrides the
@@ -119,7 +222,8 @@ def convert(payload: Mapping, *, key: str = "src", title: str = "",
     the preset used as the manifold's default frame (default: ``pca`` when present, else the
     first frame preset, else ``"pca"``). Axes presets of catalogs with more than
     ``density_min_n`` (default ``T0_MAX``) rows get a density grid over the dims' legacy
-    ``range``.
+    ``range``. ``virtual_colours`` (default True) turns dims that are the difference of two
+    other dims into virtual dims (module docstring).
     """
     if not isinstance(payload, Mapping):
         raise ManifoldPayloadError(f"payload must be an object, got {type(payload).__name__}")
@@ -157,6 +261,7 @@ def convert(payload: Mapping, *, key: str = "src", title: str = "",
     pk_scale: dict[str, float] = {}
     ranges: dict[str, tuple[float, float]] = {}
     labels: dict[str, str] = {}
+    dim_info: dict[str, dict[str, Any]] = {}
     for d in dims_in:
         if not isinstance(d, Mapping) or "key" not in d:
             raise ManifoldPayloadError("every dim must be an object with a 'key'")
@@ -183,6 +288,9 @@ def convert(payload: Mapping, *, key: str = "src", title: str = "",
         dim_keys.append(dk2)
         label = str(d.get("label") or dk)
         is_log = bool(d.get("log"))
+        dim_info[dk2] = {"v": np.array([np.nan if x is None else x for x in vals], dtype=np.float64),
+                         "lim": [c for c in codes if c], "unit": str(d.get("unit") or ""),
+                         "log": is_log, "label": label, "legacy": dk}
         note = str(d.get("note") or "")
         if is_log and "log" not in label.lower():
             label = f"log10 {label}"
@@ -242,9 +350,40 @@ def convert(payload: Mapping, *, key: str = "src", title: str = "",
             if r.get(ck) is not None:
                 r[ck] = str(r[ck])
 
+    # virtual colours: drop the stored column (and its limit sibling), keep a VirtualDim
+    vdims: list[VirtualDim] = []
+    found = detect_virtual_colours(dim_info, dim_keys) if virtual_colours else {}
+    for dk2, (a, b) in found.items():
+        vkey = f"{a}-{b}"
+        dup = any(vd.key == vkey for vd in vdims)
+        kw = col_kw.pop(dk2, {})
+        role_map.pop(dk2, None)
+        role_map.pop(dk2 + LIMIT_SUFFIX, None)
+        col_kw.pop(dk2 + LIMIT_SUFFIX, None)
+        for r in rows:
+            r.pop(dk2, None)
+            r.pop(dk2 + LIMIT_SUFFIX, None)
+        labels[dim_info[dk2]["legacy"]] = vkey
+        if dup:
+            # the same colour stored under a second key: its legacy key names the virtual
+            # dim already emitted, and the dim list keeps one entry
+            dim_keys.remove(dk2)
+            for m in (legacy_scale, pk_scale, ranges):
+                m.pop(dk2, None)
+            continue
+        vdims.append(VirtualDim(key=vkey, label=kw.get("label"), unit=str(kw.get("unit") or ""),
+                                group=kw.get("group")))
+        dim_keys[dim_keys.index(dk2)] = vkey
+        for m in (legacy_scale, pk_scale, ranges):
+            if dk2 in m:
+                m[vkey] = m.pop(dk2)
+        if kw.get("group") is not None:
+            col_kw.setdefault(vkey, {})["group"] = kw["group"]     # for the group dims below
     cat = catalog_from_rows(rows, idf, raf, decf, roles=role_map, key=key, title=title,
-                            columns=col_kw)
-    cols = {c.key for c in cat.columns}
+                            columns={k: v for k, v in col_kw.items() if k not in
+                                     {vd.key for vd in vdims}})
+    cat.virtual = list(cat.virtual) + vdims
+    cols = {c.key for c in cat.columns} | {vd.key for vd in vdims}
 
     # groups
     groups: list[Group] = []
@@ -262,7 +401,7 @@ def convert(payload: Mapping, *, key: str = "src", title: str = "",
             gd = gdims.get(gk, [])
         else:
             continue
-        gd = [x for x in gd if x in cols]
+        gd = list(dict.fromkeys(x for x in gd if x in cols))
         if gd:
             groups.append(Group(key=gk, label=gl, dims=gd))
     cat.groups = groups
@@ -282,8 +421,7 @@ def convert(payload: Mapping, *, key: str = "src", title: str = "",
         x, y = _weights(p.get("x")), _weights(p.get("y"))
         if x is None or y is None:
             continue        # computed in the page (e.g. a PCA with no stored weights)
-        x = {labels.get(k, k): v for k, v in x.items()}
-        y = {labels.get(k, k): v for k, v in y.items()}
+        x, y = _relabel(x, labels), _relabel(y, labels)
         if not (set(x) | set(y)) <= set(dim_keys):
             continue        # the legacy generator drops these too
         data: dict[str, Any] = {}
