@@ -1,6 +1,30 @@
 {
  "description": "resolveKey(name, candidates, colmap?, aliases?) -> key or null. candidates: an array of keys or an object of filter entries ('shared' = shared_filters, the default filters.json object with every registry filter). Order: (1) colmap[name] when it is a candidate; (2) exact key; (3) the unique key equal to name case-insensitively; (4) the unique key listing name among aliases[key] (case-insensitive); (5) short-name probes, in turn lower(name), the text after its last '_', and shortName(lower(name)) (text after the last '/' then the last '.'), skipping repeats: the unique candidate with lower(shortName(key)) == probe wins; when several match and candidates is an object of entries, the unique one among them with lower(entry.label) == probe wins; (6) null. vector cases: vector(x, y, av, rv, shared_filters, colmap, reddening.json ext); 'ks' stays ambiguous without a colmap (null).",
  "shared_filters": {
+  "HST/WFC3_UVIS2.F555W": {
+   "label": "WFC3 F555W",
+   "instrument": "WFC3_UVIS2",
+   "wl_um": 0.5307901,
+   "weff_um": 0.158963,
+   "zp_jy": 3726.7022,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 1.04413,
+    "G23_5.5": 1.02842
+   }
+  },
+  "HST/ACS_WFC.F555W": {
+   "label": "ACS F555W",
+   "instrument": "ACS_WFC",
+   "wl_um": 0.5361034,
+   "weff_um": 0.109866,
+   "zp_jy": 3662.2368,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 1.03092,
+    "G23_5.5": 1.02022
+   }
+  },
   "Roman/WFI.F062": {
    "label": "WFI F062",
    "instrument": "WFI",
@@ -35,6 +59,30 @@
    "a_over_av": {
     "G23_3.1": 0.718074,
     "G23_5.5": 0.796126
+   }
+  },
+  "HST/WFC3_UVIS2.F814W": {
+   "label": "WFC3 F814W",
+   "instrument": "WFC3_UVIS2",
+   "wl_um": 0.8029302,
+   "weff_um": 0.174847,
+   "zp_jy": 2448.6169,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.58661,
+    "G23_5.5": 0.693357
+   }
+  },
+  "HST/ACS_WFC.F814W": {
+   "label": "ACS F814W",
+   "instrument": "ACS_WFC",
+   "wl_um": 0.8045528,
+   "weff_um": 0.188866,
+   "zp_jy": 2440.736,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.584719,
+    "G23_5.5": 0.691781
    }
   },
   "Roman/WFI.F087": {
@@ -109,6 +157,18 @@
     "G23_5.5": 0.433594
    }
   },
+  "HST/WFC3_IR.F110W": {
+   "label": "WFC3 F110W",
+   "instrument": "WFC3_IR",
+   "wl_um": 1.153446,
+   "weff_um": 0.385685,
+   "zp_jy": 1775.5654,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.307397,
+    "G23_5.5": 0.431704
+   }
+  },
   "JWST/NIRCam2025.F115W": {
    "label": "F115W (2025)",
    "instrument": "NIRCam",
@@ -145,6 +205,30 @@
     "G23_5.5": 0.387565
    }
   },
+  "HST/WFC3_IR.F125W": {
+   "label": "WFC3 F125W",
+   "instrument": "WFC3_IR",
+   "wl_um": 1.248607,
+   "weff_um": 0.26744,
+   "zp_jy": 1555.4142,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.268968,
+    "G23_5.5": 0.383247
+   }
+  },
+  "HST/WFC3_IR.F127M": {
+   "label": "WFC3 F127M",
+   "instrument": "WFC3_IR",
+   "wl_um": 1.274107,
+   "weff_um": 0.0673439,
+   "zp_jy": 1469.9898,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.259961,
+    "G23_5.5": 0.371815
+   }
+  },
   "Roman/WFI.F129": {
    "label": "WFI F129",
    "instrument": "WFI",
@@ -155,6 +239,18 @@
    "a_over_av": {
     "G23_3.1": 0.254544,
     "G23_5.5": 0.364924
+   }
+  },
+  "HST/WFC3_IR.F139M": {
+   "label": "WFC3 F139M",
+   "instrument": "WFC3_IR",
+   "wl_um": 1.384181,
+   "weff_um": 0.0630712,
+   "zp_jy": 1317.2079,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.226092,
+    "G23_5.5": 0.328532
    }
   },
   "JWST/NIRISS.F140M": {
@@ -239,6 +335,30 @@
    "a_over_av": {
     "G23_3.1": 0.197268,
     "G23_5.5": 0.291277
+   }
+  },
+  "HST/WFC3_IR.F153M": {
+   "label": "WFC3 F153M",
+   "instrument": "WFC3_IR",
+   "wl_um": 1.533275,
+   "weff_um": 0.0692295,
+   "zp_jy": 1119.0415,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.190302,
+    "G23_5.5": 0.282206
+   }
+  },
+  "HST/WFC3_IR.F160W": {
+   "label": "WFC3 F160W",
+   "instrument": "WFC3_IR",
+   "wl_um": 1.537034,
+   "weff_um": 0.275015,
+   "zp_jy": 1122.8001,
+   "system": "Vega",
+   "a_over_av": {
+    "G23_3.1": 0.189519,
+    "G23_5.5": 0.281184
    }
   },
   "Roman/WFI.F158": {
