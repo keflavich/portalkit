@@ -1,0 +1,99 @@
+# W51 unified portal (WP29; ARCHITECTURE.md section 4.1 and port table 14.10, wave 5).
+#
+# Secure, single-portal family. Legacy static pages at /orange/adamginsburg/w51/portal
+# (web/secure/w51/portal; login) port to .../portal/unified (default target_dir: legacy_dir
+# + '/unified'), served at the url below. Tier A only (adapters/w51.py tiers = ("A",)): every
+# page's data already lives in its own embedded JSON payload.
+#
+# Ten pages port; the eleventh legacy card (archive_colors/index.html) is a different family
+# (jwst_archive, WPE7/WP28) with its own [[portal]] in sites/jwst_archive.toml
+# (https://data.rc.ufl.edu/secure/adamginsburg/w51/portal/archive_colors/unified/); the
+# landing page links to it as a card, nothing here reads or writes that subtree.
+#
+# Legacy deep links: map.html reads `#<gtc slit id>` for its own popup (gtcFromHash, unrelated
+# to the catalog), not ported; index/map_ccd/colorcolor/gallery/spectra/wavelength read no
+# hash. w51_catalog_manifold.html's stars still carry the old sequential W51-NNNNNN ids
+# (W51_Portal_CatalogManifold_template.html); the adapter recomputes positional
+# W51-JW-J<hhmmss.sss+ddmmss.ss> ids and keeps the old ones as aliases, so old
+# '#W51-000123'-style links keep resolving via the 'w51-rowid' grammar (case-insensitive
+# ^W51-\d+$ -> alias lookup). w51_manifold.html's ids were already per-field/row names, not
+# migrated. The two w51_manifold.html / w51_catalog_manifold.html manifolds also take the
+# standard 'kv-view' hash (view=<preset id>&x=&y=&c=&star=<id>).
+#
+# spectra_candidate.html stays BLOCKED: its inputs live in another session's tmp scratchpad
+# (W51_Portal_SpectraCandidate.py's hardcoded SP); a normal build (no --allow-tmp-inputs)
+# refuses with exit 5 until they are copied to /orange/adamginsburg/w51/gtc/candidate_xb5/
+# with user approval. The legacy page keeps serving (replace = false).
+family = "w51"
+adapter = "adapters.w51:ADAPTER"
+tier_default = "A"
+legacy_paths = ["/orange/adamginsburg/w51/portal"]
+status = "active"
+
+[[portal]]
+id = "w51"
+title = "W51 unified portal"
+visibility = "secure"
+legacy_dir = "/orange/adamginsburg/w51/portal"
+url = "https://data.rc.ufl.edu/secure/adamginsburg/w51/portal/unified/"
+inputs = [
+    "/orange/adamginsburg/w51/portal/index.html",
+    "/orange/adamginsburg/w51/portal/map.html",
+    "/orange/adamginsburg/w51/portal/map_ccd.html",
+    "/orange/adamginsburg/w51/portal/colorcolor.html",
+    "/orange/adamginsburg/w51/portal/gallery.html",
+    "/orange/adamginsburg/w51/portal/spectra.html",
+    "/orange/adamginsburg/w51/portal/w51_manifold.html",
+    "/orange/adamginsburg/w51/portal/w51_catalog_manifold.html",
+    "/orange/adamginsburg/w51/portal/wavelength.html",
+    "/orange/adamginsburg/w51/portal/ccd_bg_*.png",
+    "/orange/adamginsburg/w51/portal/seds",
+    "/orange/adamginsburg/w51/portal/seds_ext",
+    "/orange/adamginsburg/w51/portal/seds_catalog",
+    "/orange/adamginsburg/w51/portal/cutouts",
+    "/orange/adamginsburg/w51/portal/cutouts_ext",
+    "/orange/adamginsburg/w51/portal/spectra",
+    "/orange/adamginsburg/w51/portal/spectra2d",
+]
+
+[[portal.page]]
+id = "index"
+legacy = ["index.html"]
+
+[[portal.page]]
+id = "map"
+legacy = ["map.html"]
+
+[[portal.page]]
+id = "map_ccd"
+legacy = ["map_ccd.html"]
+
+[[portal.page]]
+id = "colorcolor"
+legacy = ["colorcolor.html"]
+
+[[portal.page]]
+id = "gallery"
+legacy = ["gallery.html"]
+
+[[portal.page]]
+id = "spectra"
+legacy = ["spectra.html"]
+
+[[portal.page]]
+id = "spectra_candidate"
+legacy = [{ file = "spectra_candidate.html", replace = false }]
+
+[[portal.page]]
+id = "w51_manifold"
+legacy = ["w51_manifold.html"]
+grammar = ["kv-view", "bare-name"]
+
+[[portal.page]]
+id = "w51_catalog_manifold"
+legacy = ["w51_catalog_manifold.html"]
+grammar = ["kv-view", "w51-rowid", "bare-name"]
+
+[[portal.page]]
+id = "wavelength"
+legacy = ["wavelength.html"]
