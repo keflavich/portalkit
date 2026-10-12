@@ -1,0 +1,132 @@
+# JWST NIRSpec archive spectra (WP28; ARCHITECTURE.md 14.3, wave 4).
+#
+# Three portals, one adapter (adapters/jwst_archive.py), one fluxes table
+# (mastDownload/JWST/jwst_archive_spectra_as_fluxes.ecsv, 1902 spectra):
+#
+#   archive  legacy jwst/spectra/portal; unified target jwst/spectra/portal_unified
+#            (web/secure/jwst -> /orange/adamginsburg/jwst; login). Pages: landing
+#            (readme.html), colour portal (index.html), ice manifold (archive_manifold.html).
+#            The target sits outside portal/ because mastDownload/JWST/pngs/portal is a
+#            symlink to web/secure/jwst/spectra/portal, and pngs is public through
+#            web/public/jwst/spectra: portal/unified would classify `both` and a secure
+#            deploy there is refused (section 11.2, exit 3). portal_unified classifies
+#            `secure` only. The legacy portal/ pages themselves are reachable under /pub/
+#            through that symlink; removing pngs/portal is the user's call.
+#   w51      w51/portal/archive_colors (web/secure/w51/portal -> /orange/adamginsburg/w51/portal;
+#            login). The same spectra over the W51 NIRCam photometry (context dataset).
+#            Nothing under w51/portal is written outside its unified/ target.
+#   gallery  mastDownload/JWST/pngs, public through web/public/jwst/spectra -> .../pngs.
+#            One faceted gallery replaces the 11 legacy gallery pages; each legacy page
+#            redirects to its facet preset (fac=<b64url JSON>, role=<PNG variant>).
+#            The checklist page annotates (browser-local) and exports CSV for
+#            `portalkit archive-checklist-diff`; jwst_archive_spectra_checklist.csv is
+#            hand-edited and never written (tests/py/test_no_checklist_write.py).
+#
+# The spectra, x1d and PNG trees are registered as directories (one scandir stamp each);
+# hashing every x1d / PNG on each build costs minutes and the memo keys cover the files read.
+#
+# Directories considered:
+#   mastDownload/JWST/gallery*.html   served under secure only (web/secure/jwst). The nine
+#                                     preset pages are hard links to pngs/gallery_*.html (the
+#                                     same inodes); gallery.html (12,156 B) and
+#                                     gallery_checklist.html (17,921 B) are older, distinct
+#                                     files (link count 1). They list the PNGs of their own
+#                                     directory (mastDownload/JWST/ holds only the two CMD
+#                                     PNGs), so they show no spectrum plots. They are
+#                                     orphaned secure copies, listed in no
+#                                     legacy list (legacy files are relative to legacy_dir =
+#                                     pngs/), so deploy never stubs them and status does not
+#                                     report them; the user may delete them.
+#   jwst/spectra/portal/spectra/<i>.json   Tier A spectra (row index; ids replace it).
+#
+# Legacy deep links: index.html / archive_colors read no hash; archive_manifold.html wrote
+# `#view=..&x=..&y=..&c=..&star=<name>` (kv-view; the star names are catalogue aliases).
+family = "jwst_archive"
+adapter = "adapters.jwst_archive:ADAPTER"
+tier_default = "B"
+legacy_paths = ["/orange/adamginsburg/jwst/brick/analysis"]
+
+[[portal]]
+id = "archive"
+title = "JWST NIRSpec archive colour portal"
+visibility = "secure"
+legacy_dir = "/orange/adamginsburg/jwst/spectra/portal"
+target_dir = "/orange/adamginsburg/jwst/spectra/portal_unified"
+url = "https://data.rc.ufl.edu/secure/adamginsburg/jwst/spectra/portal_unified/"
+inputs = [
+    "/orange/adamginsburg/jwst/spectra/mastDownload/JWST/jwst_archive_spectra_as_fluxes.ecsv",
+    "/orange/adamginsburg/jwst/spectra/portal/index.html",
+    "/orange/adamginsburg/jwst/spectra/portal/archive_manifold.html",
+    "/orange/adamginsburg/jwst/spectra/portal/portal_coords.ecsv",
+    "/orange/adamginsburg/jwst/spectra/portal/portal_coverage.ecsv",
+    "/orange/adamginsburg/jwst/spectra/portal/spectra",
+    "/orange/adamginsburg/jwst/spectra/mastDownload/JWST",
+]
+
+[[portal.page]]
+id = "index"
+legacy = ["readme.html"]
+
+[[portal.page]]
+id = "colors"
+legacy = ["index.html"]
+
+[[portal.page]]
+id = "manifold"
+legacy = ["archive_manifold.html"]
+grammar = ["kv-view", "bare-name"]
+
+[[portal]]
+id = "w51"
+title = "W51 photometry vs JWST archive spectra"
+visibility = "secure"
+legacy_dir = "/orange/adamginsburg/w51/portal/archive_colors"
+url = "https://data.rc.ufl.edu/secure/adamginsburg/w51/portal/archive_colors/unified/"
+inputs = [
+    "/orange/adamginsburg/jwst/spectra/mastDownload/JWST/jwst_archive_spectra_as_fluxes.ecsv",
+    "/orange/adamginsburg/jwst/w51/catalogs/basic_merged_indivexp_photometry_tables_merged_resbgsub_m8_dedup.fits",
+    "/orange/adamginsburg/w51/portal/archive_colors/index.html",
+    "/orange/adamginsburg/w51/portal/archive_colors/readme.html",
+]
+
+[[portal.page]]
+id = "index"
+legacy = ["readme.html"]
+
+[[portal.page]]
+id = "colors"
+legacy = ["index.html"]
+
+[[portal]]
+id = "gallery"
+title = "JWST NIRSpec archive spectra gallery"
+visibility = "public"
+legacy_dir = "/orange/adamginsburg/jwst/spectra/mastDownload/JWST/pngs"
+url = "https://data.rc.ufl.edu/pub/adamginsburg/jwst/spectra/unified/"
+inputs = [
+    "/orange/adamginsburg/jwst/spectra/mastDownload/JWST/pngs",
+    "/orange/adamginsburg/jwst/spectra/mastDownload/JWST/pngs/gallery.html",
+]
+
+[[portal.page]]
+id = "index"
+legacy = []
+
+[[portal.page]]
+id = "gallery"
+legacy = [
+    "gallery.html",
+    {file = "gallery_prism.html", preset = "fac=eyJncmF0aW5nIjpbIlBSSVNNIl19"},
+    {file = "gallery_prism_2221filters.html", preset = "fac=eyJncmF0aW5nIjpbIlBSSVNNIl19&role=c2221"},
+    {file = "gallery_1611.html", preset = "fac=eyJwcm9ncmFtIjpbIjE2MTEiXX0"},
+    {file = "gallery_1611_broad.html", preset = "fac=eyJwcm9ncmFtIjpbIjE2MTEiXX0&role=c1182"},
+    {file = "gallery_1611_narrow.html", preset = "fac=eyJwcm9ncmFtIjpbIjE2MTEiXX0&role=c2221"},
+    {file = "gallery_1611_twogratings.html", preset = "fac=eyJncmF0aW5nIjpbIkcyMzVNK0czOTVIIiwiRzM5NUgrRzIzNU0iXSwicHJvZ3JhbSI6WyIxNjExIl19"},
+    {file = "gallery_3222.html", preset = "fac=eyJwcm9ncmFtIjpbIjMyMjIiXX0"},
+    {file = "gallery_3222_broad.html", preset = "fac=eyJwcm9ncmFtIjpbIjMyMjIiXX0&role=c1182"},
+    {file = "gallery_3222_narrow.html", preset = "fac=eyJwcm9ncmFtIjpbIjMyMjIiXX0&role=c2221"},
+]
+
+[[portal.page]]
+id = "checklist"
+legacy = ["gallery_checklist.html"]
