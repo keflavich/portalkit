@@ -1,0 +1,267 @@
+# GC catalog manifold viewers (WP30; ARCHITECTURE.md sections 4.1 and 14.2).
+#
+# One [[portal]] per legacy viewer: the GC Treasury manifold and the 11 per-field manifolds
+# deployed under /orange/adamginsburg/jwst/releases/site/<field>_manifold and served by
+# starformation.astro.ufl.edu, not by data.rc.ufl.edu (served_by = "external": the exposure
+# scan reports these targets as unserved, which is allowed for an external site; deploy writes
+# <legacy_dir>/unified and `verify --http` checks the starformation URL). The adapter reads each
+# portal's GC manifest (schema 1) at <legacy_dir>/data/manifest.json and references the GC
+# binaries in place at <url>/../data/ (no re-encode). Every legacy viewer is one index.html
+# whose query state (?a=&b=&m=&p=&x1..y2&cb&cd&cm&cl&ch&g&rv&fa&sel, Treasury y) is mapped by
+# the gc-query grammar.
+#
+# Not ported: the jwst-gc pipeline monitor (web/public/jwst-gc/monitor.html, fields/*.html,
+# *_monitor5as.html; port table 14.2 archetype "excluded"). Site status is per family, so the
+# monitor needs its own registry file with status = "excluded" (sites/gc_monitor.toml, not
+# owned by WP30); the portals here link it from their readme.
+#
+# sgrb2_manifold stays registered below even though the adapter currently skips it every build
+# (its deployed data tree disagrees with its manifest row count -- tree_problems()): status/
+# drift reporting needs the portal entry to say so. Until the upstream tree is redeployed
+# consistently, a build of this family does not produce an sgrb2_manifold portal, so any other
+# built portal's `related` nav entry for it (build.py lists every sibling in `site.portals`
+# without checking it was built) points at a page that does not exist; WP30 contract issue
+# (build.py, not owned by WP30) -- fix by having `related` only list portals that were built.
+family = "gc_manifold"
+adapter = "adapters.gc_manifold:ADAPTER"
+tier_default = "B"
+legacy_paths = ["/orange/adamginsburg/jwst/brick/analysis"]
+
+[[portal]]
+id = "treasury_manifold"
+title = "GC Treasury catalog manifold"
+visibility = "public"
+legacy_dir = "/orange/adamginsburg/jwst/releases/site/treasury_manifold"
+target_dir = "/orange/adamginsburg/jwst/releases/site/treasury_manifold/unified"
+url = "https://starformation.astro.ufl.edu/jwst-gc/treasury_manifold/unified/"
+served_by = "external"
+inputs = [
+    "/orange/adamginsburg/jwst/releases/site/treasury_manifold/data/manifest.json",
+    "/orange/adamginsburg/jwst/releases/site/treasury_manifold/data/dims/*.u16.gz",
+    "/orange/adamginsburg/jwst/releases/site/treasury_manifold/data/meta/*.gz",
+]
+
+[[portal.page]]
+id = "index"
+legacy = ["index.html"]
+grammar = ["gc-query"]
+
+[[portal]]
+id = "arches_manifold"
+title = "Arches catalog manifold"
+visibility = "public"
+legacy_dir = "/orange/adamginsburg/jwst/releases/site/arches_manifold"
+target_dir = "/orange/adamginsburg/jwst/releases/site/arches_manifold/unified"
+url = "https://starformation.astro.ufl.edu/jwst-gc/arches_manifold/unified/"
+served_by = "external"
+inputs = [
+    "/orange/adamginsburg/jwst/releases/site/arches_manifold/data/manifest.json",
+    "/orange/adamginsburg/jwst/releases/site/arches_manifold/data/dims/*.u16.gz",
+    "/orange/adamginsburg/jwst/releases/site/arches_manifold/data/errs/*.u8.gz",
+    "/orange/adamginsburg/jwst/releases/site/arches_manifold/data/meta/*.gz",
+]
+
+[[portal.page]]
+id = "index"
+legacy = ["index.html"]
+grammar = ["gc-query"]
+
+[[portal]]
+id = "quintuplet_manifold"
+title = "Quintuplet catalog manifold"
+visibility = "public"
+legacy_dir = "/orange/adamginsburg/jwst/releases/site/quintuplet_manifold"
+target_dir = "/orange/adamginsburg/jwst/releases/site/quintuplet_manifold/unified"
+url = "https://starformation.astro.ufl.edu/jwst-gc/quintuplet_manifold/unified/"
+served_by = "external"
+inputs = [
+    "/orange/adamginsburg/jwst/releases/site/quintuplet_manifold/data/manifest.json",
+    "/orange/adamginsburg/jwst/releases/site/quintuplet_manifold/data/dims/*.u16.gz",
+    "/orange/adamginsburg/jwst/releases/site/quintuplet_manifold/data/errs/*.u8.gz",
+    "/orange/adamginsburg/jwst/releases/site/quintuplet_manifold/data/meta/*.gz",
+]
+
+[[portal.page]]
+id = "index"
+legacy = ["index.html"]
+grammar = ["gc-query"]
+
+[[portal]]
+id = "brick_o001_manifold"
+title = "Brick (o001) catalog manifold"
+visibility = "public"
+legacy_dir = "/orange/adamginsburg/jwst/releases/site/brick_o001_manifold"
+target_dir = "/orange/adamginsburg/jwst/releases/site/brick_o001_manifold/unified"
+url = "https://starformation.astro.ufl.edu/jwst-gc/brick_o001_manifold/unified/"
+served_by = "external"
+inputs = [
+    "/orange/adamginsburg/jwst/releases/site/brick_o001_manifold/data/manifest.json",
+    "/orange/adamginsburg/jwst/releases/site/brick_o001_manifold/data/dims/*.u16.gz",
+    "/orange/adamginsburg/jwst/releases/site/brick_o001_manifold/data/errs/*.u8.gz",
+    "/orange/adamginsburg/jwst/releases/site/brick_o001_manifold/data/meta/*.gz",
+]
+
+[[portal.page]]
+id = "index"
+legacy = ["index.html"]
+grammar = ["gc-query"]
+
+[[portal]]
+id = "brick_o004_manifold"
+title = "Brick (o004, program 1182) catalog manifold"
+visibility = "public"
+legacy_dir = "/orange/adamginsburg/jwst/releases/site/brick_o004_manifold"
+target_dir = "/orange/adamginsburg/jwst/releases/site/brick_o004_manifold/unified"
+url = "https://starformation.astro.ufl.edu/jwst-gc/brick_o004_manifold/unified/"
+served_by = "external"
+inputs = [
+    "/orange/adamginsburg/jwst/releases/site/brick_o004_manifold/data/manifest.json",
+    "/orange/adamginsburg/jwst/releases/site/brick_o004_manifold/data/dims/*.u16.gz",
+    "/orange/adamginsburg/jwst/releases/site/brick_o004_manifold/data/errs/*.u8.gz",
+    "/orange/adamginsburg/jwst/releases/site/brick_o004_manifold/data/meta/*.gz",
+]
+
+[[portal.page]]
+id = "index"
+legacy = ["index.html"]
+grammar = ["gc-query"]
+
+[[portal]]
+id = "cloudc_manifold"
+title = "Cloud C catalog manifold"
+visibility = "public"
+legacy_dir = "/orange/adamginsburg/jwst/releases/site/cloudc_manifold"
+target_dir = "/orange/adamginsburg/jwst/releases/site/cloudc_manifold/unified"
+url = "https://starformation.astro.ufl.edu/jwst-gc/cloudc_manifold/unified/"
+served_by = "external"
+inputs = [
+    "/orange/adamginsburg/jwst/releases/site/cloudc_manifold/data/manifest.json",
+    "/orange/adamginsburg/jwst/releases/site/cloudc_manifold/data/dims/*.u16.gz",
+    "/orange/adamginsburg/jwst/releases/site/cloudc_manifold/data/errs/*.u8.gz",
+    "/orange/adamginsburg/jwst/releases/site/cloudc_manifold/data/meta/*.gz",
+]
+
+[[portal.page]]
+id = "index"
+legacy = ["index.html"]
+grammar = ["gc-query"]
+
+[[portal]]
+id = "cloudef_controlfield_manifold"
+title = "Cloud E/F control field catalog manifold"
+visibility = "public"
+legacy_dir = "/orange/adamginsburg/jwst/releases/site/cloudef_controlfield_manifold"
+target_dir = "/orange/adamginsburg/jwst/releases/site/cloudef_controlfield_manifold/unified"
+url = "https://starformation.astro.ufl.edu/jwst-gc/cloudef_controlfield_manifold/unified/"
+served_by = "external"
+inputs = [
+    "/orange/adamginsburg/jwst/releases/site/cloudef_controlfield_manifold/data/manifest.json",
+    "/orange/adamginsburg/jwst/releases/site/cloudef_controlfield_manifold/data/dims/*.u16.gz",
+    "/orange/adamginsburg/jwst/releases/site/cloudef_controlfield_manifold/data/errs/*.u8.gz",
+    "/orange/adamginsburg/jwst/releases/site/cloudef_controlfield_manifold/data/meta/*.gz",
+]
+
+[[portal.page]]
+id = "index"
+legacy = ["index.html"]
+grammar = ["gc-query"]
+
+[[portal]]
+id = "gc2211_manifold"
+title = "GC 2211 catalog manifold"
+visibility = "public"
+legacy_dir = "/orange/adamginsburg/jwst/releases/site/gc2211_manifold"
+target_dir = "/orange/adamginsburg/jwst/releases/site/gc2211_manifold/unified"
+url = "https://starformation.astro.ufl.edu/jwst-gc/gc2211_manifold/unified/"
+served_by = "external"
+inputs = [
+    "/orange/adamginsburg/jwst/releases/site/gc2211_manifold/data/manifest.json",
+    "/orange/adamginsburg/jwst/releases/site/gc2211_manifold/data/dims/*.u16.gz",
+    "/orange/adamginsburg/jwst/releases/site/gc2211_manifold/data/errs/*.u8.gz",
+    "/orange/adamginsburg/jwst/releases/site/gc2211_manifold/data/meta/*.gz",
+]
+
+[[portal.page]]
+id = "index"
+legacy = ["index.html"]
+grammar = ["gc-query"]
+
+[[portal]]
+id = "sgra_manifold"
+title = "Sgr A* catalog manifold"
+visibility = "public"
+legacy_dir = "/orange/adamginsburg/jwst/releases/site/sgra_manifold"
+target_dir = "/orange/adamginsburg/jwst/releases/site/sgra_manifold/unified"
+url = "https://starformation.astro.ufl.edu/jwst-gc/sgra_manifold/unified/"
+served_by = "external"
+inputs = [
+    "/orange/adamginsburg/jwst/releases/site/sgra_manifold/data/manifest.json",
+    "/orange/adamginsburg/jwst/releases/site/sgra_manifold/data/dims/*.u16.gz",
+    "/orange/adamginsburg/jwst/releases/site/sgra_manifold/data/errs/*.u8.gz",
+    "/orange/adamginsburg/jwst/releases/site/sgra_manifold/data/meta/*.gz",
+]
+
+[[portal.page]]
+id = "index"
+legacy = ["index.html"]
+grammar = ["gc-query"]
+
+[[portal]]
+id = "sgrb2_manifold"
+title = "Sgr B2 catalog manifold"
+visibility = "public"
+legacy_dir = "/orange/adamginsburg/jwst/releases/site/sgrb2_manifold"
+target_dir = "/orange/adamginsburg/jwst/releases/site/sgrb2_manifold/unified"
+url = "https://starformation.astro.ufl.edu/jwst-gc/sgrb2_manifold/unified/"
+served_by = "external"
+inputs = [
+    "/orange/adamginsburg/jwst/releases/site/sgrb2_manifold/data/manifest.json",
+    "/orange/adamginsburg/jwst/releases/site/sgrb2_manifold/data/dims/*.u16.gz",
+    "/orange/adamginsburg/jwst/releases/site/sgrb2_manifold/data/errs/*.u8.gz",
+    "/orange/adamginsburg/jwst/releases/site/sgrb2_manifold/data/meta/*.gz",
+]
+
+[[portal.page]]
+id = "index"
+legacy = ["index.html"]
+grammar = ["gc-query"]
+
+[[portal]]
+id = "sgrc_manifold"
+title = "Sgr C catalog manifold"
+visibility = "public"
+legacy_dir = "/orange/adamginsburg/jwst/releases/site/sgrc_manifold"
+target_dir = "/orange/adamginsburg/jwst/releases/site/sgrc_manifold/unified"
+url = "https://starformation.astro.ufl.edu/jwst-gc/sgrc_manifold/unified/"
+served_by = "external"
+inputs = [
+    "/orange/adamginsburg/jwst/releases/site/sgrc_manifold/data/manifest.json",
+    "/orange/adamginsburg/jwst/releases/site/sgrc_manifold/data/dims/*.u16.gz",
+    "/orange/adamginsburg/jwst/releases/site/sgrc_manifold/data/errs/*.u8.gz",
+    "/orange/adamginsburg/jwst/releases/site/sgrc_manifold/data/meta/*.gz",
+]
+
+[[portal.page]]
+id = "index"
+legacy = ["index.html"]
+grammar = ["gc-query"]
+
+[[portal]]
+id = "w51_manifold"
+title = "W51 catalog manifold"
+visibility = "public"
+legacy_dir = "/orange/adamginsburg/jwst/releases/site/w51_manifold"
+target_dir = "/orange/adamginsburg/jwst/releases/site/w51_manifold/unified"
+url = "https://starformation.astro.ufl.edu/jwst-gc/w51_manifold/unified/"
+served_by = "external"
+inputs = [
+    "/orange/adamginsburg/jwst/releases/site/w51_manifold/data/manifest.json",
+    "/orange/adamginsburg/jwst/releases/site/w51_manifold/data/dims/*.u16.gz",
+    "/orange/adamginsburg/jwst/releases/site/w51_manifold/data/errs/*.u8.gz",
+    "/orange/adamginsburg/jwst/releases/site/w51_manifold/data/meta/*.gz",
+]
+
+[[portal.page]]
+id = "index"
+legacy = ["index.html"]
+grammar = ["gc-query"]
