@@ -22,9 +22,16 @@
 # colours.html keeps its state in the query string (colours.html:970-1014, written with
 # replaceState): ax, ay (x colour = ax - ay), bx, by (y colour = bx - by), c (colour-by),
 # band (CMD band), cmd=1 (CMD panel shown), yoo=1 (Yoo W51 overlay on), zoom=x0,x1,y0,y1 and
-# hide=<level>|<level> (hidden levels of the colour-by category). No grammar covers it yet; a
-# 'spherex-colours' grammar would map ax/ay/bx/by to the ccd axes (lower-cased filter keys joined with '-'), c to the colour,
-# zoom to xr/yr, yoo to the yoo_* overlay toggles and hide to a category filter on the c column.
+# hide=<level>|<level> (hidden levels of the colour-by category). The 'spherex-colours' grammar
+# maps ax/ay/bx/by to the ccd axes (lower-cased filter keys joined with '-'), band to the cmd y
+# axis, c to the colour-by column, zoom to xr/yr, yoo to the yoo_* overlay toggles and hide to a
+# category filter on the c column. The colour-by choices of colours.html (s, q, cls, reg) are all
+# category columns; reg (region: 355 named regions + '(none)' for the 207 sources without one) has its
+# levels by source count, so hide=<region> names a level and only the largest regions get
+# distinct GPU colours (the legacy page cycled its palette over every region). The manifold's legacy dim keys (m_F162M, c_F162M_F210M, ra,
+# dec) reach the unified keys through page.legacy.dim_alias, which the adapter derives from the
+# legacy dims (adapters/spherex.py:legacy_dim_alias); a dim_alias table on a [[portal.page]]
+# entry here would override single entries.
 family = "spherex"
 adapter = "adapters.spherex:ADAPTER"
 tier_default = "B"
@@ -64,6 +71,7 @@ legacy = ["index.html"]
 [[portal.page]]
 id = "colours"
 legacy = ["colours.html"]
+grammar = ["spherex-colours"]
 
 [[portal.page]]
 id = "browse"

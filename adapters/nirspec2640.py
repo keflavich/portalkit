@@ -21,6 +21,12 @@ Fixed legacy bugs: the dead ``nirspec_2640_icecolumns.html`` link now has a page
 specific per page (the public manifold was titled "Wd2 Ice Manifold" although it leads with
 photometry and brown-dwarf fits); product links point at the secure archive (the public
 ``../mastDownload`` links resolved nowhere) and carry a login badge.
+
+Foreign base (contract (A)): the wd2 portal plots these spectra without copying them. Its
+manifold page declares a foreign record set on this portal's ``data/<FOREIGN_BASE_KEY>/``
+(``<portal url>data/spec/index.json`` plus the shards it lists), keyed by the source name
+(``SrcName``, the record id). The key and the id scheme are part of that contract: renaming
+the ``spec`` record set or changing its ids breaks the wd2 manifold spectra.
 """
 
 from __future__ import annotations
@@ -47,6 +53,8 @@ DIST_PC, ISO_AGES_MYR = 4160.0, (2.0,)       # NIRSpec_2640_Manifold isochrone (
 SPECIES = ("H2O", "CO2", "CO", "OCN", "13CO2", "OCS")
 ICE_PAIRS = (("H2O", "CO2"), ("CO2", "CO"), ("CO2", "13CO2"), ("CO", "OCN"), ("CO", "OCS"))
 LIM = {"v": "", "lo": "l", "up": "u", None: ""}
+#: record-set key the wd2 portal reads as a foreign base (data/spec/; ids = SrcName)
+FOREIGN_BASE_KEY = "spec"
 FIG_ROLES = {"spectrum": "Spectrum + filters", "nb": "Narrow-band filters", "bb": "Broad-band filters",
              "icefit": "Ice fit"}
 PNG_ROLES = {"all": "All filters", "nb": "Narrow-band filters", "bb": "Broad-band filters"}
@@ -217,7 +225,8 @@ class NIRSpec2640Adapter:
         cat = self._catalog(ctx)
         ds = {"src": self._src(raw), "bg": self._bg(ctx, cat), "redx": self._redx(ctx, cat, raw),
               "iso": self._iso(ctx),
-              "spec": RecordSetSpec("spec", "pks1", "src", ids, rec(self._spectrum), enc={"flux": "f32", "err": "f32"}),
+              FOREIGN_BASE_KEY: RecordSetSpec(FOREIGN_BASE_KEY, "pks1", "src", ids, rec(self._spectrum),
+                                              enc={"flux": "f32", "err": "f32"}),
               "s2d": RecordSetSpec("s2d", "pki1", "src", ids, rec(self._image2d), enc={"data": "u8"}),
               "prod": RecordSetSpec("prod", "json", "src", ids, rec(self._products)),
               **self._images(raw), "hips": self._hips(raw), **self._overlays(raw)}

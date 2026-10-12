@@ -17,7 +17,15 @@ diagram list (``DIAGRAMS`` of ``wd2_colorcolor.html``; its MIRI entries are loca
 an SED figure) and the catalogue RA/Dec, used to give the map_ccd rows their catalogue row
 ids (``WD2-<row>``, the manifold naming) by an ordered walk over the 5-decimal positions.
 Colours that equal a difference of two stored magnitudes become virtual dims. The NIRSpec
-spectra stay in the NIRSpec 2640 portal and are linked by URL (``spec_url``).
+spectra stay in the NIRSpec 2640 portal: the manifold page plots them through a foreign record
+set (``nirspec``: that portal's ``data/spec/`` shards, matched on the ``spec`` column, which holds
+the NIRSpec 2640 source name), and each star also links to its page there (``spec_url``).
+Both portals are public, so the public wd2 portal may reference those shards.
+
+HST bands: the filter registry carries WFC3/ACS curves, but the Sabbi+2020 master catalogue
+names its bands only Im/V/J/H (``WD2_Portal_Sabbi.py``: "not a specified ACS/WFC3 bandpass"),
+so no ``m_hst_*`` column gets a filter curve. ``HST_BANDPASS`` maps a band to a registry key
+once the bandpass is known; it is empty on purpose.
 """
 
 from __future__ import annotations
@@ -39,14 +47,23 @@ AVM = "https://data.rc.ufl.edu/pub/adamginsburg/avm_images/"
 #: the NIRSpec 2640 unified portal (WP25) and its spectrum page; the NIRSpec spectra live there
 SPEC_PORTAL = PUB + "unified/nirspec2640/"
 SPEC_LINK = SPEC_PORTAL + "nirspec_2640_specviewer.html#id={}"
+#: foreign record set (contract (A)): the nirspec2640 portal's spectrum shards, page-relative
+#: from unified/wd2/ to unified/nirspec2640/data/ (adapters/nirspec2640.py FOREIGN_BASE_KEY)
+SPEC_BASE, SPEC_KEY = "../nirspec2640/data/", "spec"
 MODULES = ("WD2_Portal_Manifold", "WD2_Portal_Sabbi", "WD2_Portal_MapCCD", "WD2_Portal_WavelengthExplorer")
 HST = ("im", "v", "h", "j")
+#: Sabbi+2020 band -> filter registry key; empty because the catalogue does not name the
+#: ACS/WFC3 bandpass of its Im/V/J/H columns (see the module docstring)
+HST_BANDPASS: dict[str, str] = {}
 PCT = (0.5, 99.5)
 
 
 def _fid(key: str) -> str | None:
     m = re.fullmatch(r"(?:m_)?(f\d{3}[wmn])", key)
-    return f"JWST/NIRCam.{m.group(1).upper()}" if m else None
+    if m:
+        return f"JWST/NIRCam.{m.group(1).upper()}"
+    h = re.fullmatch(r"m_hst_(\w+)", key)
+    return HST_BANDPASS.get(h.group(1)) if h else None
 
 
 def _slug(name: str, taken: set) -> str:
@@ -188,8 +205,8 @@ class Wd2Adapter:
     def datasets(self, ctx):
         from astropy.table import Table
         from portalkit.legacy import extract
-        from portalkit.spec import (ExtinctionSpec, FilterSetSpec, ReadmeSpec, TemplateSpec,
-                                    TierUnavailable)
+        from portalkit.spec import (ExtinctionSpec, FilterSetSpec, ForeignRecords, ReadmeSpec,
+                                    RecordSetSpec, TemplateSpec, TierUnavailable)
         if ctx.tier not in self.tiers:
             raise TierUnavailable(f"wd2 implements tiers A and B, not {ctx.tier}")
         raw = self._tier_a(ctx) if ctx.tier == "A" else self._tier_b(ctx)
@@ -213,9 +230,9 @@ class Wd2Adapter:
         ds = {"src": self._src(raw, keep, set(sed_names)), "ccd": None,     # ccd needs the src/seds ids
               "sabbi": self._mani(raw["sabbi"], "sabbi", np.arange(ns if lim is None else min(lim, ns)),
                                   title="Sabbi+2020 HST catalogue x EWOCS NIRCam",
-                                  caveats=["Sabbi+2020 HST magnitudes carry no filter curve (the filter "
-                                           "registry has no HST/WFC3 bands), so the live SED uses the "
-                                           "EWOCS NIRCam magnitudes only.",
+                                  caveats=["Sabbi+2020 HST magnitudes carry no filter curve: the "
+                                           "catalogue names its bands Im/V/J/H without the ACS/WFC3 "
+                                           "bandpass, so the live SED uses the EWOCS NIRCam magnitudes only.",
                                            "Light curves are not part of this portal: the periodicity "
                                            "class and variability statistics are shown, the time series "
                                            "are not."])[0]}
@@ -224,6 +241,11 @@ class Wd2Adapter:
                               {str(i) for i in ds["src"].table["id"]}, {str(i) for i in ds["seds"].table["id"]})
         ds["sedimg"], ds["sedfig"] = self._img(ds["seds"], "seds"), self._img(ds["seds"], "src", ds["src"])
         ds["hips"], ds["iso"] = self._hips(raw), self._iso(ctx, raw)
+        # the NIRSpec 2640 spectra, read from that portal's shards (no copy is written here)
+        # (ids: the foreign record ids the src rows name, for the record count only)
+        ds["nirspec"] = RecordSetSpec("nirspec", "pks1", "src", sorted({str(s) for s in ds["src"].table["spec"] if s}),
+                                      None, noun=("spectrum", "spectra"),
+                                      foreign=ForeignRecords(SPEC_BASE, SPEC_KEY, id_column="spec"))
         ds.update(tpl=TemplateSpec(), ext=ExtinctionSpec(),
                   flt=FilterSetSpec(keys=sorted({_fid(c.key) for c in ds["src"].columns if _fid(c.key)})))
         ds["readme"] = ReadmeSpec(markdown=self._readme(ctx, raw, ds))
@@ -303,10 +325,13 @@ class Wd2Adapter:
             presets.append(Preset(pk, lab, "axes", {"x": xk, "y": yk, "note": note}))
             if len(t) > T0_MAX:
                 dens.append(DensitySpec(pk, xk, yk, xr=_pct(self._expr(t, xk)), yr=_pct(self._expr(t, yk))))
+        # an axes preset may be the default frame (the manifold pane resolves preset keys)
         default = "pca" if "pca" in frames else next(p.key for p in presets if p.kind in ("axes", "frame"))
-        if default not in frames:     # an axes default doubles as a frame (page state names frames only)
-            d0 = next(p.data for p in presets if p.key == default)
-            frames[default] = preset_frame({d0["x"]: 1.0}, {d0["y"]: 1.0}, dims, {})
+        # legacy colour key -> virtual dim (c_f115w_f150w -> m_f115w-m_f150w), for the legacy
+        # share links (page.legacy.dim_alias; kv-view x/y/c name the legacy keys)
+        if not hasattr(self, "_alias"):
+            self._alias = {}
+        self._alias[key] = {k: v for k, v in kmap.items() if k != v}
         spec = CatalogSpec(key=key, table=t, id="id", columns=cols, ra="ra", dec="dec", virtual=virt,
                            groups=[g for g in groups if g.dims], presets=presets, density=dens,
                            manifold=ManifoldSpec(dims=dims, frames=frames, default_frame=default),
@@ -346,9 +371,11 @@ class Wd2Adapter:
                                               "in at least 6 filters (legacy n_filt_independent cut).",
                                               "MIRI magnitudes are DAOPHOT instrumental VEGAMAG on their own "
                                               "zero point; HST magnitudes come from Sabbi+2020 through the "
-                                              "EWOCS crossmatch. Neither carries a filter curve, so the live "
-                                              "SED uses the NIRCam magnitudes only.",
-                                              "NIRSpec spectra are served by the NIRSpec 2640 portal (link per star)."])
+                                              "EWOCS crossmatch, which does not name their ACS/WFC3 bandpass. "
+                                              "Neither carries a filter curve, so the live SED uses the "
+                                              "NIRCam magnitudes only.",
+                                              "NIRSpec spectra are read from the NIRSpec 2640 portal's record "
+                                              "shards (matched on the 'spec' column); each star also links there."])
         ids = np.array([s["n"] for s in stars])
 
         def fin(k):
@@ -546,17 +573,19 @@ cross-matches.{lim}
 
 ## Notes
 
-- {nspec} stars have a NIRSpec spectrum; the spectra live in the
-  [NIRSpec 2640 portal]({SPEC_PORTAL}) and each star links to its page there.
+- {nspec} stars have a NIRSpec spectrum. The photometric manifold plots it from the
+  [NIRSpec 2640 portal]({SPEC_PORTAL})'s record shards, and each star links to its page there.
 - Isochrone: MIST v2.5 at {10 ** age / 1e6:.2f} Myr and {dist:.0f} pc; use the A_V slider to redden it.
 - MIRI magnitudes are instrumental (own zero point); read NIRCam - MIRI colours as relative diagnostics.
-- HST bands have no filter curves in the registry, so they appear in the plots but not in the live SED.
+- The Sabbi+2020 catalogue does not name the ACS/WFC3 bandpass of its Im/V/J/H bands, so they carry no
+  filter curve: they appear in the plots but not in the live SED.
 """
 
     # -- pages ----------------------------------------------------------------------------
     def pages(self, ctx, ds):
         from portalkit.caps import SHARED_EXTINCTION_VECTOR, overlay_slug
-        from portalkit.spec import PageSpec
+        from portalkit.spec import LegacyRef, PageSpec
+        alias = getattr(self, "_alias", {})
         ov = [overlay_slug(t.label) for t in ds["iso"].tracks] + [SHARED_EXTINCTION_VECTOR]
         phys = ["tpl", "flt", "ext"]
         src, ccd = ds["src"], ds["ccd"]
@@ -603,6 +632,17 @@ cross-matches.{lim}
                      {"pane": "hist", "id": "h_nfilt", "dataset": "seds", "collapsed": True,
                       "options": {"expr": "n_filt_independent", "brush": True}},
                      {"pane": "detail", "dataset": "seds", "options": {"images": "sedimg"}}], "size": 430}]}
+        # the manifold archetype's default tree (list | manifold | detail) with the NIRSpec spectrum
+        # pane expanded under the detail: the legacy wd2_manifold.html showed the selected star's
+        # spectrum (an iframe of nirspec_2640_specviewer.html), and the auto layout would add the
+        # spectrum1d pane collapsed. The resolver appends the other capability panes (scatter,
+        # sed, sky, readme) collapsed to the last column.
+        mani_layout = {"row": [
+            {"pane": "list", "dataset": "src", "size": 250},
+            {"pane": "manifold", "dataset": "src", "options": {"overlays": ov}},
+            {"col": [{"pane": "detail", "dataset": "src", "options": {"images": "sedfig"}},
+                     {"pane": "spectrum1d", "id": "spectrum1d", "dataset": "nirspec",
+                      "options": {"records": "nirspec", "templates": "tpl"}}], "size": 430}]}
         return [
             PageSpec(id="index", archetype="landing", title="Westerlund 2 JWST portal", datasets=["readme"],
                      layout={"pane": "landing", "options": {"cards": cards, "counts": True, "search": True}}),
@@ -615,15 +655,13 @@ cross-matches.{lim}
                      subtitle=f"{len(grid)} panels, {len(src.table):,} stars",
                      links={"manifold": to["manifold"], "map_ccd": to["map_ccd"]}),
             PageSpec(id="wd2_manifold", archetype="manifold", title="Photometric manifold", manifold=True,
-                     datasets=["src", "sedfig", "hips", "iso"] + phys,
+                     datasets=["src", "nirspec", "sedfig", "hips", "iso"] + phys, layout=mani_layout,
                      subtitle=f"{len(src.manifold.dims)} dims, {len(src.table):,} stars",
                      links={"colorcolor": to["colorcolor"], "map_ccd": to["map_ccd"], "seds": to["seds"]},
-                     caps_disable={"spectrum_viewer_1d": "the NIRSpec 2640 spectra are served by the "
-                                   "nirspec2640 portal and linked per star (spec_url); this build has no "
-                                   "cross-portal records reference to plot them here"}),
+                     legacy=LegacyRef(files=[], dim_alias=dict(alias.get("src", {})))),
             PageSpec(id="sabbi", archetype="manifold", title="Sabbi+2020 manifold", manifold=True,
                      datasets=["sabbi", "hips"] + phys, subtitle="HST x EWOCS NIRCam",
-                     state={"frame:manifold": {"preset": ds["sabbi"].manifold.default_frame}},
+                     legacy=LegacyRef(files=[], dim_alias=dict(alias.get("sabbi", {}))),
                      caps_disable={"isochrones_or_tracks": "the MIST grid in use has JWST bands only; "
                                    "the Sabbi+2020 HST axes have no isochrone magnitudes"}),
             PageSpec(id="wd2_sedgallery", archetype="gallery", title="SED gallery",

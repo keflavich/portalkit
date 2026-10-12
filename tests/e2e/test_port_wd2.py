@@ -11,8 +11,12 @@ SED PNGs) are aborted by the harness and recorded.
   (the legacy default S/N > 20 applied on open; per-diagram CMD / CCD variants).
 * wd2_colorcolor: the legacy diagram grid, the magnitude histogram, ``#<name>`` deep links.
 * wd2_manifold: support beyond MAXD_GPU -> CPU (worker) projection; preselects as saved
-  selections; the 2640 spectra are links (spectrum_viewer_1d recorded in caps.disable).
-* sabbi: manifold with isochrones recorded as disabled (no HST MIST bands).
+  selections; the 2640 spectra are plotted from the nirspec2640 portal's record shards
+  (foreign record set ``nirspec``, ``../nirspec2640/data/spec/``). The staged wd2 build holds
+  no nirspec2640 portal, so the test writes a small synthetic record set for the wd2 spec ids
+  and routes those requests to it.
+* sabbi: manifold with isochrones recorded as disabled (no HST MIST bands); the default frame
+  is the first axes preset.
 * wd2_sedgallery: gallery items = SED PNGs, live SED with the blackbody model, range brushes
   on bb_T / bb_av / chi2 / n_filt.
 * wd2_wavelength_explorer: one rung per legacy WAVELENGTHS entry; ``?speed=`` honoured.
@@ -193,7 +197,7 @@ def test_manifold_cpu_projection_and_preselects(runs, portal_dir):
     D = len(man["manifold"]["dims"])
     assert D > MAXD_GPU
     caps = _page_caps(portal_dir, "wd2_manifold")
-    assert "spectrum_viewer_1d" in caps["disabled"]
+    assert "spectrum_viewer_1d" in caps["enabled"] and "spectrum_viewer_1d" not in caps["disabled"]
     run = runs("wd2_manifold.html")
     run.wait_panes_settled()
     pane = _panes(run)["manifold"][0]
@@ -225,6 +229,55 @@ def test_manifold_legacy_kv_hash(runs, portal_dir):
     run.page.wait_for_function("() => { const f = window.__pk.store.get('focus'); return !!(f && f.i != null); }",
                                timeout=60000)
     assert str(run.store_get("focus")["id"]) == "WD2-000014"
+    _no_errors(run)
+
+
+def test_manifold_foreign_spectra(browser, server, runs, portal_dir, tmp_path):
+    """wd2 stages no spectrum shards: the spectrum pane reads ../nirspec2640/data/spec/."""
+    import numpy as np
+
+    from portalkit.bundle import records
+    from portalkit.spec import RecordSetSpec, Spectrum
+    assert not (portal_dir / "data" / "nirspec").exists()
+    rep = _json(portal_dir / "build_report.json")["datasets"]["nirspec"]
+    assert rep["foreign"] is True and rep["files"] == 0
+    # the spec names the wd2 catalogue carries (id_column 'spec'), read from the plain page
+    run0 = runs("wd2_manifold.html")
+    ref = run0.ev("() => JSON.parse(document.getElementById('pk-page').textContent).datasets.nirspec")
+    assert ref["url"] == "../nirspec2640/data/spec/index.json" and ref["id_column"] == "spec", ref
+    pick = run0.ev("""async () => { const c = await window.__pk.app.catalog('src');
+        const r = await c.rows(0, c.n); const out = [];
+        r.forEach((x, i) => { if (x.spec) out.push([i, String(x.spec)]); }); return out; }""")
+    assert pick, "no wd2 source carries a NIRSpec spectrum name"
+    w = np.linspace(1.0, 5.0, 64)
+
+    def spec(rid):
+        return Spectrum(wave=w, channels={"flux": 1e-3 * (1 + w), "err": np.full(w.size, 1e-4)},
+                        units={"flux": "Jy"})
+    records.write(RecordSetSpec("spec", "pks1", "src", sorted({sid for _, sid in pick}), spec), tmp_path / "spec")
+    assert (tmp_path / "spec" / "index.json").is_file()
+    seen = []
+
+    def to_synth(r):
+        rest = r.request.url.split("/nirspec2640/data/", 1)[1].split("?", 1)[0]
+        seen.append(rest)
+        f = tmp_path / rest
+        if not f.is_file():
+            return r.fulfill(status=404, body=b"")
+        return r.fulfill(status=200, body=f.read_bytes(),
+                         content_type="application/json" if rest.endswith(".json") else "application/octet-stream")
+    ctx = browser.new_context(viewport={"width": 1400, "height": 900})
+    ctx.route(re.compile(r"/nirspec2640/data/"), to_synth)
+    run = runs("wd2_manifold.html", context=ctx)
+    run.wait_panes_settled()
+    p = _panes(run)
+    assert "spectrum1d" in p, p
+    # expanded in the page layout: no reveal needed
+    run.page.wait_for_function("(p) => !!window.__pk.app.layout.pane(p)", arg=p["spectrum1d"][0], timeout=30000)
+    run.ev(f"() => window.__pk.store.set({{focus: {{ds: 'src', i: {pick[0][0]}, id: null}}}}, {{source: 'test'}})")
+    st = _wait(run, p["spectrum1d"][0], "s.n > 0")
+    assert st["n"] > 0
+    assert "spec/index.json" in seen and any(x.startswith("spec/") and x != "spec/index.json" for x in seen), seen
     _no_errors(run)
 
 

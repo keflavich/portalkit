@@ -37,6 +37,10 @@ from urllib.parse import quote
 
 import numpy as np
 
+from portalkit.legacy.nirspec import GRATING_RANGE as _NIRSPEC_RANGE
+from portalkit.legacy.nirspec import MAX_FLUX, overlap_cuts, read_s2d, split_segments, stitch_s2d
+from portalkit.legacy.nirspec import clean_flux as _clean_flux
+
 LEGACY_DIR = Path("/orange/adamginsburg/jwst/spectra/nirspec_6927")
 JWST_ROOT = "/orange/adamginsburg/jwst/"
 #: web/secure/jwst -> /orange/adamginsburg/jwst (secure, login required)
@@ -47,10 +51,10 @@ L3_DIRS = ["/orange/adamginsburg/jwst/spectra/data_L3_20260823",
 BRICK_CAT = ("/orange/adamginsburg/jwst/brick/catalogs/basic_merged_indivexp_photometry_tables_"
              "merged_ok2221or1182_20251211_abfix.fits")
 FILTERS = ("f115w", "f182m", "f187n", "f200w", "f212n", "f356w", "f405n", "f410m", "f444w", "f466n")
-#: nominal wavelength coverage of the L3 products [um]; the merged spectrum is split into
-#: grating segments at the midpoints of the overlaps
-GRATING_RANGE = {"G140M": (0.962, 1.878), "G235M": (1.648, 3.136), "G395M": (2.850, 5.202)}
-MAX_FLUX = 1.0       # Jy; JWST_Archive_Spectra.max_flux (clean_flux ceiling)
+#: nominal wavelength coverage of the L3 products [um] (the 6927 gratings, from the shared
+#: portalkit.legacy.nirspec table); the merged spectrum is split into grating segments at the
+#: midpoints of the overlaps. MAX_FLUX (1 Jy clean_flux ceiling) also comes from there.
+GRATING_RANGE = {g: _NIRSPEC_RANGE[g] for g in ("G140M", "G235M", "G395M")}
 SPECIES = ("H2O", "CO2", "13CO2", "OCN", "CO", "OCS")
 TAU_SPECIES = ("H2O", "CO2", "CO", "OCN")
 #: ice keys with value / error / limit triplets: (ROWS key, column key, unit, label)
@@ -123,10 +127,9 @@ def _mast(obs: str) -> str:
 
 
 def _cuts(gratings) -> list[tuple[str, float, float]]:
-    """(grating, lo, hi) wavelength ranges that split a merged spectrum at overlap midpoints."""
-    gs = [g for g in GRATING_RANGE if g in gratings]
-    edges = [0.0] + [0.5 * (GRATING_RANGE[b][0] + GRATING_RANGE[a][1]) for a, b in zip(gs, gs[1:])] + [99.0]
-    return [(g, edges[i], edges[i + 1]) for i, g in enumerate(gs)]
+    """(grating, lo, hi) wavelength ranges that split a merged spectrum at overlap midpoints
+    (portalkit.legacy.nirspec.overlap_cuts over the 6927 gratings)."""
+    return overlap_cuts(gratings, GRATING_RANGE)
 
 
 def _pay(ctx, rel, *names) -> dict:
@@ -393,8 +396,7 @@ class NIRSpec6927Adapter:
         o = np.argsort(w, kind="stable")
         w, f, e = w[o], f[o], e[o]
         e = np.where(np.isfinite(f) & (e > 0), e, np.nan)
-        segs = [(i0, i1, g) for g, lo, hi in _cuts(r["Gratings"].split(","))
-                for i0, i1 in [(int(np.searchsorted(w, lo)), int(np.searchsorted(w, hi)))] if i1 > i0]
+        segs = split_segments(w, _cuts(r["Gratings"].split(",")))
         lines = [{"name": str(x["n"]), "w": float(x["w"]), "kind": "emission" if x.get("k") == "e" else "absorption",
                   "detected": True, "snr": _num(x.get("snr"))} for x in det if _num(x.get("w"))]
         lines += [{"name": str(m["name"]), "w": float(m["wl"]), "kind": "ice", "detected": False} for m in raw["icemarks"]]
@@ -402,8 +404,8 @@ class NIRSpec6927Adapter:
                         meta={"name": name, "slit": r["SlitID"], "obs": r["Observation"], "gratings": r["Gratings"]})
 
     def _image2d(self, raw, ctx, name):
-        """s2d products stitched at the grating cuts (every tier; see the module docstring)."""
-        from portalkit.spec import Image2D
+        """s2d products stitched at the grating cuts (every tier; see the module docstring);
+        portalkit.legacy.nirspec read_s2d / stitch_s2d."""
         r = raw["by"].get(name)
         prods = [p for p in (r or {}).get("Products", []) if p.get("s2d_rel")]
         files = [str(LEGACY_DIR / p["s2d_rel"]) for p in prods]
@@ -411,34 +413,13 @@ class NIRSpec6927Adapter:
             return None
 
         def load():
-            from astropy.io import fits
             out = {}
             for i, fn in enumerate(files):
-                with fits.open(fn, memmap=False) as h:
-                    out[f"d{i}"] = np.asarray(h["SCI"].data, np.float32)
-                    out[f"w{i}"] = np.nanmedian(np.asarray(h["WAVELENGTH"].data, float), axis=0)
+                out[f"d{i}"], out[f"w{i}"] = read_s2d(fn)
             return out
         a = ctx.cache.memo(f"n6927_s2d_v1_{name}", load, inputs=files)
-        cut = {g: (lo, hi) for g, lo, hi in _cuts([p["grating"] for p in prods])}
-        blocks, waves, segs, i0 = [], [], [], 0
-        ny = max(a[f"d{i}"].shape[0] for i in range(len(files)))
-        for i, p in sorted(enumerate(prods), key=lambda ip: GRATING_RANGE.get(ip[1]["grating"], (9,))[0]):
-            d, w = a[f"d{i}"], a[f"w{i}"]
-            lo, hi = cut.get(p["grating"], (0.0, 99.0))
-            keep = np.isfinite(w) & (w >= lo) & (w < hi)
-            if not keep.any():
-                continue
-            pad = np.full((ny, int(keep.sum())), np.nan, np.float32)
-            top = (ny - d.shape[0]) // 2
-            pad[top:top + d.shape[0]] = d[:, keep]
-            blocks.append(pad)
-            waves.append(w[keep])
-            segs.append((i0, i0 + pad.shape[1], p["grating"]))
-            i0 += pad.shape[1]
-        if not blocks:
-            return None
-        return Image2D(data=np.concatenate(blocks, axis=1), wave=np.concatenate(waves),
-                       y=np.arange(ny, dtype=float) - (ny - 1) / 2.0, segments=segs)
+        return stitch_s2d([(p["grating"], a[f"d{i}"], a[f"w{i}"]) for i, p in enumerate(prods)],
+                          _cuts([p["grating"] for p in prods]))
 
     def _products(self, raw, ctx, name):
         r = raw["by"].get(name)
@@ -660,11 +641,5 @@ CCDS = [("ice2221", ("f182m", "f212n"), ("f405n", "f466n")), ("co410", ("f405n",
 
 def clean_flux(flux, err):
     """NIRSpec_6927_Spectra.clean_flux: NaN where err or flux > 1 Jy, flux < 0, or flux above
-    mean + 10 sigma of the grating."""
-    f = np.array(flux, dtype=float)
-    with np.errstate(invalid="ignore"):
-        f[np.asarray(err, float) > MAX_FLUX] = np.nan
-        f[(f > MAX_FLUX) | (f < 0)] = np.nan
-        if np.isfinite(f).any():
-            f[f > np.nanmean(f) + 10 * np.nanstd(f)] = np.nan
-    return f
+    mean + 10 sigma of the grating (portalkit.legacy.nirspec.clean_flux)."""
+    return _clean_flux(flux, err, MAX_FLUX)

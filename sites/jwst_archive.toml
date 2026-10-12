@@ -77,6 +77,15 @@ legacy = ["archive_manifold.html"]
 grammar = ["kv-view", "bare-name"]
 
 [[portal]]
+# w51 stages its own copy of the spectrum shards (data/spec/) rather than referencing the
+# archive portal's as a foreign record set: web/secure/jwst and web/secure/w51 are different
+# .htpasswd files sharing only one account ("brick"), so a w51-only viewer ("w51", "rainer")
+# would get a 401 on every spectrum fetch if this portal pointed at the archive portal's
+# shards instead (adapters/jwst_archive.py module docstring has the full account lists).
+# This portal still cross-links to the archive portal by id (the landing cards and the
+# "archive" nav link): those hyperlinks 404/login-prompt until the archive portal is also
+# deployed, but the page itself (including its spectrum pane) renders standalone -- unlike
+# wd2/nirspec2640, deploy order between archive and w51 does not matter for page content.
 id = "w51"
 title = "W51 photometry vs JWST archive spectra"
 visibility = "secure"

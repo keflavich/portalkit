@@ -137,7 +137,12 @@ def test_landing_secure_cards(runs, portal_dir):
     assert len([c for c in cards if c["page"]]) == 9
     n = _json(portal_dir / "data" / "src" / "manifest.json")["n"]
     counted = [c for c in cards if c["page"] and c["count"].strip()]
-    assert counted and all(re.sub(r"[,\s ]", "", c["count"]).startswith(str(n)) for c in counted), counted
+    assert counted, cards
+    for c in counted:
+        # catalog cards count the n sources (spectra); gallery cards count their images, at
+        # most one per source (the SED set lacks a figure for some pointings)
+        num = int(re.match(r"\d+", re.sub(r"[,\s ]", "", c["count"])).group(0))
+        assert (num <= n) if "image" in c["count"] else (num == n), c
     _no_public_data(run)
     _no_errors(run)
 

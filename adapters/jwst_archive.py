@@ -6,11 +6,23 @@ One adapter, three portals:
   through the ``pngs/portal`` symlink): landing + README, the colour portal
   (CCD with two marginal CMDs, list, detail, spectrum, SED, sky) and the ice manifold.
 * ``w51`` (secure, ``w51/portal/archive_colors/unified``): the same 1902-row archive table with
-  the W51 NIRCam photometry as a context (density) dataset and the W51 preset planes.
+  the W51 NIRCam photometry as a context (density) dataset and the W51 preset planes. w51
+  stages its own copy of the spectrum shards (``spec``, same ~15 MB as the archive and gallery
+  portals) rather than a foreign record set onto the archive portal: the archive portal's
+  ``.htpasswd`` (``web/secure/jwst``) and the w51 portal's (``web/secure/w51``) are different
+  password files with only one account in common (``brick``), so a viewer who only has a w51
+  account (``w51``, ``rainer``) would get HTTP 401 fetching every spectrum if w51 pointed at
+  the archive portal's shards instead of its own. ``portalkit check``/``verify --http`` cannot
+  catch this (a 401 from a secure base without credentials is reported only as a note, section
+  4.3), so the duplicate copy is kept deliberately. :func:`foreign_base` remains as a tested
+  helper for the generic cross-realm-refusal case (public gallery -> secure archive) and for
+  other families (e.g. wd2 -> nirspec2640) whose portals do share one password file.
 * ``gallery`` (public, ``web/public/jwst/spectra`` -> ``mastDownload/JWST/pngs/unified``): one
   faceted PNG gallery that replaces the 11 legacy gallery pages, plus its checklist (annotate)
   view. The PNGs are already public through that symlink; the gallery links into the secure
-  colour portal by id.
+  colour portal by id. The gallery keeps its own copy of the spectrum shards (``spec``): it is
+  public, and a public portal may not reference the secure archive portal's shards (the
+  foreign-records visibility rule; ``portalkit build`` refuses it with exit 3).
 
 Ids are derived from the x1d filename (``"_".join(parts[:-3]) + "_" + parts[-2]``, e.g.
 ``jw01854-o003_t016_g235h-f170lp``; unique over the table). Legacy pages addressed spectra by
@@ -252,8 +264,7 @@ class JWSTArchiveAdapter:
 
     # -- datasets -------------------------------------------------------------------------------
     def datasets(self, ctx):
-        from portalkit.spec import (ExtinctionSpec, FilterSetSpec, RecordSetSpec, TemplateSpec,
-                                    TierUnavailable)
+        from portalkit.spec import ExtinctionSpec, FilterSetSpec, RecordSetSpec, TemplateSpec, TierUnavailable
         if ctx.tier not in self.tiers:
             raise TierUnavailable(f"jwst_archive implements tiers A and B, not {ctx.tier}")
         rows = self._tier_a(ctx) if ctx.tier == "A" else self._tier_b(ctx)
@@ -267,6 +278,8 @@ class JWSTArchiveAdapter:
             raise ValueError("x1d-derived ids are not unique")
         ids = list(by)
         spec = RecordSetSpec("spec", "pks1", "src", ids, lambda n: self._spectrum(ctx, by, n), enc={"flux": "f32"})
+        # w51 reads its own copy (not a foreign record set onto the archive portal): the two
+        # portals' secure areas are different password files (see the module docstring)
         ds = {"src": self._src(ctx, rows), "spec": spec, "arch": self._arch(rows), "bg": self._bg(ctx),
               "pngs": self._pngs(ctx, rows), "hips": self._hips(rows),
               "tpl": TemplateSpec(), "flt": FilterSetSpec(keys=[_fid(f) for f in FILTERS]), "ext": ExtinctionSpec()}
@@ -591,6 +604,19 @@ class JWSTArchiveAdapter:
 
 
 ADAPTER = JWSTArchiveAdapter()
+
+
+def foreign_base(page_url: str, archive_url: str) -> str:
+    """Page-relative URL of the archive portal's ``data/`` as seen from a portal at
+    ``page_url`` (pages sit at the portal root). Both URLs must share scheme and host;
+    the foreign-records rule needs the same host and resolves the base against the page."""
+    import posixpath
+    from urllib.parse import urlsplit
+    a, b = urlsplit(page_url), urlsplit(archive_url)
+    if (a.scheme, a.netloc) != (b.scheme, b.netloc):
+        raise ValueError(f"{archive_url} is not on the host of {page_url}")
+    rel = posixpath.relpath(b.path.rstrip("/") + "/data", a.path.rstrip("/") or "/")
+    return rel + "/"
 
 
 def _context(t, flt, key, title, ColumnSpec, CatalogSpec, nbin, caveats=(), extra=()):

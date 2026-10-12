@@ -331,6 +331,77 @@ def test_colours_yoo_overlays(runs, portal_dir):
     assert not _errs(run)
 
 
+def _strings(o):
+    if isinstance(o, str):
+        yield o
+    elif isinstance(o, dict):
+        for k, v in o.items():
+            yield from _strings(k)
+            yield from _strings(v)
+    elif isinstance(o, list):
+        for v in o:
+            yield from _strings(v)
+
+
+def test_colours_legacy_query(browser, srv, portal_dir):
+    """spherex-colours grammar: the legacy ?ax=&ay=&bx=&by= query sets the CCD axes."""
+    cols = sorted({x for x in _strings(_man(portal_dir, "src")) if re.fullmatch(r"f\d{3}[wmn]-f\d{3}[wmn]", x)}
+                  - {"f162m-f210m", "f360m-f480m"})
+    if len(cols) < 2:
+        pytest.skip(f"fewer than two non-default colours in the fixture catalogue: {cols}")
+    (a, b), (c, d) = (x.upper().split("-") for x in cols[:2])
+    run = _bp().open_run(browser, srv, f"{FAMILY}/colours.html", query=f"ax={a}&ay={b}&bx={c}&by={d}")
+    try:
+        run.page.wait_for_function("() => { const a = window.__pk.store.get('axes:ccd'); return !!(a && a.x); }",
+                                   timeout=60000)
+        ax = run.store_get("axes:ccd")
+        assert (ax["x"], ax["y"]) == (cols[0], cols[1]), ax
+        assert not _errs(run)
+    finally:
+        run.close()
+
+
+def test_colours_legacy_region_colour(browser, srv, portal_dir):
+    """Legacy colours.html ?c=reg&hide=<region>: colour by the region category, that level off."""
+    from urllib.parse import quote
+    reg = next(c for c in _man(portal_dir, "src")["cols"] if c["key"] == "reg")
+    assert reg["role"] == "category" and reg["levels"]
+    lv = reg["levels"][0]
+    run = _bp().open_run(browser, srv, f"{FAMILY}/colours.html", query=f"c=reg&hide={quote(lv)}")
+    try:
+        run.page.wait_for_function("() => { const c = window.__pk.store.get('color'); return !!(c && c.by === 'reg'); }",
+                                   timeout=60000)
+        f = run.store_get("filters:src") or {}
+        assert (f.get("cats") or {}).get("reg") == [lv], f
+        run.page.wait_for_function(
+            "(lv) => [...document.querySelectorAll('.pk-legend-level')].some((b) => "
+            "b.querySelector('.pk-legend-label').textContent === lv && b.getAttribute('aria-pressed') === 'false')",
+            arg=lv, timeout=60000)
+        assert not _errs(run)
+    finally:
+        run.close()
+
+
+def test_manifold_legacy_colour_key(browser, srv, portal_dir):
+    """The manifold's legacy dim names (c_<A>_<B>) reach the unified dims through dim_alias."""
+    from portalkit.legacy.extract import script_json
+    pj = script_json(portal_dir / "manifold.html", "pk-page")
+    alias = pj["page"]["legacy"]["dim_alias"]
+    cc = sorted(k for k in alias if k.startswith("c_"))
+    if len(cc) < 2:
+        pytest.skip("fixture manifold has fewer than two legacy colour keys")
+    run = _bp().open_run(browser, srv, f"{FAMILY}/manifold.html", hash=f"x={cc[0]}&y={cc[1]}")
+    try:
+        run.wait_panes_settled()
+        pane = run.ev("() => document.querySelector('section.pk-pane[data-pane-type=\"manifold\"]').dataset.paneId")
+        st = _wait(run, pane, "Array.isArray(s.frame) && Array.isArray(s.dims)")
+        D, fr = len(st["dims"]), st["frame"]
+        assert fr[st["dims"].index(alias[cc[0]])] != 0 and fr[D + st["dims"].index(alias[cc[1]])] != 0, (st["dims"], fr)
+        assert not _errs(run)
+    finally:
+        run.close()
+
+
 # -- sed: nuFnu / Fnu toggle -----------------------------------------------------------------------------
 def test_sed_units_toggle(runs, portal_dir):
     run = runs("sed")
@@ -348,7 +419,7 @@ def test_sed_units_toggle(runs, portal_dir):
     btns.nth(1).click()
     _wait(run, sed, "s.units === 'nufnu'")
     st3 = _wait(run, sed, "s.sedcurves.length > 0")
-    assert "flux" in st3["sedcurves"]
+    assert "SPHEREx" in st3["sedcurves"]
     assert not _errs(run)
 
 

@@ -659,7 +659,59 @@ def test_checklist_diff_accepts_the_adapter_export(runs):
     assert flips >= 1
     out = [",".join(["id", *CHECKLIST_KEYS, "ISOKN"])] + [",".join(f'"{x}"' for x in r) for r in rows]
     diff, notes = checklist_diff("\n".join(out) + "\n", text)
-    if any("no checklist row matches" in n for n in notes):
-        pytest.xfail("contract issue: portalkit/cli.py checklist_diff compares Filename exactly; the checklist "
-                     "holds absolute paths and the served catalogue relative ones (gate G2)")
+    # Filename matches by path suffix (basename + parent dir; checklist_diff, WPE6)
+    assert not any("no checklist row matches" in n for n in notes), notes
     assert diff and int(notes[-1].split()[0]) >= flips, notes
+
+
+# -- foreign record sets (contract (A)) ------------------------------------------------------
+# w51 deliberately does NOT reference the archive portal's shards as a foreign record set: the
+# two portals' secure areas (web/secure/jwst, web/secure/w51) are different .htpasswd files
+# with only one account in common, so a w51-only viewer would get a 401 on every spectrum
+# fetch (verify --http cannot catch this; section 4.3 reports a 401 from a secure base
+# without credentials only as a note). w51 keeps its own copy of "spec" instead (see the
+# module docstring). foreign_base() is still exercised directly below as the generic helper
+# (used live by other families whose portals do share one password file, e.g. wd2).
+def test_foreign_base():
+    w51, arch = SITE.portal("w51").url, SITE.portal("archive").url
+    base = mod.foreign_base(w51, arch)
+    assert base == "../../../../jwst/spectra/portal_unified/data/"
+    from urllib.parse import urljoin
+    assert urljoin(w51, base) == arch + "data/"
+    with pytest.raises(ValueError):
+        mod.foreign_base(w51, "https://example.org/x/")
+
+
+def test_w51_keeps_its_own_spectrum_copy(runs, built):
+    """w51 stages its own spectrum shards rather than a cross-realm foreign reference onto the
+    archive portal (different .htpasswd files; see the module docstring and test_foreign_base's
+    comment above)."""
+    ds = runs["B"]["ds"]
+    assert "spec_arch" not in ds
+    pages = {(p.portal, p.id): p for p in runs["B"]["pages"]}
+    for key in (("w51", "colors"), ("gallery", "gallery"), ("gallery", "checklist"),
+                ("archive", "colors"), ("archive", "manifold")):
+        assert "spec" in pages[key].datasets and "spec_arch" not in pages[key].datasets, key
+    root = built["root"]
+    assert (root / "w51" / "data" / "spec" / "index.json").is_file()
+    assert (root / "archive" / "data" / "spec" / "index.json").is_file()
+    assert (root / "gallery" / "data" / "spec" / "index.json").is_file()
+    rep = _report(built, "w51")["datasets"]["spec"]
+    assert not rep.get("foreign") and rep["files"] > 0
+
+
+def test_public_gallery_may_not_reference_secure_shards(runs):
+    """The generic visibility rule (contract (A)), exercised with a synthetic foreign dataset
+    since no live dataset in this family points at the archive portal's shards (see above)."""
+    from portalkit.build import foreign_records_exposure
+    from portalkit.deploy import ExposureRefusal
+    from portalkit.spec import ForeignRecords
+    ids = runs["B"]["ds"]["spec"].ids
+    fa_gal = RecordSetSpec("spec_arch", "pks1", "src", list(ids), None, foreign=ForeignRecords(
+        mod.foreign_base(SITE.portal("gallery").url, SITE.portal("archive").url), "spec"))
+    with pytest.raises(ExposureRefusal):
+        foreign_records_exposure(SITE.portal("gallery"), "spec_arch", fa_gal)
+    fa_w51 = RecordSetSpec("spec_arch", "pks1", "src", list(ids), None, foreign=ForeignRecords(
+        mod.foreign_base(SITE.portal("w51").url, SITE.portal("archive").url), "spec"))
+    assert foreign_records_exposure(SITE.portal("w51"), "spec_arch", fa_w51).startswith(
+        SITE.portal("archive").url)

@@ -6,6 +6,7 @@ portalkit cache (``$PK_CACHE_DIR`` or ``~/.cache/portalkit``).
 
 from __future__ import annotations
 
+import collections
 import json
 import math
 import os
@@ -419,8 +420,8 @@ def test_spec_loader(tmp_path):
         ld("bad")
     assert ld("gone") is None and ld("unknown") is None and ld("empty") is None
     sc = mod.SedCurveLoader(ld)("Ω-1")
-    assert list(sc.channels) == ["flux", "IRS"]
-    assert np.isnan(sc.channels["flux"][3:]).all() and np.isnan(sc.channels["IRS"][:3]).all()
+    assert list(sc.channels) == ["SPHEREx", "IRS"] and sc.units == {"SPHEREx": "Jy", "IRS": "Jy"}
+    assert np.isnan(sc.channels["SPHEREx"][3:]).all() and np.isnan(sc.channels["IRS"][:3]).all()
     assert mod.SedCurveLoader(ld)("gone") is None
 
 
@@ -462,6 +463,13 @@ def test_src_catalog(runs):
     assert len(mags) == 28 and all(c.filter.startswith("JWST/NIRCam.") for c in mags)
     assert cols["s"].colors and cols["q"].colors and cols["cls"].role == "category"
     assert cols["irs"].role == "flag" and cols["sat"].role == "flag"
+    # region: a category (legacy colours.html colour-by 'region', ?c=reg&hide=<region>)
+    reg = cols["reg"]
+    assert reg.role == "category" and set(src.table["reg"]) == set(reg.levels)
+    n = collections.Counter(src.table["reg"])
+    named = [lv for lv in reg.levels if lv != mod.REG_NONE]
+    assert [n[lv] for lv in named] == sorted((n[lv] for lv in named), reverse=True)
+    assert mod.REG_NONE not in reg.levels[:-1] and "" not in reg.levels
     assert cols["nch"].log and cols["dist"].log
     assert "f162m-f210m" in {v.key for v in src.virtual}
     assert {"tb_f444w", "tb_f480m"} <= set(cols)
@@ -473,6 +481,45 @@ def test_src_catalog(runs):
     assert set(src.manifold.dims) >= {"f162m", "f162m-f210m", "teff", "ra_deg", "dec_deg"}
     for d in src.manifold.dims:
         assert d in cols or d in {v.key for v in src.virtual}
+
+
+def test_legacy_dim_alias(runs, built):
+    """Manifold kv-view links name legacy dims (m_F162M, c_F162M_F210M, ra); the page maps them."""
+    assert mod.legacy_dim_alias(["m_F162M", "c_F162M_F210M", "ra", "teff", "c_A_B_C", "m_F999W"],
+                                {"f162m", "f162m-f210m", "ra_deg", "teff"}) == {
+        "m_F162M": "f162m", "c_F162M_F210M": "f162m-f210m", "ra": "ra_deg"}
+    page = {p.id: p for p in runs["B"]["pages"]}["manifold"]
+    al = page.legacy.dim_alias
+    src = runs["B"]["ds"]["src"]
+    keys = set(src.manifold.dims) | {c.key for c in src.columns}
+    assert al["m_F162M"] == "f162m" and al["c_F162M_F210M"] == "f162m-f210m" and al["ra"] == "ra_deg"
+    assert set(al.values()) <= keys
+    from portalkit.legacy.extract import script_json
+    from portalkit.legacy.hashmap import map_legacy
+    pj = script_json(built["portal"] / "manifold.html", "pk-page")
+    assert pj["page"]["legacy"]["dim_alias"] == al and pj["page"]["legacy"]["grammar"] == ["kv-view", "bare-name"]
+    from portalkit.legacy.hashmap import decode_frame
+    dims = json.loads((built["portal"] / "data" / "src" / "manifest.json").read_text(encoding="utf-8"))["manifold"]["dims"]
+    dims = [d if isinstance(d, str) else d["key"] for d in dims]
+    out = map_legacy(["kv-view", "bare-name"], {"hash": "#x=c_F162M_F210M&y=m_F444W", "page": pj, "dims": dims})
+    fr = decode_frame(next(v for k, v in out["hash"].items() if k.endswith(".frame")))
+    D = len(dims)
+    assert [dims[i] for i in range(D) if fr[i]] == ["f162m-f210m"]
+    assert [dims[i] for i in range(D) if fr[D + i]] == [al["m_F444W"]]
+    cj = script_json(built["portal"] / "colours.html", "pk-page")
+    assert cj["page"]["legacy"]["grammar"] == ["spherex-colours"]
+    out = map_legacy(["spherex-colours"], {"search": "?ax=F162M&ay=F210M&bx=F360M&by=F480M&c=q", "page": cj})
+    assert out["hash"]["ccd.x"] == "f162m-f210m" and out["hash"]["ccd.y"] == "f360m-f480m"
+    # colour by region with a hidden region: a category of the src manifest
+    man = json.loads((built["portal"] / "data" / "src" / "manifest.json").read_text(encoding="utf-8"))
+    mc = {c["key"]: c for c in man["cols"]}
+    assert mc["reg"]["role"] == "category" and mc["reg"]["enc"] in ("cat8", "cat16")
+    lv = mc["reg"]["levels"][0]
+    from urllib.parse import quote
+    from portalkit.legacy.hashmap import decode_json
+    out = map_legacy(["spherex-colours"], {"search": f"?c=reg&hide={quote(lv)}", "page": cj})
+    assert out["hash"]["c"] == "reg"
+    assert decode_json(out["hash"]["f"]) == {"cats": {"reg": [lv]}}
 
 
 def test_overlays(runs):

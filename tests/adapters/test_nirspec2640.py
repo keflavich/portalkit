@@ -231,7 +231,11 @@ def test_tier_parity(runs):
         ok = np.isfinite(x)
         assert np.allclose(x[ok], y[ok], rtol=1e-3, atol=2e-3), c.key       # legacy rounds to 1e-4
         checked += 1
-    assert checked > 100
+    # the manifold's pairwise colours are virtual dims (a - b of two stored columns, WPE6):
+    # both tiers declare the same ones, and they count towards the compared quantities
+    va, vb = [v.key for v in a["src"].virtual], [v.key for v in b["src"].virtual]
+    assert va == vb
+    assert checked + len(vb) > 100
     for k in ("Gratings", "Observation", "l_col_H2O", "l_col_CO2"):
         assert list(ta[k]) == list(tb[k]), k
     assert a["hips"].base == b["hips"].base and a["hips"].overlays == b["hips"].overlays
@@ -588,3 +592,17 @@ def test_links_and_grammars(runs):
     from portalkit.legacy.hashmap import map_legacy
     assert map_legacy(gram["nirspec_2640_map"], {"hash": "#2640_1058", "search": ""})["hash"] == {"id": "2640_1058"}
     assert map_legacy(gram["nirspec_2640_manifold"], {"hash": "#star=2640_1058", "search": ""})["hash"]["id"] == "2640_1058"
+
+
+def test_foreign_base_for_wd2(runs):
+    """The wd2 portal reads data/<FOREIGN_BASE_KEY>/ of this portal (ids = source names)."""
+    from urllib.parse import urljoin
+
+    from adapters import wd2
+    assert mod.FOREIGN_BASE_KEY == wd2.SPEC_KEY == "spec"
+    wsite = load_site("wd2")
+    assert urljoin(wsite.portal("wd2").url, wd2.SPEC_BASE) == SITE.portal(FAMILY).url + "data/"
+    for tier in ("A", "B"):
+        rs = runs[tier]["ds"][mod.FOREIGN_BASE_KEY]
+        assert isinstance(rs, RecordSetSpec) and rs.key == mod.FOREIGN_BASE_KEY and rs.kind == "pks1"
+        assert rs.foreign is None and list(rs.ids) == list(runs[tier]["ds"]["src"].table["name"])

@@ -102,9 +102,9 @@ def _sel_ids(sel: str, t) -> set:
     return {str(i) for i in t["id"][keep]}
 
 
-#: legacy capabilities this port does not provide yet, with the reason (contract issue: no
-#: cross-portal records reference; the 2640 spectra are linked per star by spec_url)
-WAIVED = {"wd2_manifold": {"spectrum_viewer_1d"}}
+#: legacy capabilities this port does not provide yet, with the reason (none: the
+#: wd2_manifold spectra come from the nirspec2640 portal as a foreign record set)
+WAIVED: dict[str, set] = {}
 
 
 # -- (a) ------------------------------------------------------------------------------------
@@ -250,7 +250,8 @@ def test_caps_superset_of_legacy(built):
             assert not missing, (pc.id, sorted(missing))
             checked += 1
     assert checked == 6
-    assert set(pages["wd2_manifold"]["caps"]["disabled"]) == {"spectrum_viewer_1d"}
+    assert "spectrum_viewer_1d" in pages["wd2_manifold"]["caps"]["enabled"]
+    assert not pages["wd2_manifold"]["caps"].get("disabled")
     assert set(pages["sabbi"]["caps"]["disabled"]) == {"isochrones_or_tracks"}
 
 
@@ -322,7 +323,64 @@ def test_manifold_dims_and_virtual_colours(runs):
     pca = next(p for p in src.presets if p.key == "pca")
     assert pca.kind == "frame" and len(pca.data["F"]) == 2 * len(src.manifold.dims)
     assert src.manifold.default_frame == "pca"
-    assert ds["sabbi"].manifold.default_frame == ds["sabbi"].presets[0].key
+    # the Sabbi default is an axes preset: the manifold pane resolves it (no stand-in frame)
+    sab = ds["sabbi"]
+    first = sab.presets[0]
+    assert sab.manifold.default_frame == first.key
+    if first.kind == "axes":
+        assert first.key not in sab.manifold.frames
+    page = {p.id: p for p in runs["B"]["pages"]}["sabbi"]
+    assert "frame:manifold" not in (page.state or {})
+
+
+def test_foreign_nirspec_records(runs, built):
+    """wd2_manifold plots the NIRSpec 2640 spectra from that portal's shards (contract (A))."""
+    from portalkit.spec import RecordSetSpec
+    ds = runs["B"]["ds"]
+    rs = ds["nirspec"]
+    assert isinstance(rs, RecordSetSpec) and rs.kind == "pks1" and rs.catalog == "src"
+    assert (rs.foreign.base, rs.foreign.key, rs.foreign.id_column) == (mod.SPEC_BASE, mod.SPEC_KEY, "spec")
+    names = {str(s) for s in ds["src"].table["spec"] if s}
+    assert names and set(rs.ids) == names
+    page = {p.id: p for p in runs["B"]["pages"]}["wd2_manifold"]
+    assert "nirspec" in page.datasets and not page.caps_disable
+    # the base resolves to the nirspec2640 portal's data/ (both portals public, same host)
+    from urllib.parse import urljoin
+    n2640 = load_site("nirspec2640").portal("nirspec2640")
+    assert urljoin(SITE.portal("wd2").url, mod.SPEC_BASE) == n2640.url + "data/"
+    html = (built["portal"] / "wd2_manifold.html").read_text(encoding="utf-8")
+    m = re.search(r'<script[^>]*id="pk-page"[^>]*>(.*?)</script>', html, re.S)
+    pj = json.loads(m.group(1).replace("<\\/", "</"))
+    ref = pj["datasets"]["nirspec"]
+    assert ref == {"kind": "records", "url": "../nirspec2640/data/spec/index.json", "catalog": "src",
+                   "record": "pks1", "base": "../nirspec2640/data/", "id_column": "spec"}
+
+    def panes(n):
+        if isinstance(n, dict):
+            if "pane" in n:
+                yield n
+            for k in ("row", "col"):
+                for c in n.get(k) or []:
+                    yield from panes(c)
+    s1 = [n for n in panes(pj["layout"]) if n["pane"] == "spectrum1d"]
+    assert s1 and s1[0]["options"]["records"] == "nirspec"
+    # the spectrum pane starts expanded (the legacy page showed the spectrum with the star)
+    assert not s1[0].get("collapsed"), s1[0]
+    mf = [n for n in panes(pj["layout"]) if n["pane"] == "manifold"]
+    assert mf and mf[0]["options"].get("overlays") and isinstance(mf[0]["options"].get("dims"), list)
+    assert not (built["portal"] / "data" / "nirspec").exists()
+    rep = _report(built)
+    assert rep["datasets"]["nirspec"]["foreign"] is True
+
+
+def test_legacy_dim_alias(runs):
+    """Every legacy colour key that became a virtual dim is a page.legacy.dim_alias entry."""
+    pages = {p.id: p for p in runs["B"]["pages"]}
+    for pid, key in (("wd2_manifold", "src"), ("sabbi", "sabbi")):
+        al = pages[pid].legacy.dim_alias
+        virt = {v.key for v in runs["B"]["ds"][key].virtual}
+        assert set(al.values()) == virt, pid
+        assert all(k.startswith("c_") for k in al), pid
 
 
 def test_preselects_are_saved_selections(runs):
@@ -461,8 +519,6 @@ def test_sel_spelling():
     assert decode_recipe(s) == [{"op": "replace", "kind": "ids", "view": {"ds": "src"}, "ids": many}]
 
 
-@pytest.mark.xfail(strict=True, reason="contract issue: kv-view has no alias from the legacy colour keys "
-                   "(c_<a>_<b>) to the virtual dims (m_<a>-m_<b>)")
 def test_legacy_colour_axis_hash(built):
     """Legacy wd2_manifold share links name colour dims by their legacy key (#x=c_f115w_f150w)."""
     from portalkit.legacy.hashmap import map_legacy

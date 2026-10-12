@@ -201,6 +201,11 @@ def test_manifold_and_legacy_star_link(runs, build_dir):
 
 
 # -- W51 ---------------------------------------------------------------------------------------
+# w51 stages its own copy of the spectrum shards rather than a foreign record set onto the
+# archive portal: the two portals' secure areas are different .htpasswd files with only one
+# account in common, so a w51-only viewer would get a 401 fetching the archive portal's
+# shards (see adapters/jwst_archive.py module docstring and
+# tests/adapters/test_jwst_archive.py's test_w51_keeps_its_own_spectrum_copy).
 def test_w51_colors_density(runs, build_dir):
     bg = _json(build_dir / "w51" / "data" / "bg" / "manifest.json")
     assert bg["n"] == 20 * LIMIT and "rows" not in bg
@@ -210,6 +215,28 @@ def test_w51_colors_density(runs, build_dir):
     st = _wait(run, "ccd", "s.n > 0")
     assert st["n"] == LIMIT
     _no_errors(run)
+
+
+def test_w51_spectra_local_copy(runs, build_dir):
+    """w51's spectrum pane reads its own staged data/spec/ shards (not a foreign record set)."""
+    pj = _json(build_dir / "w51" / "portal.json")
+    assert pj["visibility"] == "secure"
+    assert (build_dir / "w51" / "data" / "spec" / "index.json").is_file()
+    run = runs("w51/colors.html")
+    assert "spec_arch" not in _json_script(run)["datasets"]
+    run.wait_panes_settled()
+    p = _panes(run)
+    assert "spectrum1d" in p, p
+    run.ev("(p) => window.__pk.app.layout.reveal(p)", p["spectrum1d"][0])      # may start collapsed
+    run.page.wait_for_function("(p) => !!window.__pk.app.layout.pane(p)", arg=p["spectrum1d"][0], timeout=30000)
+    _focus(run, 0)
+    s1 = _wait(run, p["spectrum1d"][0], "s.n > 0")
+    assert s1["n"] > 0
+    _no_errors(run)
+
+
+def _json_script(run) -> dict:
+    return run.ev("() => JSON.parse(document.getElementById('pk-page').textContent)")
 
 
 # -- gallery -----------------------------------------------------------------------------------
@@ -299,8 +326,7 @@ def test_checklist_annotate_export_and_diff(runs, build_dir, tmp_path, capsys):
     assert cli.main(["archive-checklist-diff", str(path)]) == 0
     out = capsys.readouterr()
     assert CHECKLIST.stat().st_mtime_ns == before
-    if "no checklist row matches" in out.err:
-        pytest.xfail("contract issue: portalkit/cli.py checklist_diff compares Filename exactly; the checklist "
-                     "holds absolute paths and the export the served relative path (gate G2)")
+    # Filename matches by path suffix (basename + parent dir; checklist_diff, WPE6)
+    assert "no checklist row matches" not in out.err, out.err
     if any(r["ISOKN"].strip() != "y" for r in match):
         assert out.out.startswith("---") and "0 checklist row(s) change" not in out.err, out.err

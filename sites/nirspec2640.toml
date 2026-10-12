@@ -16,6 +16,9 @@
 # was never generated; the unified portal adds that page.
 # Legacy deep links: the per-source pages read `#<source name>` (bare-name); the specviewer
 # writes it on load (specviewer); the manifold wrote `#view=..&x=..&y=..&star=..` (kv-view).
+# Foreign base: the wd2 portal (sites/wd2.toml) reads this portal's data/spec/ record shards
+# (index.json + shards, ids = source names) as a foreign record set; keep the key and the
+# relative layout unified/{wd2,nirspec2640}/ stable (adapters/nirspec2640.py FOREIGN_BASE_KEY).
 # Tier A deviation (section 9.2): no legacy payload holds the 2D spectra, the Wd2 catalogue,
 # the isochrones or the ice columns, so every tier reads those (see adapters/nirspec2640.py).
 family = "nirspec2640"
