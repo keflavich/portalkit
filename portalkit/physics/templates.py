@@ -21,11 +21,11 @@ Written files (all under ``templates/``; URLs in the index are relative to the i
 Brick2221 ``build_extended_templates`` scheme (grid continued at its median log step,
 power-law extinction extrapolation from the last 50 samples, blackbody continuum scaled to
 the last native sample). The blackbody is ``B_nu`` by default because the template flux is
-F_nu. The legacy Brick2221 code uses ``B_lambda``, so beyond 5.3 um the default curves differ
-from the legacy F1500W SED page (by a factor ~24 at 26 um for the last prism sample); this is
-an intended correction. ``planck="lambda"`` (:func:`load_source`, :func:`write`,
-:func:`build_extended_templates`) reproduces the legacy curves and caveat text (the JSON
-content equals the Brick2221 output; whitespace/float formatting is not compared).
+F_nu. The Brick2221 code originally used ``B_lambda``, which under-predicts the continuum beyond
+5.3 um (by a factor ~24 at 26 um for the last prism sample); Brick2221 now uses ``B_nu`` as
+well, and the default output equals its ``build_extended_templates`` JSON content
+(whitespace/float formatting is not compared). ``planck="lambda"`` reproduces the older
+B_lambda curves.
 """
 
 from __future__ import annotations
@@ -131,7 +131,7 @@ def extend_templates(doc: Mapping, wmax_um: float, planck: str = "nu") -> dict:
             t["f"][gkey] = list(f_native) + f_ext.tolist()
     meta = d.setdefault("meta", {})
     meta["wmax"] = wmax_um
-    # planck="lambda" keeps the Brick2221 caveat text verbatim; "nu" names the blackbody form
+    # "nu" matches the Brick2221 caveat text; "lambda" keeps the older B_lambda wording
     bbname = "B_nu, scaled" if planck == "nu" else "scaled"
     meta["caveat"] = (meta.get("caveat", "") +
                       f" Extended to {wmax_um}um by blackbody continuum ({bbname} to match "
@@ -142,10 +142,10 @@ def extend_templates(doc: Mapping, wmax_um: float, planck: str = "nu") -> dict:
 
 
 def build_extended_templates(src_json: str | Path, dest_json: str | Path, wmax_um: float = 26.0,
-                             planck: str = "lambda") -> str | Path:
+                             planck: str = "nu") -> str | Path:
     """Brick2221-compatible wrapper: read ``src_json``, extend, write ``dest_json``.
 
-    ``planck="lambda"`` reproduces the legacy output: same arrays and the same caveat text.
+    The default reproduces the Brick2221 output: same arrays and the same caveat text.
     """
     with open(src_json) as fh:
         d = json.load(fh)

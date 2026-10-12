@@ -614,12 +614,12 @@ def test_build_extended_templates_legacy_parity(tmp_path):
     legacy = ANALYSIS / "Brick2221_F1500W_SEDPortal.py"
     if not legacy.is_file():
         pytest.skip("Brick2221 legacy script not available")
-    ns = _legacy_namespace(legacy, {"_PLANCK_H", "_PLANCK_C", "_PLANCK_KB", "_planck_lambda",
+    ns = _legacy_namespace(legacy, {"_PLANCK_H", "_PLANCK_C", "_PLANCK_KB", "_planck_lambda", "_planck_nu",
                                     "_extend_grid_wavelengths", "_extend_extinction_curve",
                                     "_extend_template_flux", "build_extended_templates"})
     a, b = tmp_path / "legacy.json", tmp_path / "ours.json"
     ns["build_extended_templates"](str(T.DEFAULT_SOURCE), str(a), wmax_um=26.0)
-    T.build_extended_templates(T.DEFAULT_SOURCE, b, wmax_um=26.0, planck="lambda")
+    T.build_extended_templates(T.DEFAULT_SOURCE, b, wmax_um=26.0, planck="nu")
     da, db = json.loads(a.read_text()), json.loads(b.read_text())
     for g in da["grids"]:
         for k in ("w", "k31", "k55"):
