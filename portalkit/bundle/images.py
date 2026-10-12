@@ -14,6 +14,13 @@ When the gzip size of the document exceeds ``IMAGES_SOFT_MAX`` (4 MiB) the items
 page files ``images.<k>.<h8>.json`` (``{"items": [...]}``, k = 0, 1, ...) and the index keeps
 ``"items": []`` plus ``"pages": [...]`` (IMPLEMENTATION_NOTES item 10).
 
+A preset keeps, per facet, the listed values that some item has. A preset with a facet that
+matches no item (a facet the set does not declare, an empty value list, or values no item
+has) would select nothing; the gallery pane reads a missing or empty value list as "no filter"
+(``gallery.js`` ``passesFacets``/``normFacets``), so such a preset is dropped with a warning
+instead of being written as a select-all. A preset with no facets at all (``{}``) is kept: it
+was written as "all images".
+
 ``row`` is the catalog stored row of the item, looked up through ``rows`` (a mapping or a
 callable such as ``CatalogResult.row_of``). The lookup key is ``item.id``, or the item's tag
 named by ``spec.join`` when ``join`` names a facet. A thumbnail hook ``thumb(url, item_id,
@@ -139,20 +146,31 @@ def build_document(spec: Any, *, rows: Mapping[str, int] | Callable[[str], int |
     facets = [{"key": k, "label": lbl, "values": sorted(values[k], key=_natural)} for k, lbl in facets_in]
     presets = []
     for p in _g(spec, "presets") or []:
+        pkey = _g(p, "key")
         data = dict(_g(p, "data") or {})
         fsel = data.get("facets", data)
         fout = {}
+        void: list[str] = []          # facet selections that match no item
         for fk, fv in fsel.items():
-            if fk not in values:
-                _warn(f"image preset {_g(p, 'key')!r}: unknown facet {fk!r}; dropped")
-                continue
             fv = [fv] if isinstance(fv, str) else [str(v) for v in fv]
+            if fk not in values:
+                _warn(f"image preset {pkey!r}: unknown facet {fk!r}")
+                void.append(str(fk))
+                continue
             keep = [v for v in fv if v in values[fk]]
             if len(keep) != len(fv):
-                _warn(f"image preset {_g(p, 'key')!r}: values {sorted(set(fv) - set(keep))} "
+                _warn(f"image preset {pkey!r}: values {sorted(set(fv) - set(keep))} "
                       f"of facet {fk!r} not present; dropped")
+            if not keep:
+                void.append(str(fk))
+                continue
             fout[fk] = keep
-        presets.append({"key": str(_g(p, "key")), "label": str(_g(p, "label")), "facets": fout})
+        if void:
+            # facets AND together (gallery.js passesFacets), so this preset selects no image;
+            # the gallery reads an empty value list as "no filter" and would show every image
+            _warn(f"image preset {pkey!r}: facet(s) {void} match no image; preset dropped")
+            continue
+        presets.append({"key": str(pkey), "label": str(_g(p, "label")), "facets": fout})
 
     doc: dict = {"schema": "pk-images/1", "roles": roles, "items": items, "facets": facets}
     if presets:

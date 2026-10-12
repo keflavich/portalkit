@@ -895,6 +895,39 @@ def test_images_empty_and_errors(tmp_path):
     assert r.doc["items"] == [] and any("no image URL" in w for w in r.warnings)
 
 
+def test_images_preset_matching_nothing_is_dropped(tmp_path):
+    """A preset whose facet matches no item is dropped (never written as an empty list, which
+    the gallery pane reads as 'no filter', i.e. select-all); partial matches are narrowed."""
+    presets = [
+        Preset("k", "K only", "filter", {"facets": {"band": ["K", "Z"]}}),        # narrowed
+        Preset("z", "Z only", "filter", {"facets": {"band": ["Z"]}}),             # all vanish
+        Preset("zs", "Z, S/N 0", "filter", {"facets": {"band": "Z", "snr": ["0"]}}),  # one facet void
+        Preset("u", "unknown facet", "filter", {"facets": {"field": ["north"]}}),
+        Preset("e", "empty list", "filter", {"facets": {"band": []}}),
+        Preset("all", "Everything", "filter", {"facets": {}}),                    # explicit all
+        Preset("hs", "H, S/N 10 or 99", "filter", {"band": ["H"], "snr": ["10", "99"]}),
+        Preset("uni", "ünïcode", "filter", {"facets": {"band": ["Ж"]}}),
+    ]
+    res = images.write(_image_set(6, presets=presets), tmp_path / "img")
+    doc = json.loads((tmp_path / "img" / "images.json").read_text("utf-8"))
+    assert schema.validate_images(doc) == []
+    assert doc["presets"] == [
+        {"key": "k", "label": "K only", "facets": {"band": ["K"]}},
+        {"key": "all", "label": "Everything", "facets": {}},
+        {"key": "hs", "label": "H, S/N 10 or 99", "facets": {"band": ["H"], "snr": ["10"]}},
+    ]
+    for key in ("z", "zs", "u", "e", "uni"):
+        assert any(f"preset {key!r}" in w and "preset dropped" in w for w in res.warnings), key
+    assert not any("'k'" in w and "preset dropped" in w for w in res.warnings)
+    # no preset written has an empty value list
+    assert all(v for p in doc["presets"] for v in p["facets"].values())
+    # N=0 items: every facet preset selects nothing and is dropped; no presets key at all
+    res0 = images.write(_image_set(0, presets=presets[:2] + presets[5:6]), tmp_path / "zero")
+    assert res0.doc.get("presets") == [{"key": "all", "label": "Everything", "facets": {}}]
+    res0 = images.write(_image_set(0, presets=presets[:2]), tmp_path / "zero2")
+    assert "presets" not in res0.doc and schema.validate_images(res0.doc) == []
+
+
 def test_images_pagination(tmp_path):
     rng = np.random.default_rng(0)
     items = [ImageItem(id=f"i{i}", roles={"rgb": f"img/{rng.integers(1 << 60):x}/{i}.png"},

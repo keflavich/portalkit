@@ -14,6 +14,12 @@ records its md5 and size::
 file. Rollback refuses (exit 4) to overwrite a legacy file whose content differs from it,
 because someone edited the file after the replace.
 
+Whenever :func:`backup_files` writes to ``<legacy_dir>/.portalkit_backup/`` it first writes
+``.portalkit_backup/.htaccess`` (:func:`portalkit.deploy.htaccess.write_backup_htaccess`): the
+portalkit marker and the deny rule only, so a served legacy directory does not serve the
+backups or ``backup.json``. A foreign or symlinked ``.htaccess`` there refuses (exit 4 / 3)
+before anything is copied.
+
 portalkit never moves or deletes legacy data directories.
 """
 
@@ -147,6 +153,15 @@ def backup_files(legacy_dir: os.PathLike | str, build_id: str, entries: Iterable
     if target is not None:
         doc["target"] = str(os.path.abspath(target))
     by_file = {f["file"]: f for f in doc["files"]}
+    # <legacy_dir>/.portalkit_backup/ may be served (backup.json records absolute paths): it
+    # gets the deny-only managed .htaccess before anything is copied into it. The dry-run call
+    # refuses a foreign or symlinked file before any directory is made (a dry run of
+    # backup_files stops there).
+    from .htaccess import write_backup_htaccess
+    write_backup_htaccess(ldir, dry_run=True)
+    if not dry_run:
+        _ensure_backup_dirs(ldir, build_id, "")
+        write_backup_htaccess(ldir)
     out = []
     for ent in entries:
         rel = posixpath.normpath(ent["file"])

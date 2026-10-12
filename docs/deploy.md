@@ -61,7 +61,10 @@ python -m portalkit.deploy.devserver BUILD_DIR --auth user:pw --content-encoding
 | `cache_control` | a header value, or `"htaccess"` to apply the section 11.5 rules |
 
 Every request is logged in `DevServer.requests` (method, path, status, bytes, range,
-encoding, auth). `.ht*` paths and `..` components answer 403.
+encoding, auth). `.ht*` paths and `..` components answer 403, and so does every path
+`htaccess.denied` matches (ownership manifests, `.portalkit_backup/`, `*.pk-tmp`; section 4
+".htaccess"), whether or not the served tree holds a `.htaccess`. Directory listings leave
+those names out. Authentication is checked first, so a secure server answers 401 before 403.
 
 ## 3. Exposure check
 
@@ -113,6 +116,16 @@ classification:
   which can make a directory listable or unlistable; run with `cache_s=0` after one.
 
 `scan(cache_s=0)` disables all three caches (no read, no write) and lists everything.
+
+* **`PK_EXPOSURE_CACHE_S`.** `scan()` without `cache_s` uses `exposure.default_cache_s()`:
+  the value of `$PK_EXPOSURE_CACHE_S` in seconds when it parses as a finite number ≥ 0
+  (fractions are truncated; `0` disables the caches as above), else 3600. Empty, non-numeric,
+  NaN, infinite and negative values are ignored. An explicit `cache_s` argument always wins.
+  It is a test and development convenience: `deploy` and the CLI keep the hour unless the user
+  sets the variable. `tests/conftest.py` sets it to `86400` while tests marked `adapters` run
+  (and removes it for other tests), unless the user set it, so the adapter tests reuse the
+  user's last scan from `~/.cache/portalkit/` read-only instead of walking or revalidating
+  the roots. A scan older than a day is revalidated as usual.
 `ExposureMap.stats` reports the counts of the last walk (`scandir`, `stat`, `dirents`,
 `readlink`, `realpath`, `reused`, `shared`, `dirs`, `wall_s`); a map read from a cache
 file has empty stats.
@@ -206,7 +219,8 @@ without the marker is an ownership conflict (exit 4). The file is not listed in 
 because Apache refuses to serve `.ht*` files and `verify --http` could not fetch it. An
 `.htaccess` written by an earlier portalkit version (same marker) is rewritten in place.
 
-After the cache-header block the file denies deploy's own bookkeeping files:
+The file denies deploy's own bookkeeping files (after the cache-header block when there is
+one):
 
 ```
 # deploy bookkeeping (ownership manifests, backups, temporaries) is never served
@@ -222,19 +236,47 @@ After the cache-header block the file denies deploy's own bookkeeping files:
   answer 403. Every other owned file (no path segment starting with `.portalkit`) is
   unaffected; `htaccess.denied(rel)` applies the same pattern in Python.
 * `RedirectMatch` belongs to the `FileInfo` override class, the class the cache-header
-  directives (`Header`, `AddType`) already need, so the deny rule adds no `AllowOverride`
-  requirement. A `Require all denied` rule would need `AuthConfig`, and Apache answers 500 for
-  every request in a directory whose `.htaccess` uses an override class it does not allow.
-  When `AllowOverride` is `None` the whole file is ignored and the manifest is served.
-* The rule applies only when `--htaccess` is passed. Without it, or when the target already
-  has a foreign `.htaccess`, the manifest stays readable at `<url>/.portalkit-deploy.json`.
-  `status` and `verify` read the manifest from disk, never over HTTP, so denying it changes
-  nothing for them.
+  directives (`Header`, `AddType`) already need, so the deny rule adds nothing to what
+  `--htaccess` requires. A `Require all denied` rule would need `AuthConfig` instead.
+* A plain deploy (no `--htaccess`) now writes a `.htaccess` too, so it needs `AllowOverride`
+  to include `FileInfo`, or to be `None` (the whole file is then ignored and the manifest is
+  served). Apache answers 500 for every request in a directory whose `.htaccess` uses an
+  override class it does not allow, so a host that allows only `AuthConfig`, `Options` and
+  `Indexes` would break every file of the target; `<IfModule mod_alias.c>` does not prevent
+  this. The `.htaccess` files under `/orange/adamginsburg/web` use only those three classes,
+  and Q4 (ARCHITECTURE §16) asked whether the host allows `FileInfo`. A probe on
+  2026-10-12 (a throwaway directory under `web/public` holding this deny rule plus a
+  `Header set`) got 200 for a normal file, 403 for a `.portalkit_x/` file and the extra
+  header in the response, so the public tree allows `FileInfo`. The secure tree was not
+  probed; `verify --http` reports a 5xx there if it differs. Set
+  `PK_DENY_HTACCESS=0` (Python: `deploy(..., deny_htaccess=False)`) to deploy without the
+  deny-only file; the plan then warns, for a target with no `.htaccess`, that the manifest is
+  served. A deny-only file already written stays until it is removed by hand. `verify --http`
+  reports 5xx answers from a directory holding a portalkit `.htaccess` as a probable
+  `AllowOverride` problem (section 5).
+* Deploy writes the rule with or without `--htaccess` (WPE4), before the first manifest
+  write, so the manifest is never on disk without it where the host honours the file:
+
+  | `<target>/.htaccess` | `--htaccess` | without `--htaccess` |
+  |---|---|---|
+  | absent | full file (cache headers + rule) | minimal file: marker + rule (`DENY_HTACCESS_TEXT`) |
+  | portalkit's (marker) | rewritten to the full file | brought up to date; cache headers an earlier `--htaccess` wrote are kept |
+  | foreign (no marker) | ownership conflict, exit 4 | left unchanged; plan warning |
+  | symlink | refusal, exit 3 | left unchanged; plan warning |
+
+  The dry-run summary lists `.htaccess (deny rule for deploy bookkeeping)` when the minimal
+  file would be written or updated. With a foreign or symlinked `.htaccess` the manifest stays
+  readable at `<url>/.portalkit-deploy.json` unless that file denies it; the warning names the
+  pattern to add. `status` and `verify` read the manifest from disk, never over HTTP, so
+  denying it changes nothing for them.
 * Backups live in `<legacy_dir>/.portalkit_backup/`, outside the default target
   `<legacy_dir>/unified`, and `backup.json` records the absolute `legacy_dir` and `target`.
-  `htaccess.write_backup_htaccess(legacy_dir)` writes the same deny rule (with the marker,
-  without the cache headers) to `<legacy_dir>/.portalkit_backup/.htaccess`, with the same
-  ownership and symlink checks.
+  Whenever `backup.py` writes there (a `--replace` deploy) it first writes
+  `<legacy_dir>/.portalkit_backup/.htaccess` (`htaccess.write_backup_htaccess`: the marker and
+  the rule, no cache headers). A foreign or symlinked file at that path, a symlinked
+  `.portalkit_backup`, or a file in its place refuses the plan (exit 4 or 3) before anything
+  is written.
+* `verify --http` checks that the rule took effect (section 5).
 
 ## 5. Verify
 
@@ -258,6 +300,16 @@ then hashed.
 * `Cache-Control` is compared with the `.htaccess` rules and the report says whether the
   headers took effect. Missing headers are a note: content hashing gives correct caching
   either way.
+* The ownership manifest URL (`<url>/.portalkit-deploy.json`, or the portal's secondary
+  manifest) gets a `HEAD` request (`check_manifest_denied`). When the target holds the
+  portalkit deny rule, 403 or 404 is expected and any other answer is a warning (the host
+  ignores the `.htaccess`, for example `AllowOverride None`). A 5xx is reported as undecided
+  (`manifest_denied` stays `None`) with a warning that `AllowOverride` probably rejects the
+  `.htaccess`; `SERVED` means a 2xx answer, and other statuses are undecided too. Without the rule, a 200 is a
+  warning. When owned files answer 5xx and the target holds a portalkit `.htaccess`, the same
+  `AllowOverride` warning is added once. The report prints `manifest URL denied` or `manifest URL SERVED` and `WARN` lines;
+  warnings do not fail `verify`. A secure portal checked without `PK_BASIC_AUTH` answers 401
+  before the per-directory rule applies, so the rule is reported as not checked.
 
 ## 6. Replace legacy pages
 
@@ -399,7 +451,11 @@ Every refusal raises a `DeployError` subclass whose `exit_code` matches the tabl
   section 4.1).
 * `.htaccess` ownership is recorded by its marker line instead of a manifest entry.
 * The portalkit `.htaccess` carries a deny rule for `.portalkit*` paths and `*.pk-tmp` after
-  the section 11.5 block (WPE3).
+  the section 11.5 block (WPE3). Deploy writes a minimal managed `.htaccess` with only that
+  rule when `--htaccess` is not passed, and it writes `.htaccess` before the manifest in both
+  cases (WPE4). Without `--htaccess` a foreign `.htaccess` is a warning.
+* `verify --http` warns when the manifest URL is served (WPE4); warnings do not fail it.
+* `scan()`'s default `cache_s` follows `$PK_EXPOSURE_CACHE_S` (WPE4, section 3).
 * The exposure scan maps directory symlinks only; a file symlink into a served root does not
   expose its directory.
 * The exposure cache file carries per-directory stamps (format version 3: dev, inode, mtime,

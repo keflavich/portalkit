@@ -158,8 +158,10 @@ def test_write_order_and_fsync(world, monkeypatch):
     monkeypatch.setattr(os, "fsync", rec_fsync)
     run(world, site(world))
     m = dmod.MANIFEST_NAME
-    assert order[0] == m and order[-1] == m          # pre-registration first, final last
-    body = order[1:-1]
+    # the deny-rule .htaccess before the manifest is ever written (WPE4), then the
+    # pre-registration; the final manifest write comes last
+    assert order[0] == ".htaccess" and order[1] == m and order[-1] == m
+    body = order[2:-1]
     assert body.index("data/src/cols.0123abcd.bin") < body.index("data/src/manifest.json")
     assert body.index("data/src/manifest.json") < body.index("portal.json")
     assert body.index("portal.json") < body.index("map.html")
@@ -575,6 +577,172 @@ def test_backup_htaccess(world, tmp_path):
     os.symlink(world["orange"] / "hidden", ld2 / ".portalkit_backup")
     with pytest.raises(SymlinkRefusal):
         hmod.write_backup_htaccess(ld2)
+
+
+# ---------------------------------------------------------------------------
+# deny rule without --htaccess (WPE4)
+# ---------------------------------------------------------------------------
+
+def test_deploy_without_htaccess_writes_deny_only_file(world):
+    stage_portal(world["stage"])
+    t = tgt(world)
+    lines: list[str] = []
+    res = run(world, site(world), dry_run=True, log=lines.append)
+    assert res.plan.htaccess_deny and not res.plan.htaccess
+    assert any("deny rule" in ln for ln in lines)
+    assert not t.exists()                                       # dry run writes nothing
+    res = run(world, site(world))
+    h = t / ".htaccess"
+    assert h.read_text() == hmod.DENY_HTACCESS_TEXT
+    assert hmod.htaccess_owned(h) and hmod.has_deny_rule(t) and not hmod.has_cache_headers(t)
+    assert hmod.htaccess_state(t) == "deny"
+    text = h.read_text()
+    assert "Cache-Control" not in text and "AddType" not in text
+    assert 'RedirectMatch 403 "' + hmod.DENY_RE + '"' in text
+    for word in ("Require", "Deny from", "Order ", "AuthType"):
+        assert word not in text, word
+    assert ".htaccess" not in res.manifest["files"]            # ownership by the marker only
+    assert ".htaccess" not in res.written
+    # redeploy: nothing to do
+    res2 = run(world, site(world))
+    assert not res2.plan.htaccess_deny and h.read_text() == hmod.DENY_HTACCESS_TEXT
+    # --htaccess later adds the cache headers; a deploy without it keeps them
+    run(world, site(world), htaccess=True)
+    assert h.read_text() == hmod.HTACCESS_TEXT and hmod.htaccess_state(t) == "cache"
+    res3 = run(world, site(world))
+    assert not res3.plan.htaccess_deny and h.read_text() == hmod.HTACCESS_TEXT
+
+
+@pytest.fixture(autouse=True)
+def _default_deny_htaccess(monkeypatch):
+    """The deny-only .htaccess is on by default; keep a user's PK_DENY_HTACCESS out."""
+    monkeypatch.delenv(dmod.DENY_HTACCESS_ENV, raising=False)
+
+
+def test_deploy_deny_htaccess_opt_out(world, monkeypatch):
+    """PK_DENY_HTACCESS=0 / deny_htaccess=False: no .htaccess is written (a host whose
+    AllowOverride lacks FileInfo answers 500 for a directory holding one)."""
+    stage_portal(world["stage"])
+    t = tgt(world)
+    for val in ("0", "false", "No", " off "):
+        monkeypatch.setenv(dmod.DENY_HTACCESS_ENV, val)
+        assert dmod.deny_htaccess_default() is False
+    for val in ("", "1", "yes"):
+        monkeypatch.setenv(dmod.DENY_HTACCESS_ENV, val)
+        assert dmod.deny_htaccess_default() is True
+    monkeypatch.setenv(dmod.DENY_HTACCESS_ENV, "0")
+    res = run(world, site(world))
+    assert not res.plan.htaccess_deny and not (t / ".htaccess").exists()
+    assert (t / "map.html").exists()
+    warn = [w for w in res.plan.warnings if dmod.DENY_HTACCESS_ENV in w]
+    assert len(warn) == 1 and dmod.MANIFEST_NAME in warn[0]
+    # the keyword overrides the environment both ways
+    res = run(world, site(world), deny_htaccess=True, dry_run=True)
+    assert res.plan.htaccess_deny
+    monkeypatch.delenv(dmod.DENY_HTACCESS_ENV)
+    res = run(world, site(world), deny_htaccess=False)
+    assert not res.plan.htaccess_deny and not (t / ".htaccess").exists()
+    # --htaccess is an explicit request and still writes the full file
+    run(world, site(world), htaccess=True, deny_htaccess=False)
+    assert (t / ".htaccess").read_text() == hmod.HTACCESS_TEXT
+
+
+def test_deploy_rewrites_owned_htaccess_with_bad_utf8(world):
+    """An owned .htaccess with undecodable bytes after the marker is rewritten, not a crash."""
+    stage_portal(world["stage"])
+    t = tgt(world)
+    t.mkdir(parents=True)
+    h = t / ".htaccess"
+    h.write_bytes((hmod.MARKER + "\n# caf").encode() + b"\xe9\n")
+    assert hmod.htaccess_state(t) == "deny"
+    res = run(world, site(world), dry_run=True)
+    assert res.plan.htaccess_deny
+    run(world, site(world))
+    assert h.read_bytes() == hmod.DENY_HTACCESS_TEXT.encode()
+    h.write_bytes((hmod.MARKER + "\n# caf").encode() + b"\xe9\n")
+    assert hmod.write_htaccess(t) == h and h.read_text() == hmod.HTACCESS_TEXT
+
+
+def test_deploy_without_htaccess_upgrades_owned_files(world):
+    stage_portal(world["stage"])
+    t = tgt(world)
+    t.mkdir(parents=True)
+    h = t / ".htaccess"
+    # an --htaccess file of an earlier portalkit (cache headers, no deny rule)
+    h.write_text(hmod.MARKER + "\n" + hmod.HTACCESS_BODY)
+    res = run(world, site(world))
+    assert res.plan.htaccess_deny and h.read_text() == hmod.HTACCESS_TEXT
+    # an owned file with the marker only
+    h.write_text(hmod.MARKER + "\n")
+    run(world, site(world))
+    assert h.read_text() == hmod.DENY_HTACCESS_TEXT
+
+
+def test_deploy_without_htaccess_leaves_foreign_file_with_warning(world, tmp_path):
+    stage_portal(world["stage"])
+    t = tgt(world)
+    t.mkdir(parents=True)
+    h = t / ".htaccess"
+    h.write_text("AuthType Basic\nAuthName ünï\n", encoding="utf-8")
+    lines: list[str] = []
+    res = run(world, site(world), log=lines.append)
+    assert not res.plan.htaccess_deny and res.plan.conflicts == []
+    assert h.read_text(encoding="utf-8") == "AuthType Basic\nAuthName ünï\n"
+    warn = [w for w in res.plan.warnings if ".htaccess" in w]
+    assert len(warn) == 1 and "not written by portalkit" in warn[0]
+    assert dmod.MANIFEST_NAME in warn[0] and hmod.DENY_RE in warn[0]
+    assert any(".htaccess" in ln for ln in lines)
+    assert (t / "map.html").exists()                            # deployed anyway
+    # with --htaccess the foreign file stays an ownership conflict (exit 4)
+    with pytest.raises(OwnershipConflict) as ei:
+        run(world, site(world), htaccess=True)
+    assert ei.value.exit_code == 4
+    # a symlinked .htaccess: warned and left alone without --htaccess, refused with it
+    h.unlink()
+    victim = tmp_path / "victim"
+    victim.write_text("keep")
+    os.symlink(victim, h)
+    res = run(world, site(world))
+    assert any("is a symlink" in w for w in res.plan.warnings)
+    assert victim.read_text() == "keep" and h.is_symlink()
+    with pytest.raises(SymlinkRefusal):
+        run(world, site(world), htaccess=True)
+    assert victim.read_text() == "keep"
+
+
+def test_deploy_deny_rule_in_shared_target(world):
+    """Two portals in one target share one deny-only .htaccess that covers both manifests."""
+    t = world["orange"] / "both" / "shared"
+    stage_portal(world["stage"], pid="a")
+    d = world["stage"] / FAM / BID / "c"
+    (d / "sub").mkdir(parents=True)
+    (d / "sub" / "c.html").write_text("<p>c</p>")
+    run(world, site(world, "public", "both", pid="a", target=str(t)))
+    res = run(world, site(world, "public", "both", pid="c", target=str(t)))
+    assert not res.plan.htaccess_deny
+    assert (t / ".htaccess").read_text() == hmod.DENY_HTACCESS_TEXT
+    dot = sorted(str(p.relative_to(t)) for p in t.rglob(".*") if p.name != ".htaccess")
+    assert dot == sorted([dmod.MANIFEST_NAME, ".portalkit-deploy.c.json"])
+    assert all(hmod.denied(r) for r in dot)
+
+
+def test_htaccess_state_and_helpers(tmp_path):
+    assert hmod.htaccess_state(tmp_path) == "absent"
+    assert hmod.htaccess_state(tmp_path / "missing") == "absent"
+    assert not hmod.has_deny_rule(tmp_path) and not hmod.has_cache_headers(tmp_path)
+    assert hmod.managed_text(tmp_path) == hmod.DENY_HTACCESS_TEXT
+    assert hmod.write_deny_htaccess(tmp_path, dry_run=True) == tmp_path / ".htaccess"
+    assert hmod.htaccess_state(tmp_path) == "absent"
+    assert hmod.write_deny_htaccess(tmp_path) == tmp_path / ".htaccess"
+    assert hmod.write_deny_htaccess(tmp_path) is None
+    assert hmod.BACKUP_HTACCESS_TEXT == hmod.DENY_HTACCESS_TEXT
+    (tmp_path / ".htaccess").write_text("Options -Indexes\n")
+    assert hmod.htaccess_state(tmp_path) == "foreign" and not hmod.has_deny_rule(tmp_path)
+    with pytest.raises(OwnershipConflict):
+        hmod.write_deny_htaccess(tmp_path)
+    (tmp_path / ".htaccess").unlink()
+    (tmp_path / ".htaccess").mkdir()
+    assert hmod.htaccess_state(tmp_path) == "foreign"
 
 
 @pytest.mark.parametrize("rel,cc", [

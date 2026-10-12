@@ -14,7 +14,17 @@ either the raw or the decoded bytes have the manifest sha256.
   (``user:pass``) it must answer 200 and match the manifest sha256;
 * public portals: every URL must answer 200 and match;
 * ``Content-Type``, ``Content-Encoding`` (a failure on ``.bin``) and ``Cache-Control`` are
-  reported, together with whether the ``.htaccess`` cache headers took effect.
+  reported, together with whether the ``.htaccess`` cache headers took effect;
+* the ownership manifest URL (``<portal url>/.portalkit-deploy.json``, or the portal's
+  secondary manifest) must answer 403 or 404 when the target holds the portalkit
+  ``.htaccess`` deny rule (:func:`check_manifest_denied`). Any other answer, or a target
+  without the rule whose manifest answers 200, is a warning (``VerifyReport.warnings``), never
+  a failure: Apache ignores the file under ``AllowOverride None``.
+* a 5xx answer while the target holds a portalkit ``.htaccess`` is reported as a probable
+  ``AllowOverride`` problem: Apache answers 500 for every file of a directory whose
+  ``.htaccess`` uses a directive class (``RedirectMatch`` and ``Header`` need ``FileInfo``)
+  that ``AllowOverride`` does not allow. ``PK_DENY_HTACCESS=0`` stops deploy from writing the
+  deny-only file (docs/deploy.md ".htaccess").
 """
 
 from __future__ import annotations
@@ -38,7 +48,8 @@ from . import DeployError
 from .deploy import (TMP_SUFFIX, _get, load_manifest, manifest_path_for, resolve_target,
                      select_portal, sha256_file)
 from .exposure import ExposureMap, check_target, classify
-from .htaccess import expected_cache_control
+from .htaccess import (expected_cache_control, has_cache_headers, has_deny_rule,
+                       htaccess_state)
 
 DEFAULT_TIMEOUT = 30.0
 _CHUNK = 1 << 20
@@ -78,6 +89,11 @@ class VerifyReport:
     htaccess: bool | None = None          # did the cache headers take effect (None: not checked)
     authenticated: bool = False
     notes: list[str] = field(default_factory=list)
+    #: did the manifest URL answer 403/404 (None: not checked or not decidable, e.g. a secure
+    #: portal checked without credentials)
+    manifest_denied: bool | None = None
+    #: problems that do not fail verify (exit 0), such as a served ownership manifest
+    warnings: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -105,6 +121,10 @@ class VerifyReport:
                 lines.append(f"  FAIL   {c.path}: {'; '.join(c.problems)}")
         if self.htaccess is not None:
             lines.append(f"  cache headers {'in effect' if self.htaccess else 'NOT in effect'}")
+        if self.manifest_denied is not None:
+            lines.append(f"  manifest URL {'denied' if self.manifest_denied else 'SERVED'}")
+        for w in self.warnings:
+            lines.append(f"  WARN   {w}")
         for n in self.notes:
             lines.append(f"  note   {n}")
         lines.append("  OK" if self.ok else "  FAILED")
@@ -308,6 +328,56 @@ def verify_http(base_url: str, files: Mapping[str, Mapping], *, visibility: str,
     return checks, effective
 
 
+#: Warning text for a 5xx answer from a directory that holds a portalkit ``.htaccess``.
+ALLOWOVERRIDE_HINT = ("the portalkit .htaccess is probably rejected by AllowOverride (its "
+                      "RedirectMatch/Header/AddType directives need the FileInfo class; Apache "
+                      "answers 500 for every file of the directory otherwise); allow FileInfo, "
+                      "or set PK_DENY_HTACCESS=0 and remove the deny-only .htaccess")
+
+
+def check_manifest_denied(base_url: str, manifest_rel: str, *, visibility: str,
+                          deny_expected: bool, auth: str | None = None,
+                          timeout: float = DEFAULT_TIMEOUT,
+                          opener: urllib.request.OpenerDirector | None = None
+                          ) -> tuple[bool | None, int | None, str | None]:
+    """HEAD ``<base_url>/<manifest_rel>`` (the ownership manifest, docs/deploy.md
+    ".htaccess") and return ``(denied, status, warning)``.
+
+    ``denied`` is True for 403 or 404, False for a 2xx (the manifest is served) and ``None``
+    when the answer says nothing about the rule (unreachable, a 5xx, any other status, or
+    401 from a secure portal checked without credentials: Apache applies a ``.htaccess``
+    ``RedirectMatch`` after authentication). ``warning`` is set when the manifest is served (or the check failed)
+    while ``deny_expected`` (the target holds the portalkit deny rule), when it is served
+    without the rule, and for a 5xx while ``deny_expected`` (Apache rejecting the
+    ``.htaccess``: :data:`ALLOWOVERRIDE_HINT`); ``None`` otherwise."""
+    opener = opener or urllib.request.build_opener()
+    url = file_url(base_url, manifest_rel)
+    send = auth if visibility == "secure" else None
+    with tempfile.TemporaryDirectory(prefix="pk-verify-") as tmpdir:
+        st, _, _, _, err = _fetch(url, auth=send, method="HEAD", timeout=timeout,
+                                  tmpdir=tmpdir, opener=opener)
+    if err:
+        return None, None, (f"{url}: {err}; the deny rule was not checked"
+                            if deny_expected else None)
+    if st in (403, 404):
+        return True, st, None
+    if st == 401 and visibility == "secure" and not send:
+        return None, st, None
+    if st is not None and 500 <= st < 600:
+        return None, st, (f"{url} answered {st}: {ALLOWOVERRIDE_HINT}"
+                          if deny_expected else None)
+    if st is None or not 200 <= st < 300:
+        # neither served nor denied (urllib follows redirects, so this is e.g. 400 or 410)
+        return None, st, (f"{url} answered {st} (expected 403); the deny rule was not "
+                          "confirmed" if deny_expected else None)
+    if deny_expected:
+        return False, st, (f"{url} answered {st} (expected 403): the .htaccess deny rule is "
+                           "not in effect (AllowOverride None?), so the ownership manifest "
+                           "and its absolute paths are served")
+    return False, st, (f"{url} answered {st}: the target has no portalkit .htaccess deny "
+                       "rule (a foreign .htaccess?), so the ownership manifest is served")
+
+
 # ---------------------------------------------------------------------------
 # driver
 # ---------------------------------------------------------------------------
@@ -357,9 +427,23 @@ def verify(family: str, site: Any, *, portal_id: str | None = None,
         rep.checks, rep.htaccess = verify_http(
             url, man.get("files", {}), visibility=visibility, auth=auth, timeout=timeout,
             replaced=man.get("replaced", []),
-            htaccess_expected=(tgt / ".htaccess").is_file())
+            htaccess_expected=has_cache_headers(tgt))
+        n5xx = sum(1 for c in rep.checks
+                   if any(x is not None and 500 <= x < 600 for x in (c.status, c.auth_status)))
+        if n5xx and htaccess_state(tgt) in ("cache", "deny"):
+            rep.warnings.append(f"{n5xx} owned URL(s) answered 5xx: {ALLOWOVERRIDE_HINT}")
         if rep.htaccess is False:
             rep.notes.append(".htaccess cache headers are not in effect (AllowOverride?); "
                              "the viewer works either way")
+        mrel = os.path.relpath(manifest_path_for(tgt, family, pid), tgt).replace(os.sep, "/")
+        denied, mst, warn = check_manifest_denied(
+            url, mrel, visibility=visibility, deny_expected=has_deny_rule(tgt), auth=auth,
+            timeout=timeout)
+        rep.manifest_denied = denied
+        if warn and warn not in rep.warnings:
+            rep.warnings.append(warn)
+        elif denied is None and mst == 401:
+            rep.notes.append(f"{mrel} answered 401: the deny rule is checked with "
+                             f"${auth_env} only")
     return rep
 

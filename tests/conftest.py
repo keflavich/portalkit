@@ -16,6 +16,13 @@ so plain ``pytest -q`` stays a Level 0 run (section 13: under 1 minute).
 
 Directory defaults: tests under ``tests/e2e`` get ``e2e``, ``tests/perf`` get ``perf`` and
 ``tests/adapters`` get ``adapters`` without having to mark each test.
+
+Exposure scan cost: an adapter build classifies its targets against a scan of the real served
+roots (a fresh walk took minutes on a cold filesystem). While ``adapters`` tests run,
+``$PK_EXPOSURE_CACHE_S`` is set to one day (:data:`ADAPTER_EXPOSURE_CACHE_S`) unless the
+user set it, so they reuse the user's last scan from ``~/.cache/portalkit`` (read-only when
+``$PK_CACHE_DIR`` points elsewhere) instead of revalidating it; it is removed again for
+every other test. Real deploys are unaffected (the variable is never set outside pytest).
 """
 
 from __future__ import annotations
@@ -47,6 +54,12 @@ DIR_MARKERS = {"e2e": "e2e", "perf": "perf", "adapters": "adapters"}
 
 _NON_UNIT = tuple(m for m in MARKERS if m != "unit")
 
+#: ``$PK_EXPOSURE_CACHE_S`` while adapter tests run (one day), unless the user set it
+EXPOSURE_CACHE_ENV = "PK_EXPOSURE_CACHE_S"
+ADAPTER_EXPOSURE_CACHE_S = "86400"
+#: whether this session set EXPOSURE_CACHE_ENV (it is only ever removed when it did)
+_EXPOSURE_ENV = {"user": False, "set": False}
+
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     group = parser.getgroup("portalkit")
@@ -58,6 +71,36 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 def pytest_configure(config: pytest.Config) -> None:
     for name, desc in MARKERS.items():
         config.addinivalue_line("markers", f"{name}: {desc}")
+    _EXPOSURE_ENV["user"] = EXPOSURE_CACHE_ENV in os.environ
+    _EXPOSURE_ENV["set"] = False
+
+
+def exposure_env_for(is_adapter: bool, environ: dict | None = None) -> None:
+    """Set ``$PK_EXPOSURE_CACHE_S`` to a day for an adapter test, remove it for any other
+    test; a value the user set before the session is never touched."""
+    env = os.environ if environ is None else environ
+    if _EXPOSURE_ENV["user"]:
+        return
+    if is_adapter:
+        if env.get(EXPOSURE_CACHE_ENV) != ADAPTER_EXPOSURE_CACHE_S:
+            env[EXPOSURE_CACHE_ENV] = ADAPTER_EXPOSURE_CACHE_S
+        _EXPOSURE_ENV["set"] = True
+    elif _EXPOSURE_ENV["set"]:
+        env.pop(EXPOSURE_CACHE_ENV, None)
+        _EXPOSURE_ENV["set"] = False
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    # runs before the item's fixtures are set up, so module-scoped adapter fixtures (which
+    # build the portal and scan the served roots) see the variable too
+    exposure_env_for(item.get_closest_marker("adapters") is not None)
+
+
+def pytest_unconfigure(config: pytest.Config) -> None:
+    if _EXPOSURE_ENV["set"]:
+        os.environ.pop(EXPOSURE_CACHE_ENV, None)
+        _EXPOSURE_ENV["set"] = False
 
 
 def _requested(config: pytest.Config, name: str) -> bool:

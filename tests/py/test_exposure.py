@@ -687,3 +687,88 @@ def test_real_tree_readonly():
     assert classify(o / "w51" / "portal", m).kind == "secure"
     assert classify(o / "jwst" / "spectra" / "mastDownload" / "JWST" / "pngs", m).kind == "both"
     assert classify(o / "portalkit_stage", m).kind == "unserved"
+
+
+# ---------------------------------------------------------------------------
+# $PK_EXPOSURE_CACHE_S (WPE4)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("raw,want", [
+    (None, 3600), ("", 3600), ("   ", 3600),
+    ("86400", 86400), (" 60 ", 60), ("0", 0), ("3600.9", 3600), ("1e3", 1000),
+    ("-5", 3600), ("-0.5", 3600), ("abc", 3600), ("12s", 3600), ("nan", 3600),
+    ("inf", 3600), ("-inf", 3600), ("1e400", 3600), ("０", 0),   # fullwidth digit: float() accepts it
+    ("1_000", 1000), ("0x10", 3600), ("ünï", 3600),
+])
+def test_default_cache_s_env_parsing(raw, want, monkeypatch):
+    env = {} if raw is None else {ex.CACHE_S_ENV: raw}
+    assert ex.default_cache_s(env) == want
+    if raw is None:
+        monkeypatch.delenv(ex.CACHE_S_ENV, raising=False)
+    else:
+        monkeypatch.setenv(ex.CACHE_S_ENV, raw)
+    assert ex.default_cache_s() == want
+    assert ex.DEFAULT_CACHE_S == 3600 and ex.CACHE_S_ENV == "PK_EXPOSURE_CACHE_S"
+
+
+def test_scan_default_cache_s_follows_env(tree, tmp_path, monkeypatch):
+    monkeypatch.setenv("PK_CACHE_DIR", str(tmp_path / "cache"))
+    roots = {"public": tree["public"], "secure": tree["secure"]}
+    target = tree["orange"] / "w51" / "portal"
+    ex.clear_cache()
+    try:
+        # 0 from the environment disables the caches: nothing written, every scan fresh
+        monkeypatch.setenv(ex.CACHE_S_ENV, "0")
+        assert scan(roots).stats.get("scandir", 0) > 0
+        assert not list((tmp_path / "cache").glob("exposure-*.json"))
+        # a day: the second scan is the cached map (no walk) even after a change on disk
+        monkeypatch.setenv(ex.CACHE_S_ENV, "86400")
+        m1 = scan(roots)
+        assert list((tmp_path / "cache").glob("exposure-*.json"))
+        os.symlink(target, tree["public"] / "w51portal")
+        m2 = scan(roots)
+        assert m2 is m1 and classify(target, m2).kind == "secure"
+        # an explicit cache_s still wins over the environment
+        assert classify(target, scan(roots, cache_s=0)).kind == "both"
+        # a bad value falls back to the hour: a fresh in-memory result is still reused
+        monkeypatch.setenv(ex.CACHE_S_ENV, "soon")
+        assert scan(roots) is m1
+        # classification for deploy is unchanged: once the cached map expires it is
+        # revalidated, and the revalidated map equals a fresh walk
+        ex.clear_cache()
+        monkeypatch.setenv(ex.CACHE_S_ENV, "0")
+        fresh = scan(roots)
+        assert classify(target, fresh).kind == "both"
+    finally:
+        ex.clear_cache()
+
+
+def _load_conftest():
+    import importlib.util
+    path = Path(__file__).resolve().parent.parent / "conftest.py"
+    spec = importlib.util.spec_from_file_location("pk_conftest_copy", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_conftest_sets_exposure_cache_for_adapter_tests_only():
+    ct = _load_conftest()
+    env: dict = {}
+    ct._EXPOSURE_ENV.update(user=False, set=False)
+    ct.exposure_env_for(False, env)
+    assert env == {}
+    ct.exposure_env_for(True, env)
+    assert env == {"PK_EXPOSURE_CACHE_S": "86400"}
+    assert ex.default_cache_s(env) == 86400
+    ct.exposure_env_for(True, env)                    # stays while adapter tests run
+    assert env == {"PK_EXPOSURE_CACHE_S": "86400"}
+    ct.exposure_env_for(False, env)                   # removed for the next unit test
+    assert env == {}
+    # a value the user set is never changed or removed
+    env = {"PK_EXPOSURE_CACHE_S": "5"}
+    ct._EXPOSURE_ENV.update(user=True, set=False)
+    ct.exposure_env_for(True, env)
+    ct.exposure_env_for(False, env)
+    assert env == {"PK_EXPOSURE_CACHE_S": "5"}
+

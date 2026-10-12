@@ -41,7 +41,9 @@ function el(tag, cls, text) {
   return e;
 }
 
-const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (fn) => setTimeout(fn, 16);
+// looked up at each call (IMPLEMENTATION_NOTES 123): the module may be imported before a page or
+// test harness installs requestAnimationFrame, which binding at import would never see
+const raf = (fn) => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(fn) : setTimeout(fn, 16));
 
 /** A setter that coalesces patches and writes them to the store once per animation frame. */
 export function rafSetter(store, source) {

@@ -164,8 +164,9 @@ starting.
 56. **sedPoints** returns `[{wl, fnu, err, kind, key, filter}]` sorted by wl. Limit codes come from `row._lim[key]` /
     `row._limits[key]` (1/'1'/'u' upper, 2/'2'/'l' lower) or the column's `limit` sibling; limits have `err:null`;
     non-finite or non-positive fluxes are dropped.
-57. **Templates and laws.** `extend_to_um` extends templates with B_nu by default. The Brick2221 F1500W adapter (WP26)
-    passes `planck='lambda'` to reproduce the legacy curves and caveat text exactly. Law records are gzipped pks1
+57. **Templates and laws.** `extend_to_um` extends templates with B_nu (the template flux is F_nu). The Brick2221
+    legacy script used B_lambda until 2026-10-12, which put the 15-25 um continuum ~8-22x low; it now uses B_nu, and
+    the default output matches it. `planck='lambda'` reproduces the older curves. Law records are gzipped pks1
     with a single channel `k` and meta `{law, rv}` (no flux channel). Template grid descriptors are
     `templates/grid_<g>.<h8>.json`.
 58. **publish-res.** WP13 calls `portalkit.physics.write_shared(dest, ledger=...)`, which returns `{kind: path relative
@@ -396,3 +397,106 @@ starting.
     `scatter: firstPaint resolves at the first data draw` passed or failed depending on timer order (5 of 20
     runs failed). `raf`/`caf` now look the function up at each call and remember which clock issued the handle;
     30 consecutive runs pass. `ui/controls.js` binds `raf` at import in the same way (owner of that file).
+124. **Template sources labelled at load (WPE3; extends 118).** `physics/templates.load_source` used to put the
+    absolute template path in `meta.source`, and only the writer's labelling pass replaced it.
+    It now writes `source_label(path, labeler)`: `labeler(path)` when given (the build's `PathLabeler`
+    gives `<label>:<relpath>`), else `file:<basename>`. `templates.write(spec, dest, ...)` takes the
+    labeler from a `LabellingWriter` `dest` when none is passed, so a build stages the root label and a
+    direct call never stages an absolute path. ARCHITECTURE §9.3 "Served paths".
+125. **Deploy bookkeeping denied over HTTP (WPE3, WPE4; extends 118).** The ownership manifests and
+    `.portalkit_backup/backup.json` keep absolute paths, and they are served with the target. The portalkit
+    `.htaccess` carries `RedirectMatch 403 "/\.portalkit[^/]*(/|$)|\.pk-tmp$"` inside `<IfModule mod_alias.c>`.
+    `RedirectMatch` is in the `FileInfo` override class, which the cache headers already need. A `Require` rule
+    needs `AuthConfig`, and Apache answers 500 for a directory whose `.htaccess` uses a class it does not allow.
+    WPE3 added the rule to the `--htaccess` file and `write_backup_htaccess`. WPE4 applies it everywhere:
+    - `deploy` writes it with or without `--htaccess`, before the first manifest write. Without the flag it
+      writes a minimal managed file (marker and rule only) or updates a portalkit-owned file, keeping cache
+      headers an earlier `--htaccess` wrote. A foreign or symlinked `.htaccess` is left unchanged with a warning.
+      With the flag, a foreign file stays an ownership conflict.
+    - `backup.py` writes `.portalkit_backup/.htaccess` before anything else in that directory. A foreign or
+      symlinked file there refuses a `--replace` plan.
+    - The dev server answers 403 for `htaccess.denied` paths and hides them in listings.
+    - `verify --http` sends HEAD for the manifest URL. When the target holds the deny rule, any answer other
+      than 403/404 is a warning; without the rule, a 200 is a warning. Warnings do not fail verify.
+
+    The marker line is unchanged (it still names `--htaccess`), so files written by earlier versions remain owned.
+    ARCHITECTURE §11.5, docs/deploy.md ".htaccess".
+126. **Robitaille nouns and imaging legacy files (WPE3).** The `mod` catalog has `noun=("model", "models")`, so
+    the landing count reads "N models". The imaging page maps `imaging/index.html` and `imaging/gallery.html`
+    with `replace = false`: `imaging/` is a symlink into the data tree, `deploy --replace` refuses symlink
+    components (§11.3), and neither file is ever stubbed or backed up. `deploy` lists them as plan warnings and
+    `status` reports them.
+127. **Exposure scan cost (WPE3, WPE4).** The old walk listed a real directory once per symlink route. WPE3 lists
+    each real directory once per scan and re-labels the children per route. The result is identical, checked
+    against a reference copy of the old walk. The cache (format 3) adds per-directory
+    `(dev, ino, mtime_ns, ctime_ns)` stamps, so an expired result is revalidated with one `stat` per unchanged
+    directory, and every symlink is resolved again. A stamp taken within 5 s of the directory's own change is
+    not trusted.
+
+    Measured with warm FS metadata, on the real roots:
+    - old walk: 10.1 s;
+    - new walk: 8.8 s;
+    - revalidation: 6.2 s with 0 `scandir`.
+
+    The first old run with cold metadata took 589 s. With `$PK_CACHE_DIR` set, `~/.cache/portalkit` is also
+    read, read-only.
+
+    WPE4 adds `$PK_EXPOSURE_CACHE_S`, read by `scan()` when `cache_s` is not passed (`default_cache_s`). A
+    finite number ≥ 0 is used; empty, non-numeric, NaN, infinite and negative values fall back to 3600.
+    `tests/conftest.py` sets it to 86400 in a `pytest_runtest_setup` hook (`tryfirst`, so before module
+    fixtures) for items marked `adapters` and removes it for other items, unless the user set it. Adapter tests
+    then reuse the user's last scan without revalidating. Real deploys keep 3600 s unless the user sets the
+    variable. ARCHITECTURE §11.2.
+128. **dirgallery_sites registry size (WP23).** `adapters/dirgallery_sites.py` is about 630 lines, above the §9.5
+    target of 400. Most of it is the `GALLERIES` registry: 25 unified pages with their legacy sources, subset
+    regexes, roles, blurbs and replace policy. The site toml schema has no place for this per-gallery data, so
+    the adapter holds it as a data table.
+129. **dirgallery_sites legacy files and links (WP23).** Only the brick_2221 pages may be stubbed by
+    `--replace` (`STUB_PORTALS`). Legacy files reached only through a served symlink are mapped
+    `replace = false`, as are the critic's galleries and the robitaille pages. Deploy stubs use relative URLs,
+    and deploy refuses symlink components (§11.3), so a stub there could not be written safely.
+
+    Cross-visibility links take two forms:
+    - portal.json `related` (`build.py` `portal_doc`) lists every other portal of the site as
+      `{title, url, auth}`. dirgallery_sites has 9 portals of mixed visibility, so its public portals link to
+      secure gallery URLs. These are links only, with no data or counts.
+    - Each landing page has cards for the other gallery sets (`adapters/dirgallery_sites.py`). These cards also
+      link public portals to secure gallery URLs, marked "login required"; only the URL and title cross the
+      visibility boundary.
+130. **Narrative activation order (WPE4; fixes the WPE2 todo).** With instant scrolling (`prefers-reduced-motion`
+    gives `.pk-nar-scroll` `scroll-behavior: auto`), `activate(k, {scroll: true, keep})` used to call
+    `scrollIntoView` and `arrived()` before setting `S.current`. `arrived()` → `unpin()` → `pickActive()` then
+    ran `activate(k)` again without `keep`, which emitted `narrative:highlight` with `goto: true`. A deep link
+    `#sky=…&beat=<highlight-only beat>` lost its view.
+
+    `activate` now applies the beat first (`applyBeat`: classes, `S.current`, store writes, highlight event),
+    then pins, scrolls and calls `arrived()`. Re-entry finds `k === S.current` and does nothing. The node tests
+    check this:
+    - 'deep-link view kept over the beat with an instant scroll' (formerly `todo`);
+    - 'an instant-scroll activation runs once': one highlight per `go()`, one goto for a view beat, the deep
+      view kept across hash beat changes.
+
+    The beat-marker hash rule (note 119) is unchanged.
+131. **Images presets that select nothing (WPE4; WP23 follow-up).** `bundle/images.py` drops preset values that no
+    item has, as before. A preset facet left with no values used to be written as an empty list. `gallery.js`
+    reads an empty list as "no filter" (`normFacets`/`passesFacets`), so the preset became select-all. Facets
+    combine with AND. So a preset with any facet that matches no item (an unknown facet, an empty value list,
+    or no listed value present) selects nothing, and it is dropped with the warning
+    "facet(s) [...] match no image; preset dropped". An explicit `{}` preset (all images) is kept. No JS change.
+132. **`ui/controls.js` frame lookup (WPE4; completes 123).** `rafSetter` looked `requestAnimationFrame` up at
+    import, so under node it always used the 16 ms timer. `raf` now looks it up at each call (timer fallback
+    when absent), as `scatter.js` does. A node test installs a fake `requestAnimationFrame` after import and
+    checks one coalesced write per frame, then removes it and checks the timer fallback.
+133. **Deny-only `.htaccess` and `AllowOverride` (WPE4 review).** A plain deploy writes a `.htaccess`
+    (`RedirectMatch`, class `FileInfo`). Apache answers 500 for every file of a directory whose `.htaccess`
+    uses a class `AllowOverride` does not allow. The 28 `.htaccess` files under `/orange/adamginsburg/web` use
+    only AuthConfig, Options and Indexes directives, so whether the host allows `FileInfo` is open (§16 Q4).
+    The file stays on by default as item 5b asks. Three safeguards:
+    - `PK_DENY_HTACCESS=0` (or `deploy(..., deny_htaccess=False)`) turns the deny-only file off; the plan
+      warns that the manifest is served. `--htaccess` is unaffected.
+    - `verify --http` reports a 5xx from the manifest URL as undecided (`manifest_denied = None`) with an
+      `AllowOverride` warning. `SERVED` is reserved for 2xx answers.
+    - 5xx answers on owned files, in a target holding a portalkit `.htaccess`, add the same warning.
+
+    `htaccess._write_owned` compares bytes, so an owned file with undecodable bytes after the marker is
+    rewritten instead of raising `UnicodeDecodeError`.

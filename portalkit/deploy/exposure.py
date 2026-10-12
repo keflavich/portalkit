@@ -18,6 +18,7 @@ import collections
 import fnmatch
 import hashlib
 import json
+import math
 import os
 import posixpath
 import stat
@@ -47,6 +48,14 @@ URL_PREFIXES: dict[str, str] = {
 EXTERNAL = "external"
 
 _KINDS = ("public", "secure")
+
+#: Default ``cache_s`` of :func:`scan`, in seconds.
+DEFAULT_CACHE_S = 3600
+#: Environment override of the default ``cache_s`` (a test/dev convenience): a finite number
+#: of seconds >= 0 (``0`` disables the caches); any other value is ignored. ``tests/conftest.py``
+#: sets it to a day for the adapter tests when the user has not set it, so they reuse the
+#: user's last scan; deploy and the CLI read it only when the user sets it.
+CACHE_S_ENV = "PK_EXPOSURE_CACHE_S"
 #: Cache file format: 2 adds the per-directory stamps (``dirs``) used to revalidate a scan;
 #: 3 adds ``st_ctime_ns`` to each stamp.
 _CACHE_VERSION = 3
@@ -431,8 +440,27 @@ def _read_cache(key: str) -> tuple[ExposureMap | None, dict | None]:
     return (best[0], best[1]) if best else (None, None)
 
 
+def default_cache_s(environ: Mapping[str, str] | None = None) -> int:
+    """The default ``cache_s`` of :func:`scan`: ``$PK_EXPOSURE_CACHE_S`` when it holds a
+    finite number of seconds >= 0 (fractions are truncated; ``0`` disables the caches), else
+    :data:`DEFAULT_CACHE_S`. Empty, non-numeric, negative, NaN and infinite values are
+    ignored. The setting only bounds how old a cached map may be before it is revalidated;
+    a revalidated map equals a fresh walk."""
+    env = os.environ if environ is None else environ
+    raw = env.get(CACHE_S_ENV)
+    if raw is None or not raw.strip():
+        return DEFAULT_CACHE_S
+    try:
+        val = float(raw.strip())
+    except ValueError:
+        return DEFAULT_CACHE_S
+    if not math.isfinite(val) or val < 0:
+        return DEFAULT_CACHE_S
+    return int(val)
+
+
 def scan(roots: Mapping[str, os.PathLike | str] | None = None, depth: int = 4,
-         prune: tuple[str, ...] = ("*_hips",), cache_s: int = 3600,
+         prune: tuple[str, ...] = ("*_hips",), cache_s: int | None = None,
          url_prefixes: Mapping[str, str] | None = None) -> ExposureMap:
     """Walk the served roots and build the ``realpath -> URL prefix`` map.
 
@@ -442,6 +470,9 @@ def scan(roots: Mapping[str, os.PathLike | str] | None = None, depth: int = 4,
     other trees). Each level's directories are listed by ``$PK_SCAN_THREADS`` worker threads
     (default 16); the result does not depend on the thread count. A directory reached by
     several routes (symlinks, or both roots) is listed once per scan.
+
+    ``cache_s=None`` (the default) is :func:`default_cache_s`: :data:`DEFAULT_CACHE_S`
+    (3600) unless ``$PK_EXPOSURE_CACHE_S`` sets another value.
 
     Caching (``cache_s > 0``): a result younger than ``cache_s`` seconds is returned from
     memory or from ``exposure-<key>.json`` under ``$PK_CACHE_DIR`` (default
@@ -456,6 +487,8 @@ def scan(roots: Mapping[str, os.PathLike | str] | None = None, depth: int = 4,
     cache and forces a fresh walk.
     ``ExposureMap.stats`` reports the call counts of the walk (empty for a cached result).
     """
+    if cache_s is None:
+        cache_s = default_cache_s()
     roots_n = _norm_roots(DEFAULT_ROOTS if roots is None else roots)
     prefixes = dict(URL_PREFIXES)
     if url_prefixes:

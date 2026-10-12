@@ -667,6 +667,9 @@ class DeployPlan:
     replace_mode: str | None = None
     legacy_dir: Path | None = None
     htaccess: bool = False
+    #: write the deploy deny rule (``htaccess.write_deny_htaccess``) without ``--htaccess``:
+    #: the target has no ``.htaccess`` or a portalkit one that is out of date
+    htaccess_deny: bool = False
     warnings: list[str] = field(default_factory=list)
 
     @property
@@ -682,6 +685,8 @@ class DeployPlan:
             lines.append(f"  replace {len(self.replace)} legacy file(s), mode {self.replace_mode}")
         if self.htaccess:
             lines.append("  .htaccess")
+        elif self.htaccess_deny:
+            lines.append("  .htaccess (deny rule for deploy bookkeeping)")
         for w in self.warnings:
             lines.append(f"  warning: {w}")
         return "\n".join(lines)
@@ -731,8 +736,13 @@ def stub_url(legacy: Path, unified_abs: Path) -> str:
 def plan_deploy(family: str, build_id: str, portal: Any, *, portal_id: str | None = None,
                 stage_root: os.PathLike | str | None = None, target: os.PathLike | str | None = None,
                 replace: str | None = None, htaccess: bool = False, yes: bool = False,
-                emap: ExposureMap | None = None, shared_legacy_dir: bool = False) -> DeployPlan:
+                emap: ExposureMap | None = None, shared_legacy_dir: bool = False,
+                deny_htaccess: bool | None = None) -> DeployPlan:
     """Compute what :func:`deploy` would do and every refusal, without touching the target.
+
+    ``deny_htaccess`` (default: :func:`deny_htaccess_default`, i.e. on unless
+    ``PK_DENY_HTACCESS`` is ``0``/``false``/``no``/``off``) controls whether a deploy without
+    ``--htaccess`` writes the deny-only ``.htaccess``.
 
     Raises :class:`UsageError` for bad arguments; refusals are recorded on the plan and raised
     by :func:`raise_for_plan`."""
@@ -828,17 +838,81 @@ def plan_deploy(family: str, build_id: str, portal: Any, *, portal_id: str | Non
         plan.files.append(FileAction(rel=rel, action=action, sha256=src_sha, size=size,
                                      phase=_phase(rel)[1]))
 
-    if htaccess:
-        from .htaccess import htaccess_owned
-        hp = tgt / ".htaccess"
-        if os.path.islink(hp):
-            plan.conflicts.append("symlink: .htaccess is a symlink")
-        elif hp.exists() and not htaccess_owned(hp):
-            plan.conflicts.append(".htaccess (not written by portalkit)")
+    _plan_htaccess(plan, tgt, htaccess,
+                   deny_htaccess_default() if deny_htaccess is None else deny_htaccess)
 
     if replace:
         _plan_replace(plan, entry, tgt, source)
     return plan
+
+
+#: Environment variable that turns off the deny-only ``.htaccess`` of a plain deploy.
+DENY_HTACCESS_ENV = "PK_DENY_HTACCESS"
+
+
+def deny_htaccess_default() -> bool:
+    """Whether a deploy without ``--htaccess`` writes the deny-only ``.htaccess``: True
+    unless ``$PK_DENY_HTACCESS`` is ``0``, ``false``, ``no`` or ``off``. The file needs
+    ``AllowOverride`` with ``FileInfo`` (or ``None``); docs/deploy.md ".htaccess"."""
+    val = os.environ.get(DENY_HTACCESS_ENV, "").strip().lower()
+    return val not in ("0", "false", "no", "off")
+
+
+def _plan_htaccess(plan: DeployPlan, tgt: Path, htaccess: bool, deny: bool = True) -> None:
+    """``.htaccess`` part of the plan. With ``--htaccess`` a symlink (exit 3) or a foreign
+    file (exit 4) is a refusal. Without it the deny rule for deploy's bookkeeping files
+    (docs/deploy.md ".htaccess") is planned when the target has no ``.htaccess`` or an
+    outdated portalkit one; a foreign file or a symlink is left alone with a warning. With
+    ``deny`` False (``PK_DENY_HTACCESS=0``) the file is left as it is."""
+    from .htaccess import DENY_RE, htaccess_state, managed_text
+    state = htaccess_state(tgt)
+    hp = tgt / ".htaccess"
+    if htaccess:
+        if state == "symlink":
+            plan.conflicts.append("symlink: .htaccess is a symlink")
+        elif state == "foreign":
+            plan.conflicts.append(".htaccess (not written by portalkit)")
+        return
+    if not deny:
+        if state == "absent":
+            plan.warnings.append(
+                f"{DENY_HTACCESS_ENV}=0: no .htaccess deny rule is written, so the ownership "
+                f"manifest {plan.manifest_path.name} (absolute paths) is served")
+        return
+    if state in ("symlink", "foreign"):
+        what = "is a symlink" if state == "symlink" else "was not written by portalkit"
+        plan.warnings.append(
+            f"{hp} {what} and is left unchanged; deploy's bookkeeping files (the ownership "
+            f"manifest {plan.manifest_path.name}) may be served unless it denies them "
+            f"(RedirectMatch 403 \"{DENY_RE}\")")
+        return
+    if state == "absent":
+        plan.htaccess_deny = True
+    else:
+        plan.htaccess_deny = hp.read_text(encoding="utf-8", errors="replace") != managed_text(tgt)
+
+
+def _plan_backup_htaccess(plan: DeployPlan, ldir: Path) -> None:
+    """Refusals :func:`~portalkit.deploy.backup.backup_files` would meet when it writes
+    ``<legacy_dir>/.portalkit_backup/.htaccess``, found before anything is written."""
+    from .backup import BACKUP_DIRNAME
+    from .htaccess import htaccess_state
+    bdir = ldir / BACKUP_DIRNAME
+    try:
+        st = os.lstat(bdir)
+    except (FileNotFoundError, NotADirectoryError):
+        return
+    if stat.S_ISLNK(st.st_mode):
+        plan.conflicts.append(f"symlink: backup directory {bdir} is a symlink")
+        return
+    if not stat.S_ISDIR(st.st_mode):
+        plan.conflicts.append(f"a file is in the way of the backup directory {bdir}")
+        return
+    state = htaccess_state(bdir)
+    if state == "symlink":
+        plan.conflicts.append(f"symlink: {bdir / '.htaccess'} is a symlink")
+    elif state == "foreign":
+        plan.conflicts.append(f"{bdir / '.htaccess'} (not written by portalkit)")
 
 
 def _plan_replace(plan: DeployPlan, entry: Any, tgt: Path, source: Path) -> None:
@@ -847,6 +921,7 @@ def _plan_replace(plan: DeployPlan, entry: Any, tgt: Path, source: Path) -> None
         raise UsageError(f"--replace needs legacy_dir for portal {plan.portal_id!r}")
     ldir = Path(os.path.abspath(legacy_dir))
     plan.legacy_dir = ldir
+    _plan_backup_htaccess(plan, ldir)
     staged_pages = _staged_pages(source)
     staged_files = {f.rel for f in plan.files}
     for pg in _get(entry, "page", []) or []:
@@ -928,19 +1003,21 @@ def deploy(family: str, build_id: str, portal: Any, *, portal_id: str | None = N
            replace: str | None = None, htaccess: bool = False, dry_run: bool = False,
            yes: bool = False, emap: ExposureMap | None = None, gc: bool = False,
            shared_legacy_dir: bool = False, now: _dt.datetime | None = None,
-           log: Callable[[str], None] | None = None) -> DeployResult:
+           log: Callable[[str], None] | None = None,
+           deny_htaccess: bool | None = None) -> DeployResult:
     """Deploy staged build ``build_id`` of ``family`` to the portal's target.
 
     ``portal`` is the parsed site registry (``sites/<family>.toml``) or one ``[[portal]]``
     entry. Refusals raise :class:`~portalkit.deploy.DeployError` subclasses whose
     ``exit_code`` follows section 10 (the exception carries the plan as ``.plan``); a
-    dry run raises the same refusals and writes nothing.
+    dry run raises the same refusals and writes nothing. ``deny_htaccess`` is passed to
+    :func:`plan_deploy`.
     """
     log = log or (lambda s: None)
     now = now or utcnow()
     plan = plan_deploy(family, build_id, portal, portal_id=portal_id, stage_root=stage_root,
                        target=target, replace=replace, htaccess=htaccess, yes=yes, emap=emap,
-                       shared_legacy_dir=shared_legacy_dir)
+                       shared_legacy_dir=shared_legacy_dir, deny_htaccess=deny_htaccess)
     raise_for_plan(plan)
     for w in plan.warnings:
         log(f"warning: {w}")
@@ -950,6 +1027,14 @@ def deploy(family: str, build_id: str, portal: Any, *, portal_id: str | None = N
 
     tgt = plan.target
     ensure_dirs(tgt, "")
+    # the deny rule goes in before the first manifest write, so the manifest is never served
+    # unprotected where the host honours the .htaccess
+    if htaccess:
+        from .htaccess import write_htaccess
+        write_htaccess(tgt)
+    elif plan.htaccess_deny:
+        from .htaccess import write_deny_htaccess
+        write_deny_htaccess(tgt)
     man = load_manifest(plan.manifest_path) or new_manifest(family, plan.portal_id, tgt)
     man["target"] = str(tgt)
     prov = plan.provenance
@@ -976,10 +1061,6 @@ def deploy(family: str, build_id: str, portal: Any, *, portal_id: str | None = N
         atomic_write(tgt / fa.rel, src=plan.source / fa.rel)
         written.append(fa.rel)
     log(f"wrote {len(written)} file(s) to {tgt}")
-
-    if htaccess:
-        from .htaccess import write_htaccess
-        write_htaccess(tgt)
 
     replaced: list[dict] = []
     if plan.replace:

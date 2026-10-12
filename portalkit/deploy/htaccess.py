@@ -14,10 +14,22 @@ the target: the ownership manifests ``.portalkit-deploy.json`` and
 paths ``status`` needs; ARCHITECTURE section 9.3 "Served paths"), anything under a
 ``.portalkit_backup/`` directory (``backup.json`` records absolute paths too) and in-flight
 ``*.pk-tmp`` temporaries (:data:`DENY_RE`). The rule is a ``RedirectMatch 403`` (mod_alias),
-which needs only the ``FileInfo`` override that the cache-header directives already need, so
-it adds no ``AllowOverride`` requirement: a ``Require`` rule would need ``AuthConfig``, and
-Apache answers 500 for every file of a directory whose ``.htaccess`` uses an override it does
-not allow. :func:`denied` applies the same pattern in Python (tests, dev server, verify).
+which belongs to the ``FileInfo`` override class, the class the cache-header directives
+already need, so it adds nothing to what ``--htaccess`` requires. A ``Require`` rule would
+need ``AuthConfig`` instead. :func:`denied` applies the same pattern in Python (tests, dev
+server, verify).
+
+Deploy writes the deny rule even without ``--htaccess``: a target with no ``.htaccess`` gets
+the minimal managed file :data:`DENY_HTACCESS_TEXT` (marker and deny rule only;
+:func:`write_deny_htaccess`), an owned file is brought up to date, and a foreign file is left
+alone with a warning (with ``--htaccess`` it stays an ownership conflict, exit 4). So a plain
+deploy needs ``AllowOverride`` to include ``FileInfo``, or to be ``None`` (Apache then
+ignores the file). Under an override list without ``FileInfo`` (for example
+``AuthConfig Options Indexes`` only) Apache answers 500 for every file of the target;
+``<IfModule>`` does not prevent this. Which classes the host allows is open (ARCHITECTURE
+section 16, Q4). ``PK_DENY_HTACCESS=0`` (or ``deploy(..., deny_htaccess=False)``) turns the
+deny-only file off; ``verify --http`` reports 5xx answers from a directory holding a
+portalkit ``.htaccess`` as a probable ``AllowOverride`` problem.
 :func:`write_backup_htaccess` writes the deny rule into ``<legacy_dir>/.portalkit_backup/``,
 which lies outside the target when the target is ``<legacy_dir>/unified``.
 """
@@ -61,8 +73,13 @@ DENY_BODY = f"""# deploy bookkeeping (ownership manifests, backups, temporaries)
 
 HTACCESS_TEXT = MARKER + "\n" + HTACCESS_BODY + DENY_BODY
 
+#: The minimal managed file: the marker and the deny rule only. Deploy writes it to a target
+#: without ``--htaccess`` (when the target has no foreign ``.htaccess``), so the ownership
+#: manifest is denied whether or not the cache headers were asked for.
+DENY_HTACCESS_TEXT = MARKER + "\n" + DENY_BODY
+
 #: ``<legacy_dir>/.portalkit_backup/.htaccess``: every path in the backup tree is denied.
-BACKUP_HTACCESS_TEXT = MARKER + "\n" + DENY_BODY
+BACKUP_HTACCESS_TEXT = DENY_HTACCESS_TEXT
 
 _DENY = re.compile(DENY_RE)
 
@@ -93,6 +110,64 @@ def denied(rel: str) -> bool:
     holds it, or a full URL path): deploy's manifests, backups and temporaries."""
     p = rel if rel.startswith("/") else "/" + rel
     return _DENY.search(p) is not None
+
+
+def _owned_text(path: Path) -> str | None:
+    """Content of ``path`` when it is a portalkit-owned regular file, else ``None``."""
+    if not htaccess_owned(path):
+        return None
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+
+def htaccess_state(target: os.PathLike | str) -> str:
+    """State of ``<target>/.htaccess``: ``"absent"``, ``"symlink"``, ``"foreign"`` (no
+    marker, or not a regular file), ``"cache"`` (portalkit's, with the section 11.5 cache
+    headers) or ``"deny"`` (portalkit's, deny rule only or an older owned variant)."""
+    path = Path(target) / ".htaccess"
+    try:
+        st = os.lstat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return "absent"
+    if stat.S_ISLNK(st.st_mode):
+        return "symlink"
+    text = _owned_text(path)
+    if text is None:
+        return "foreign"
+    return "cache" if HTACCESS_BODY in text else "deny"
+
+
+def has_deny_rule(target: os.PathLike | str) -> bool:
+    """True when ``<target>/.htaccess`` is portalkit's and carries the :data:`DENY_BODY`
+    rule (used by ``verify --http``)."""
+    text = _owned_text(Path(target) / ".htaccess")
+    return text is not None and DENY_BODY in text
+
+
+def has_cache_headers(target: os.PathLike | str) -> bool:
+    """True when ``<target>/.htaccess`` is portalkit's and carries the section 11.5 cache
+    headers (``deploy --htaccess``); the minimal deny-only file does not."""
+    text = _owned_text(Path(target) / ".htaccess")
+    return text is not None and HTACCESS_BODY in text
+
+
+def managed_text(target: os.PathLike | str) -> str:
+    """The text deploy keeps in ``<target>/.htaccess`` without ``--htaccess``: the full
+    :data:`HTACCESS_TEXT` when the owned file already holds the cache headers (an earlier
+    ``--htaccess`` deploy), else :data:`DENY_HTACCESS_TEXT`."""
+    return HTACCESS_TEXT if htaccess_state(target) == "cache" else DENY_HTACCESS_TEXT
+
+
+def write_deny_htaccess(target: os.PathLike | str, *, dry_run: bool = False) -> Path | None:
+    """Make ``<target>/.htaccess`` carry the deploy deny rule without ``--htaccess``: write
+    :data:`DENY_HTACCESS_TEXT` when there is no file, and bring a portalkit-owned file up to
+    date (:func:`managed_text`; cache headers an earlier ``--htaccess`` wrote are kept).
+    Refuses (exit 4) a foreign file and (exit 3) a symlink like :func:`write_htaccess`;
+    ``deploy`` checks for both first and only warns. Returns the path written, or ``None``
+    when the file already has the content."""
+    return _write_owned(Path(target), managed_text(target), dry_run=dry_run)
 
 
 def write_htaccess(target: os.PathLike | str, *, dry_run: bool = False) -> Path | None:
@@ -129,7 +204,8 @@ def _write_owned(tgt: Path, text: str, *, dry_run: bool) -> Path | None:
         if not htaccess_owned(path):
             raise OwnershipConflict(".htaccess exists and was not written by portalkit",
                                     [str(path)])
-        if path.read_text(encoding="utf-8") == text:
+        # bytes, so an owned file with undecodable bytes is rewritten instead of raising
+        if path.read_bytes() == text.encode("utf-8"):
             return None
     if dry_run:
         return path
@@ -139,7 +215,6 @@ def _write_owned(tgt: Path, text: str, *, dry_run: bool) -> Path | None:
 
 def expected_cache_control(rel: str) -> str | None:
     """Cache-Control the .htaccess assigns to a file (``None`` when no rule matches)."""
-    import re
     base = rel.rsplit("/", 1)[-1]
     if re.search(r"^(manifest|index|images|hips|overlays|narrative|portal)\.json$|\.html$", base):
         return NO_CACHE

@@ -377,6 +377,43 @@ test('one modelControls / featureToggles implementation', () => {
   assert.equal('applyDefaultOff' in chips, false, 'chips render default_off state only (note 70)');
 });
 
+test('controls.rafSetter: frame looked up at call time, one coalesced write per frame', async () => {
+  // the module was imported above, before this stand-in exists: a binding taken at import would
+  // ignore it and run on the 16 ms timer (IMPLEMENTATION_NOTES 123)
+  const prev = globalThis.requestAnimationFrame;
+  const frames = [];
+  globalThis.requestAnimationFrame = (fn) => { frames.push(fn); return frames.length; };
+  try {
+    const writes = [];
+    const store = {set: (p, o) => writes.push([p, o])};
+    const set = ctl.rafSetter(store, 'ctl1');
+    set({av: 1});
+    set({rv: 3.1});
+    set({av: 2});
+    assert.equal(frames.length, 1, 'one frame requested for the burst');
+    await new Promise((r) => setTimeout(r, 40));
+    assert.equal(writes.length, 0, 'nothing written before the frame (no timer fallback)');
+    frames.shift()(0);
+    assert.deepEqual(writes, [[{av: 2, rv: 3.1}, {source: 'ctl1'}]]);
+    set({av: 5});
+    assert.equal(frames.length, 1, 'a new burst requests a new frame');
+    frames.shift()(16);
+    assert.deepEqual(writes.at(-1), [{av: 5}, {source: 'ctl1'}]);
+    assert.equal(writes.length, 2);
+    // without requestAnimationFrame the setter falls back to a timer
+    delete globalThis.requestAnimationFrame;
+    set({dm: 1});
+    set({dm: 2});
+    assert.equal(writes.length, 2);
+    await new Promise((r) => setTimeout(r, 40));
+    assert.deepEqual(writes.at(-1), [{dm: 2}, {source: 'ctl1'}]);
+    assert.equal(writes.length, 3);
+  } finally {
+    if (prev === undefined) delete globalThis.requestAnimationFrame;
+    else globalThis.requestAnimationFrame = prev;
+  }
+});
+
 test('controls pure helpers: R_V choices, A_V cleaning, number text', () => {
   assert.deepEqual(ctl.rvChoices(3.1), [3.1, 5.5]);
   assert.deepEqual(ctl.rvChoices(4), [3.1, 4, 5.5]);
@@ -1169,16 +1206,59 @@ test('narrative:highlight goto: an explicit deep-link view kept over the beat is
   }
 });
 
-// Contract issue (WPE2): with an instant scroll (prefers-reduced-motion) activate(k, {scroll,
-// keep}) centres beat k before it sets S.current, so arrived() -> unpin() -> pickActive()
-// activates k once more without `keep`; that inner call asks for the goto and the sky pane then
-// leaves the deep-link view. narrative.js is not owned by WPE2; this records the behaviour.
-test('narrative:highlight goto: deep-link view kept over the beat with an instant scroll', {todo: 'narrative.js activate re-enters through pickActive before S.current is set'}, async () => {
+// WPE4 (was a WPE2 contract issue): with an instant scroll (prefers-reduced-motion) the beat
+// reaches the band centre inside scrollIntoView; activate() sets S.current before scrolling, so
+// arrived() -> unpin() -> pickActive() finds the beat already active and does not activate it a
+// second time without `keep` (which asked for the goto and left the deep-link view).
+test('narrative:highlight goto: deep-link view kept over the beat with an instant scroll', async () => {
   const deep = {ra: 266.3, dec: -28.9, fov: 0.3};
   const h = await narrativeHarness({beat: 'b2', sky: {...deep}}, {instant: true});
   try {
+    assert.equal(h.pane.stats().beat, 'b2');
+    assert.equal(h.events.filter((e) => e.goto === true).length, 0, 'no goto at any point');
     const e = lastHl(h.events);
     assert.deepEqual([e.beat, e.ids.length, 'goto' in e], ['b2', 3, false]);
+    const sky = h.store.get('sky');
+    assert.deepEqual([sky.ra, sky.dec, sky.fov], [deep.ra, deep.dec, deep.fov]);
+    assert.equal(BEAT_VIEW in sky, false);
+    assert.equal(stateToHash({beat: 'b2', sky}).sky, '266.3,-28.9,0.3');
+  } finally {
+    h.restore();
+  }
+});
+
+test('narrative: an instant-scroll activation runs once (go() and a hash beat change)', async () => {
+  const h = await narrativeHarness({}, {instant: true});
+  try {
+    assert.equal(h.pane.stats().beat, 'b1');
+    let n0 = h.events.length;
+    h.pane.go('b3');
+    assert.equal(h.pane.stats().beat, 'b3');
+    assert.equal(h.events.length - n0, 1, 'one highlight per activation');
+    // go() to the highlight-only beat: exactly one goto request
+    n0 = h.events.length;
+    h.pane.go('b2');
+    const fresh = h.events.slice(n0);
+    assert.deepEqual(fresh.map((e) => [e.beat, e.goto === true]), [['b2', true]]);
+    // go() to the current beat scrolls but does not re-activate
+    n0 = h.events.length;
+    h.pane.go('b2');
+    assert.equal(h.events.length, n0);
+    assert.equal(NarEl.scrollTop, 100, 'beat b2 centred');
+    // hash navigation to a highlight-only beat with an explicit view keeps that view
+    const deep = {ra: 266.31, dec: -28.91, fov: 0.25};
+    h.pane.go('b1');
+    n0 = h.events.length;
+    const tick = () => new Promise((r) => setTimeout(r, 0));
+    h.store.set({beat: 'b4', sky: {...deep}}, {source: 'hash'});
+    await tick();
+    assert.equal(h.pane.stats().beat, 'b4');
+    h.store.set({beat: 'b2'}, {source: 'hash'});
+    await tick();
+    assert.equal(h.pane.stats().beat, 'b2');
+    assert.equal(h.events.slice(n0).filter((e) => e.goto === true).length, 0);
+    const sky = h.store.get('sky');
+    assert.deepEqual([sky.ra, sky.dec, sky.fov], [deep.ra, deep.dec, deep.fov]);
   } finally {
     h.restore();
   }

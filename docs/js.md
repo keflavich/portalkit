@@ -308,6 +308,15 @@ drop `beatOvl`. The sky pane's store listener moves the viewer only when the sto
 changes. Helpers: `settledSky`, `layersSky` in panes/sky.js; `explicitSky`, `beatSky`,
 `sameSky` in panes/narrative.js.
 
+Narrative activation order (IMPLEMENTATION_NOTES 130): `activate(k, {write, scroll, keep})`
+applies the beat first (`applyBeat`: section classes, `S.current`, store writes with `keep`,
+the `narrative:highlight` event), and only then pins the section, calls `scrollIntoView` and
+`arrived()`. With instant scrolling (`prefers-reduced-motion` gives `.pk-nar-scroll`
+`scroll-behavior: auto`) `arrived()` runs `unpin()` → `pickActive()` at once; that re-entry
+finds `k === S.current` and does nothing, so a `#sky=..&beat=<highlight-only beat>` deep link
+keeps its view (no second highlight with `goto: true`). Code that adds work to activation puts
+state changes in `applyBeat`, never after the scroll.
+
 Overlays (IMPLEMENTATION_NOTES 72): `sky.overlays` undefined means "the layout default"
 (`options.overlays` of each pane) and writes no `ovl`; an array writes `ovl=<list>`, and an
 empty array writes `ovl=-`, independent of the page default, so an explicit "no overlays"
@@ -462,9 +471,12 @@ grid, or whose grid cannot be read, are binned with `bin2d` at settle time. The 
 the decoded `values` array as its `counts`, so the canvas2d colourise cache (note 103) serves
 every redraw. `stats().context = {prebinned, binned}` counts both kinds.
 
-Animation frames (note 123): look up `requestAnimationFrame` when scheduling, not when the
+Animation frames (notes 123, 132): look up `requestAnimationFrame` when scheduling, not when the
 module is imported (scatter's `raf`/`caf` remember which clock issued the handle). A module that
 binds it at import falls back to its timer under node even after a test installs a stand-in.
+`ui/controls.js` follows the same rule: its `raf` looks the function up at each call, with a
+16 ms `setTimeout` fallback, so `rafSetter(store, source)` coalesces writes to one per frame of
+whatever clock is installed at the time.
 
 List deferred columns (note 112): after first paint the list reads hover columns and class
 colours from the row records it already holds (`rowsCarry(manifest, key)` says whether
@@ -659,10 +671,12 @@ hits on redraw; no grid, a log axis or an unreadable grid: worker `bin2d`).
 `plotpanes.test.mjs` covers chips/legend `default_off`, the Aladin retry, `contextGridEntry` /
 `contextGridData`, the WPD2 sky helpers, and the `narrative:highlight` goto condition on a
 mounted narrative pane (highlight-only beat, beat sky view, `suppress_view`, empty ids, a kept
-deep-link view). The full suite is
+deep-link view with an instant scroll, one activation per `go()` and per hash beat change), and
+`controls.rafSetter` with a stand-in `requestAnimationFrame` installed after import and the
+timer fallback. The full suite is
 `node --test tests/js/*.test.mjs`.
 
-## 14. Runtime contracts from IMPLEMENTATION_NOTES 68-123
+## 14. Runtime contracts from IMPLEMENTATION_NOTES 68-132
 
 Where each JS-facing note lives (details in the module headers):
 
@@ -707,3 +721,6 @@ Where each JS-facing note lives (details in the module headers):
 | 121 | landing card counts from `portal.json counts[]`, `search` manifests as the fallback | `panes/landing.js` (section 6) |
 | 122 | scatter context backdrop from the context catalog's matching count grid, worker `bin2d` otherwise | `panes/scatter.js` (section 6) |
 | 123 | `requestAnimationFrame` looked up at call time | `panes/scatter.js` (section 6) |
+| 130 | narrative `activate` applies the beat before scrolling; an instant-scroll re-entry is a no-op | `panes/narrative.js` (section 4) |
+| 131 | an images preset with a facet that matches no item is dropped at build (`bundle/images.py`); an empty value list reads as "no filter" | `panes/gallery.js` |
+| 132 | `ui/controls.js` `raf` looked up at call time | `ui/controls.js` (section 6) |

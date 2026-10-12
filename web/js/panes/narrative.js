@@ -299,14 +299,23 @@ export function mount(el, ctx) {
     if (fromHash && goto && next[BEAT_VIEW] === mark) emitHighlight(beat.id, beatHighlight(view), {goto: true});
   };
 
+  /**
+   * Activate beat k, then (with `scroll`) bring it to the band centre. The state update comes
+   * first: an instant scroll (prefers-reduced-motion: scroll-behavior auto) reaches the centre
+   * inside scrollIntoView, and arrived() -> unpin() -> pickActive() then finds k already current
+   * instead of activating it a second time without `keep` (which would drop a deep-link view).
+   */
   const activate = (k, {write = true, scroll = false, keep = null} = {}) => {
     if (k < 0 || k >= S.beats.length) return;
-    if (scroll) {
+    if (k !== S.current) applyBeat(k, write, keep);
+    if (scroll && !destroyed) {
       pin(k);
       S.sections[k].scrollIntoView({block: 'center'});
       arrived();               // already centred, or an instant scroll
     }
-    if (k === S.current) return;
+  };
+
+  const applyBeat = (k, write, keep) => {
     if (S.current >= 0) {
       S.sections[S.current].classList.remove('pk-live');
       S.sections[S.current].removeAttribute('aria-current');

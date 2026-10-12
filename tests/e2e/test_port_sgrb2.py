@@ -114,7 +114,9 @@ def test_landing_counts_and_login_badge(runs, portal_dir):
     sec = [c for c in cards if c["href"] and c["href"].startswith(SECURE)]
     assert len(sec) == 1 and sec[0]["badge"], cards
     assert all(not c["badge"] for c in cards if c not in sec)
-    # counts come from the search manifests
+    # the landing pane reads portal.json counts[] first (IMPLEMENTATION_NOTES 121) and the
+    # search manifests only as its fallback; build.py writes each page's counts[] entry from
+    # its primary dataset, so the card count equals the row count of that page's search manifest
     for s in portal["search"]:
         n = _json(portal_dir / s["manifest"])["n"]
         card = next(c for c in cards if c["page"] == s["page"])

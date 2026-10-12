@@ -17,6 +17,10 @@ It emulates the behaviours of the production Apache host that the viewer must su
 * optional ``cache_control`` (a header value, or ``"htaccess"`` to apply the section 11.5
   rules) so tests can exercise ``verify``'s header report.
 
+Paths the portalkit ``.htaccess`` denies (:func:`portalkit.deploy.htaccess.denied`: any
+segment starting with ``.portalkit``, and ``*.pk-tmp``) answer 403 and are left out of
+directory listings, like ``.ht*`` paths, whether or not the served tree holds that file.
+
 Every request is recorded in ``DevServer.requests`` (method, path, status, bytes, range,
 encoding, auth, and ``t``: the epoch-ms time the response finished, IMPLEMENTATION_NOTES 112).
 """
@@ -43,6 +47,8 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote, urlsplit
+
+from .htaccess import denied
 
 ENCODING_MODES = ("auto", "none", "gzip")
 
@@ -201,8 +207,9 @@ class DevRequestHandler(SimpleHTTPRequestHandler):
         if any(p == ".." for p in parts):
             self._simple(HTTPStatus.FORBIDDEN, b"403 forbidden\n", head=head)
             return
-        if any(p.startswith(".ht") for p in parts):
-            # Apache never serves .htaccess / .htpasswd
+        if any(p.startswith(".ht") for p in parts) or denied(url_path):
+            # Apache never serves .htaccess / .htpasswd, and the portalkit .htaccess denies
+            # deploy's bookkeeping (.portalkit* manifests and backups, *.pk-tmp)
             self._simple(HTTPStatus.FORBIDDEN, b"403 forbidden\n", head=head)
             return
         fs_path = self.translate_path(self.path)
@@ -232,7 +239,7 @@ class DevRequestHandler(SimpleHTTPRequestHandler):
         title = html.escape(unquote(urlsplit(self.path).path), quote=False)
         rows = []
         for name in names:
-            if name.startswith(".ht"):
+            if name.startswith(".ht") or denied(name):
                 continue
             full = os.path.join(fs_path, name)
             disp = name + ("/" if os.path.isdir(full) else "")

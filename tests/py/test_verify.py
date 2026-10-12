@@ -208,3 +208,143 @@ def test_verify_http_with_custom_opener(world):
 def test_file_url_quotes():
     assert vmod.file_url("https://h/p", "data/Ünï name.json") == \
         "https://h/p/data/%C3%9Cn%C3%AF%20name.json"
+
+
+# ---------------------------------------------------------------------------
+# the ownership manifest URL must be denied (WPE4, docs/deploy.md ".htaccess")
+# ---------------------------------------------------------------------------
+
+devmod = importlib.import_module("portalkit.deploy.devserver")
+hmod = importlib.import_module("portalkit.deploy.htaccess")
+
+
+@pytest.fixture(autouse=True)
+def _default_deny_htaccess(monkeypatch):
+    monkeypatch.delenv(dmod.DENY_HTACCESS_ENV, raising=False)
+
+
+def test_manifest_url_5xx_is_an_allowoverride_warning(world, monkeypatch):
+    """A 5xx means Apache rejects the .htaccess (AllowOverride without FileInfo): undecided,
+    never 'SERVED'; owned files answering 5xx add one warning."""
+    res = deploy(world, "public")
+    t = res.plan.target
+    url = "https://h/p/"
+
+    def stub(status):
+        return lambda *a, **k: (status, {}, [], None, None)
+
+    monkeypatch.setattr(vmod, "_fetch", stub(500))
+    d_, st, w = vmod.check_manifest_denied(url, dmod.MANIFEST_NAME, visibility="public",
+                                           deny_expected=True)
+    assert (d_, st) == (None, 500) and "AllowOverride" in w and "served" not in w.split(":")[0]
+    assert vmod.check_manifest_denied(url, dmod.MANIFEST_NAME, visibility="public",
+                                      deny_expected=False) == (None, 500, None)
+    monkeypatch.setattr(vmod, "_fetch", stub(410))
+    d_, st, w = vmod.check_manifest_denied(url, dmod.MANIFEST_NAME, visibility="public",
+                                           deny_expected=True)
+    assert (d_, st) == (None, 410) and "not confirmed" in w
+    rep = vmod.verify(FAM, site(world, "public"), http=True, base_url=url,
+                      emap=world["emap"], timeout=10)
+    assert rep.manifest_denied is None and "SERVED" not in rep.format()
+    monkeypatch.setattr(vmod, "_fetch", stub(500))
+    rep = vmod.verify(FAM, site(world, "public"), http=True, base_url=url,
+                      emap=world["emap"], timeout=10)
+    assert not rep.ok and rep.manifest_denied is None
+    allow = [w for w in rep.warnings if "AllowOverride" in w]
+    assert len(allow) == 2 and any("owned URL(s) answered 5xx" in w for w in allow)
+    assert "SERVED" not in rep.format()
+    # no portalkit .htaccess: 5xx on owned files is a plain failure, no AllowOverride hint
+    (t / ".htaccess").unlink()
+    rep = vmod.verify(FAM, site(world, "public"), http=True, base_url=url,
+                      emap=world["emap"], timeout=10)
+    assert not rep.ok and rep.warnings == []
+
+
+def test_manifest_url_denied_with_deny_rule(world):
+    res = deploy(world, "public")                      # no --htaccess: deny-only file
+    t = res.plan.target
+    assert hmod.has_deny_rule(t) and not hmod.has_cache_headers(t)
+    with DevServer(t.parent) as srv:
+        rep = check(world, "public", srv)
+        assert rep.ok and rep.manifest_denied is True and rep.warnings == []
+        assert rep.htaccess is None                    # no cache headers expected
+        assert "manifest URL denied" in rep.format()
+        heads = [r for r in srv.requests if r.path.endswith(dmod.MANIFEST_NAME)]
+        assert [(r.method, r.status) for r in heads] == [("HEAD", 403)]
+        assert rep.to_json()["manifest_denied"] is True and rep.to_json()["warnings"] == []
+
+
+def test_manifest_url_served_is_a_warning(world, monkeypatch):
+    res = deploy(world, "public")
+    t = res.plan.target
+    # a host that ignores the .htaccess (AllowOverride None) serves the manifest
+    monkeypatch.setattr(devmod, "denied", lambda path: False)
+    with DevServer(t.parent) as srv:
+        rep = check(world, "public", srv)
+        assert rep.ok and rep.exit_code == 0           # a warning, not a failure
+        assert rep.manifest_denied is False
+        assert len(rep.warnings) == 1 and "not in effect" in rep.warnings[0]
+        assert "answered 200" in rep.warnings[0] and dmod.MANIFEST_NAME in rep.warnings[0]
+        assert "WARN" in rep.format() and "manifest URL SERVED" in rep.format()
+        # a target with a foreign .htaccess (no portalkit deny rule): still a warning
+        (t / ".htaccess").write_text("Options -Indexes\n")
+        rep = check(world, "public", srv)
+        assert rep.ok and rep.manifest_denied is False
+        assert len(rep.warnings) == 1 and "no portalkit .htaccess deny rule" in rep.warnings[0]
+    monkeypatch.undo()
+    with DevServer(t.parent) as srv:                   # foreign file, but something denies it
+        rep = check(world, "public", srv)
+        assert rep.manifest_denied is True and rep.warnings == []
+    (t / ".htaccess").unlink()
+    deploy(world, "public")                            # the deny-only file comes back
+    assert hmod.has_deny_rule(t)
+    rep = check(world, "public", srv)                  # server stopped: unreachable
+    assert rep.manifest_denied is None
+    assert any("unreachable" in w and "not checked" in w for w in rep.warnings)
+
+
+def test_manifest_url_secure_needs_credentials(world, monkeypatch):
+    res = deploy(world, "secure", replace="stub")
+    root = world["orange"] / "sec" / "portal"
+    monkeypatch.delenv("PK_BASIC_AUTH", raising=False)
+    with DevServer(root, auth="user:pw") as srv:
+        rep = check(world, "secure", srv)
+        assert rep.ok and rep.manifest_denied is None and rep.warnings == []
+        assert any(dmod.MANIFEST_NAME in n and "401" in n for n in rep.notes)
+        monkeypatch.setenv("PK_BASIC_AUTH", "user:pw")
+        rep = check(world, "secure", srv)
+        assert rep.ok and rep.manifest_denied is True and rep.warnings == []
+    # the legacy directory's backup tree is denied too (backup .htaccess + devserver rule)
+    bdir = root / ".portalkit_backup"
+    assert hmod.has_deny_rule(bdir)
+    assert res.replaced and hmod.denied(res.replaced[0]["backup"])
+
+
+def test_check_manifest_denied_secondary_manifest(world):
+    """A second portal in the same target has its own (secondary) manifest checked."""
+    res = deploy(world, "public")
+    t = res.plan.target
+    d = world["stage"] / FAM / BID / "c"
+    (d / "sub").mkdir(parents=True)
+    (d / "sub" / "c.html").write_text("<p>c</p>")
+    two = {"family": FAM, "portal": [{"id": "c", "visibility": "public",
+                                      "target_dir": str(t), "page": []}]}
+    dmod.deploy(FAM, BID, two, stage_root=world["stage"], emap=world["emap"])
+    assert (t / ".portalkit-deploy.c.json").is_file()
+    with DevServer(t.parent) as srv:
+        base = srv.url + "unified/"
+        rep = vmod.verify(FAM, two, http=True, base_url=base, emap=world["emap"], timeout=10)
+        assert rep.ok and rep.manifest_denied is True, rep.format()
+        assert any(r.path.endswith("/.portalkit-deploy.c.json") and r.status == 403
+                   for r in srv.requests)
+        assert vmod.check_manifest_denied(base, ".portalkit-deploy.c.json", visibility="public",
+                                          deny_expected=True) == (True, 403, None)
+        d_, st, w = vmod.check_manifest_denied(base, "map.html", visibility="public",
+                                               deny_expected=True)
+        assert (d_, st) == (False, 200) and "expected 403" in w
+        d_, st, w = vmod.check_manifest_denied(base, "map.html", visibility="public",
+                                               deny_expected=False)
+        assert (d_, st) == (False, 200) and "deny rule" in w
+        d_, st, w = vmod.check_manifest_denied(base, "nothing-here.json", visibility="public",
+                                               deny_expected=False)
+        assert (d_, st, w) == (True, 404, None)

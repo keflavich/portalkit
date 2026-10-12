@@ -250,3 +250,36 @@ def test_bad_options(root, tmp_path):
 ])
 def test_guess_type(name, ctype):
     assert guess_type(name) == ctype
+
+
+def test_deploy_bookkeeping_paths_answer_403(root):
+    """WPE4: paths the portalkit .htaccess denies (htaccess.denied) answer 403, with or
+    without auth, and are left out of listings; other dot-free names are served."""
+    (root / ".portalkit-deploy.json").write_text('{"target": "/abs"}')
+    (root / ".portalkit-deploy.c.json").write_text("{}")
+    bak = root / "sub" / ".portalkit_backup" / "20261010T120000Z-0123abcd"
+    bak.mkdir(parents=True)
+    (bak / "backup.json").write_text("{}")
+    (root / "data" / "manifest.json.pk-tmp").write_text("{}")
+    (root / "portalkit-res").mkdir()
+    (root / "portalkit-res" / "x.portalkit-deploy.json").write_text("{}")
+    with DevServer(root) as srv:
+        for path in ("/.portalkit-deploy.json", "/.portalkit-deploy.c.json",
+                     "/%2Eportalkit-deploy.json", "/sub/.portalkit_backup/",
+                     "/sub/.portalkit_backup", "/sub/.portalkit_backup/20261010T120000Z-0123abcd/backup.json",
+                     "/data/manifest.json.pk-tmp", "/.portalkit-deploy.json?x=1"):
+            for method in ("GET", "HEAD"):
+                st, _, body = req(srv, path, method)
+                assert st == 403, (path, method)
+                assert b"target" not in body
+        st, _, body = req(srv, "/portalkit-res/x.portalkit-deploy.json")
+        assert st == 200 and body == b"{}"
+        st, _, body = req(srv, "/sub/")
+        assert st == 200 and b"a.txt" in body and b".portalkit" not in body
+        st, _, body = req(srv, "/data/")
+        assert st == 200 and b"manifest.json" in body and b"pk-tmp" not in body
+        assert [r.status for r in srv.requests if r.path.startswith("/.portalkit")][:1] == [403]
+    with DevServer(root, auth="u:p") as srv:
+        assert req(srv, "/.portalkit-deploy.json")[0] == 401        # auth comes first
+        assert req(srv, "/.portalkit-deploy.json", headers=basic("u:p"))[0] == 403
+        assert req(srv, "/data/manifest.json", headers=basic("u:p"))[0] == 200

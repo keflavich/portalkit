@@ -16,6 +16,7 @@ from portalkit.deploy.exposure import scan
 
 dmod = importlib.import_module("portalkit.deploy.deploy")
 bmod = importlib.import_module("portalkit.deploy.backup")
+hmod = importlib.import_module("portalkit.deploy.htaccess")
 
 FAM = "fam"
 BID = "20261010T120000Z-0123abcd"
@@ -300,6 +301,77 @@ def test_replace_refusals(world, tmp_path):
     s["portal"][0]["target_dir"] = str(world["target"])
     with pytest.raises(UsageError):
         run(world, s)
+
+
+# ---------------------------------------------------------------------------
+# .portalkit_backup/.htaccess (WPE4)
+# ---------------------------------------------------------------------------
+
+def test_replace_writes_backup_htaccess(world):
+    bdir = world["legacy"] / ".portalkit_backup"
+    res = run(world, dry_run=True)
+    assert res.plan.replace and not bdir.exists()               # dry run creates nothing
+    run(world)
+    h = bdir / ".htaccess"
+    assert h.read_text() == hmod.BACKUP_HTACCESS_TEXT and hmod.htaccess_owned(h)
+    assert hmod.has_deny_rule(bdir) and not hmod.has_cache_headers(bdir)
+    # every path in the backup tree is denied, seen from the legacy directory's URL
+    for p in bdir.rglob("*"):
+        rel = str(p.relative_to(world["legacy"]))
+        if p.name != ".htaccess":
+            assert hmod.denied(rel), rel
+    assert bmod.list_backups(world["legacy"]) == [BID]          # .htaccess is not a build
+    # a second build, and a rollback, keep the file
+    stage_portal(world["stage"], BID2, title="v2")
+    run(world, bid=BID2)
+    bmod.rollback(world["legacy"], BID2, target=world["target"])
+    assert h.read_text() == hmod.BACKUP_HTACCESS_TEXT
+    assert bmod.list_backups(world["legacy"]) == [BID, BID2]
+
+
+def test_backup_files_writes_htaccess_directly(world):
+    ld = world["legacy"]
+    bdir = ld / ".portalkit_backup"
+    assert bmod.backup_files(ld, BID, [{"file": "old_map.html", "mode": "stub"}],
+                             dry_run=True)[0]["file"] == "old_map.html"
+    assert not bdir.exists()
+    bmod.backup_files(ld, BID, [])                              # N=0 still makes the tree
+    assert (bdir / ".htaccess").read_text() == hmod.BACKUP_HTACCESS_TEXT
+    assert bmod.read_backup(ld, BID)["files"] == []
+    (bdir / ".htaccess").unlink()
+    (ld / "sub dir" / "ünï.html").write_text("x")
+    bmod.backup_files(ld, BID, [{"file": "sub dir/ünï.html", "mode": "stub"}])
+    assert (bdir / ".htaccess").read_text() == hmod.BACKUP_HTACCESS_TEXT
+    assert (bdir / BID / "sub dir" / "ünï.html").read_text() == "x"
+
+
+def test_replace_refuses_foreign_or_symlinked_backup_htaccess(world, tmp_path):
+    bdir = world["legacy"] / ".portalkit_backup"
+    bdir.mkdir()
+    (bdir / ".htaccess").write_text("Options +Indexes\n")
+    with pytest.raises(OwnershipConflict) as ei:
+        run(world)
+    assert ei.value.exit_code == 4 and any(".htaccess" in c for c in ei.value.conflicts)
+    # refused at planning: nothing was written to the target or the legacy directory
+    assert not world["target"].exists()
+    assert (world["legacy"] / "old_map.html").read_text() == LEGACY
+    assert (bdir / ".htaccess").read_text() == "Options +Indexes\n"
+    with pytest.raises(OwnershipConflict):
+        bmod.backup_files(world["legacy"], BID, [{"file": "old_map.html", "mode": "stub"}])
+    assert not (bdir / BID / "old_map.html").exists()
+    (bdir / ".htaccess").unlink()
+    victim = tmp_path / "victim"
+    victim.write_text("keep")
+    os.symlink(victim, bdir / ".htaccess")
+    with pytest.raises(SymlinkRefusal) as ei:
+        run(world)
+    assert ei.value.exit_code == 3 and victim.read_text() == "keep"
+    (bdir / ".htaccess").unlink()
+    bdir.rmdir()
+    os.symlink(tmp_path, bdir)
+    with pytest.raises(SymlinkRefusal):
+        run(world)
+    assert not world["target"].exists()
 
 
 def test_validate_backup_errors():
