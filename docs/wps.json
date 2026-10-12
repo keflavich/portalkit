@@ -558,7 +558,7 @@
    "tests/e2e/test_port_jwst_archive.py",
    "tests/py/test_no_checklist_write.py"
   ],
-  "description": "Two [[portal]] entries: the archive portal (secure, jwst/spectra/portal/unified) and the W51 archive_colors build (secure, w51/portal/archive_colors/unified) with the W51 photometry as context dataset. Spectra ids are derived from the x1d filename prefix (fixes 695/1539 stale idx). Band-coverage validity bits. One archive gallery with facets replaces 11 legacy galleries (the PNGs are public through the web/public/jwst/spectra symlink, so the gallery portal is public and links to the secure colour portal). Checklist annotate mode plus archive-checklist-diff; never writes jwst_archive_spectra_checklist.csv (test enforces)."
+  "description": "Two [[portal]] entries: the archive portal (secure, jwst/spectra/portal_unified) and the W51 archive_colors build (secure, w51/portal/archive_colors/unified) with the W51 photometry as context dataset. Spectra ids are derived from the x1d filename prefix (fixes 695/1539 stale idx). Band-coverage validity bits. One archive gallery with facets replaces 11 legacy galleries (the PNGs are public through the web/public/jwst/spectra symlink, so the gallery portal is public and links to the secure colour portal). Checklist annotate mode plus archive-checklist-diff; never writes jwst_archive_spectra_checklist.csv (test enforces)."
  },
  {
   "id": "WP29",
@@ -1130,5 +1130,88 @@
    "tests/e2e/test_port_nirspec2640.py"
   ],
   "description": "Adopt the framework features WPE5 and WPE6 just added (read their commits/diffs and docs/IMPLEMENTATION_NOTES.md):\n1. wd2: the wd2 manifold shows the nirspec2640 spectra through a foreign record set (secure->secure or public as appropriate per the two sites' visibility); drop any wd2 workaround for HST filters now in the registry; use default_frame / axes presets if the adapter worked around them.\n2. jwst_archive: the W51 archive_colors portal and the gallery portal reference the archive portal's spectrum shards as foreign records instead of their own ~15 MB copies (respect the visibility rule: a public gallery may not point at secure shards -- keep its copy if so, and record why).\n3. spherex: legacy dim alias map for the manifold kv-view hashes (m_F162M -> f162m, c_F162M_F210M -> f162m-f210m etc.), the 'spherex-colours' grammar for colours.html, sedcurve channels named SPHEREx/IRS.\n4. nirspec6927: switch to the shared portalkit/legacy/nirspec.py helpers (added by WP25 for nirspec2640) instead of its own copies; keep output identical (compare a limit=50 build before/after: same served JSON except hashes).\n5. nirspec2640: only if needed to serve as a foreign record base (stable key, documented URL).\nRun each touched family's adapter tests and its e2e test; run one bounded build per touched family through `portalkit check --gate G2`."
+ },
+ {
+  "id": "WPE8",
+  "title": "Wave E: JS follow-ups from WPE5-7/WP29-31 (foreign has/get, wavelength speed, axes frame, hash goldens)",
+  "depends_on": [],
+  "files": [
+   "web/js/panes/spectrum2d.js",
+   "web/js/ui/hover.js",
+   "web/js/panes/wavelength.js",
+   "web/js/panes/manifold.js",
+   "web/js/math/tour.js",
+   "web/js/data/hub.js",
+   "web/js/core/legacyhash.js",
+   "tests/js/",
+   "tests/fixtures/legacy_snippets/hash_vectors.json",
+   "docs/js.md"
+  ],
+  "description": "Contract issues recorded by WPE5, WPE6, WPE7, WP29, WP30 and WP31 (full text: /blue/adamginsburg/adamginsburg/tmp/claude-3663/-orange-adamginsburg-jwst-spectra/048f7b00-b5fa-4299-b8f1-b80065e6a3d8/scratchpad/unify/waveE5_issues.txt). Each fix needs a test.\n1. spectrum2d.js (~400) and ui/hover.js (~430) use the optimistic sync rs.has(id); for foreign id_column record sets await rs.hasRecord(id) when available, and treat a null get() for the focused row as 'no record' (as spectrum1d does).\n2. hub.js: resolve PNG-mode sidecars ({png}) of a foreign record set against entry.base, so non-boot users of createHub match boot.\n3. wavelength.js reads ?speed= from location.search, but boot strips consumed query keys; read the store key 'speed' (default options.speed or 1) and subscribe to it.\n4. manifold.js: accept an axes preset (kind 'axes', data {x, y, xr?, yr?}) as the frame in state 'frame:<id>'.preset and options.frame (config.py already validates this). tour.js orthonormalizes every frame, so an axes preset whose x and y share a band (CMD: a-b vs a) is distorted: render axes-preset frames as a plain 2-D projection of the two dims (no orthonormalization) and resume touring from the nearest orthonormal frame when the tour starts.\n5. hash_vectors.json (shared JS/Python parity goldens): add vectors for dim_alias, spherex-colours and ?speed= (wavelength and kv-view), including spherex-colours on a one-scatter page (band/cmd dropped). Then remove the SPEED_DIVERGENT / PENDING_VECTORS work-arounds from tests/js/legacyhash.test.mjs. tests/py/test_hashmap.py carries matching tables: WPE9 (concurrent, owns tests/py) removes them; list in contract_issues exactly what changed.\n6. legacyhash.js gc-query: the legacy default CMD (a/b/m, Treasury y-band toggle, p=ccd x1..y2) must reach the scatter pane named by page.legacy.cmd_pane when present (gc_manifold pages put the CMD in scatter pane 'cmd'), instead of only <manifold>.frame. WPE9 mirrors this in the Python mapper from this description: the key is page.legacy.cmd_pane (string pane id); with it, a/b/m set <cmd_pane>.x = a-b and <cmd_pane>.y = m, and p=ccd x1..y2 still go to <manifold>.frame.\nUpdate docs/js.md."
+ },
+ {
+  "id": "WPE9",
+  "title": "Wave E: Python follow-ups from WPE5-7/WP29-31 (gc_manifest metadata+paths, related links, preset roles, devserver mounts, caps, exposure tests, docs)",
+  "depends_on": [],
+  "files": [
+   "portalkit/legacy/gc_manifest.py",
+   "portalkit/legacy/hashmap.py",
+   "portalkit/build.py",
+   "portalkit/bundle/images.py",
+   "portalkit/caps.py",
+   "portalkit/config.py",
+   "portalkit/deploy/devserver.py",
+   "portalkit/cli.py",
+   "sites/gc_monitor.toml",
+   "tests/py/",
+   "tests/conftest.py",
+   "docs/ARCHITECTURE.md",
+   "docs/IMPLEMENTATION_NOTES.md",
+   "docs/adapters.md",
+   "docs/deploy.md"
+  ],
+  "description": "Contract issues recorded by WPE5, WPE6, WPE7, WP29, WP30 and WP31 (full text: /blue/adamginsburg/adamginsburg/tmp/claude-3663/-orange-adamginsburg-jwst-spectra/048f7b00-b5fa-4299-b8f1-b80065e6a3d8/scratchpad/unify/waveE5_issues.txt). Each fix needs a test.\n1. legacy/gc_manifest.write drops most CatalogSpec metadata from the served pk-catalog manifest (presets incl. the red_clump filter and cmd/ccd axes presets, virtual dims, column filter ids, id/search metadata, ManifoldSpec frames/default_frame); merge them. It also writes absolute local paths into provenance.foreign.manifest and provenance.gc_*, so `portalkit check --gate G2` fails for every gc_manifold portal: label them with build.PathLabeler.\n2. build.py portal_doc fills `related` from fb.site.portals without checking that each portal was built (gc_manifold skips sgrb2_manifold): include only built portals.\n3. sites/gc_monitor.toml: register the jwst-gc monitor with status = \"excluded\" per section 4.1 so readmes may link it; adjust the site loader if it needs a minimal family entry.\n4. bundle/images.py gallery presets: emit preset 'role' (and data.role) when the Preset carries one; gallery.js applies it.\n5. caps.py auto layout collapses the foreign spectrum1d pane on wd2_manifold; a page's only spectrum view should open expanded (and an explicit PaneSpec collapsed=False must win).\n6. deploy/devserver.py: option to mount sibling portals at deploy-relative URL paths (e.g. mounts={'/jwst/spectra/portal_unified/': <staged dir>}; CLI --mount PREFIX=DIR) so foreign bases like '../../../../jwst/spectra/portal_unified/data/' resolve in e2e without per-test routing; expose it to tests via a fixture in tests/conftest.py. Denied-path 403 rules apply inside mounts too.\n7. tests/py/test_exposure.py test_stamps_detect_permission_change and test_stamps_detect_link_swap_with_restored_mtime fail when TMPDIR is on /blue (Lustre); make them robust (skip with reason when a probe shows the filesystem does not update ctime on chmod/link swap).\n8. legacy/hashmap.py: mirror WPE8 item 6 (page.legacy.cmd_pane) and the ?speed= handling; drop the SPEED_DIVERGENT/PENDING tables in tests/py/test_hashmap.py once the shared hash_vectors.json carries the vectors (WPE8 owns that file and runs concurrently; if it is not updated when you finish, keep the tables and say so). config.py validates page.legacy.cmd_pane names a scatter pane of the page.\n9. ARCHITECTURE section 6.2/6.4: list store key 'speed', 'layers:<pane>' {raster?, ovl?}, hash keys <pane>.xr/.yr/.raster/.ovl, speed, and page.legacy.cmd_pane. docs/wps.json is NOT yours.\nPut needed JS changes in contract_issues."
+ },
+ {
+  "id": "WP32",
+  "title": "Adapter: extras jwst_gc_aladin explorer + cmd_explorer pre-binned explorer",
+  "depends_on": [],
+  "files": [
+   "adapters/jwst_gc_aladin.py",
+   "adapters/cmd_explorer.py",
+   "sites/jwst_gc_aladin.toml",
+   "sites/cmd_explorer.toml",
+   "tests/adapters/test_jwst_gc_aladin.py",
+   "tests/adapters/test_cmd_explorer.py",
+   "tests/e2e/test_port_extras2.py"
+  ],
+  "description": "The two 'extras' rows of ARCHITECTURE section 14 / docs/port_table.json that WP31 could not build (no files were assigned). Locate the legacy pages and generators (search /orange/adamginsburg to depth ~6 for jwst_gc_aladin.html and cmd_explorer*; the inventory says jwst_gc_aladin.html uses catalog HiPS from jwst_gc_pipeline/cmz/hipsgen.py via Hipsgen-cat, and cmd_explorer pre-bins 4.7M stars into a ~1.4 MB JSON). jwst_gc_aladin: explorer [sky] with catalog-HiPS layers as overlays and GC catalogs via skyWindow; flags sky cat skycat dens. cmd_explorer: explorer with pre-binned density grids as a first-class dataset (bundle/density.py); flags multi cat num2 mags2 num3 dens; brushes, linked selection, selectable axes. Follow committed adapters (adapters/hips_tours.py, adapters/spitzer_spectra.py, adapters/robitaille.py) and docs/adapters.md. Contract tests at limit 50, one e2e file, one bounded build through `portalkit check --gate G2`. If a legacy source cannot be found, report it in contract_issues and implement what the data allows."
+ },
+ {
+  "id": "WPE10",
+  "title": "Wave E: adapters adopt WPE8/WPE9 (gc_manifold metadata, spherex default frame, jwst_archive preset roles, devserver mounts)",
+  "depends_on": [
+   "WPE8",
+   "WPE9"
+  ],
+  "files": [
+   "adapters/gc_manifold.py",
+   "adapters/spherex.py",
+   "adapters/jwst_archive.py",
+   "adapters/wd2.py",
+   "sites/gc_manifold.toml",
+   "sites/spherex.toml",
+   "sites/jwst_archive.toml",
+   "sites/wd2.toml",
+   "tests/adapters/test_gc_manifold.py",
+   "tests/adapters/test_spherex.py",
+   "tests/adapters/test_jwst_archive.py",
+   "tests/adapters/test_wd2.py",
+   "tests/e2e/test_port_gc_manifold.py",
+   "tests/e2e/test_port_spherex.py",
+   "tests/e2e/test_port_jwst_archive.py",
+   "tests/e2e/test_port_wd2.py"
+  ],
+  "description": "Adopt WPE8/WPE9 (read their diffs and docs/IMPLEMENTATION_NOTES.md):\n1. gc_manifold: remove the GC_MANIFEST_GAP_CAPS/FLAGS work-arounds and the xfail on test_fixture_build_full_g2 now that gc_manifest keeps presets/frames and labels paths; set page.legacy.cmd_pane for the CMD scatter pane; serve the red-clump preset as a manifest preset.\n2. spherex: manifold.default_frame 'default' names no preset; emit a real preset key.\n3. jwst_archive: gallery presets carry role through images.py (drop the per-file '&role=' stub work-around only if equivalent).\n4. wd2 and jwst_archive e2e: use the devserver sibling mount instead of per-test routing for foreign bases.\nRun each touched family's adapter and e2e tests and one bounded build through `portalkit check --gate G2`."
  }
 ]
