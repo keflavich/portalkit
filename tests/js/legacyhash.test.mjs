@@ -24,9 +24,21 @@ function decodeFrame(s) {
   return out;
 }
 
+// Grammars whose shared vectors are pending in hash_vectors.json (owned by the fixture WP); this
+// file covers them with its own cases below until the vectors land.
+const PENDING_VECTORS = new Set(['spherex-colours']);
+
+// Known JS / Python divergence: these shared vectors predate the canonical `speed` key
+// (contract (D)). JS maps their ?speed=2 to speed=2; the vectors and portalkit/legacy/hashmap.py
+// still consume and drop it. Remove the entries once hash_vectors.json and hashmap.py are updated.
+const SPEED_DIVERGENT = new Map([
+  ['wavelength kv + speed', {speed: '2'}],
+  ['wavelength speed only on canonical hash', {speed: '2'}],
+]);
+
 test('vectors cover every grammar', () => {
   const used = new Set(VECTORS.cases.flatMap((c) => c.grammars));
-  for (const g of GRAMMAR_NAMES) assert.ok(used.has(g), `no vector for ${g}`);
+  for (const g of GRAMMAR_NAMES) assert.ok(used.has(g) || PENDING_VECTORS.has(g), `no vector for ${g}`);
   assert.deepEqual([...GRAMMAR_NAMES].sort(), Object.keys(GRAMMARS).sort());
 });
 
@@ -34,7 +46,10 @@ for (const c of VECTORS.cases) {
   test(`vector: ${c.name}`, () => {
     const r = mapLegacy(c.grammars, c.loc);
     assert.deepEqual(r.consumedSearch, c.consumedSearch);
-    assert.deepEqual(Object.keys(r.hash).sort(), Object.keys(c.hash).sort());
+    const want = Object.assign({}, c.hash);
+    if (SPEED_DIVERGENT.has(c.name) && !('speed' in want)) Object.assign(want, SPEED_DIVERGENT.get(c.name));
+    assert.deepEqual(Object.keys(r.hash).sort(), Object.keys(want).sort());
+    if ('speed' in want) assert.equal(r.hash.speed, want.speed);
     for (const [k, v] of Object.entries(c.hash)) {
       if (k === 'sel' && v.startsWith('r:')) {
         // deflate output differs between zlib and selection.js; compare the recipe
@@ -54,7 +69,7 @@ test('mapped hashes are canonical', () => {
   for (const c of VECTORS.cases) {
     const r = mapLegacy(c.grammars, c.loc);
     for (const k of Object.keys(r.hash)) {
-      assert.ok(CANONICAL_KEYS.includes(k) || /^.+\.(x|y|frame)$/.test(k), `${c.name}: ${k}`);
+      assert.ok(CANONICAL_KEYS.includes(k) || /^.+\.(x|y|frame|xr|yr|raster|ovl)$/.test(k), `${c.name}: ${k}`);
     }
   }
 });
@@ -85,8 +100,9 @@ test('codecs', () => {
 });
 
 test('no grammars, empty location', () => {
-  assert.deepEqual(mapLegacy([], {hash: '#abc'}), {hash: {}, consumedSearch: []});
-  assert.deepEqual(mapLegacy(['bare-name'], {}), {hash: {}, consumedSearch: []});
+  assert.deepEqual(mapLegacy([], {hash: '#abc'}), {hash: {}, consumedSearch: [], fromHash: false});
+  assert.deepEqual(mapLegacy(['bare-name'], {}), {hash: {}, consumedSearch: [], fromHash: false});
+  assert.equal(mapLegacy(['bare-name'], {hash: '#x'}).fromHash, true);
   assert.deepEqual(mapLegacy('bare-name', {hash: '#x'}).hash, {id: 'x'});
 });
 

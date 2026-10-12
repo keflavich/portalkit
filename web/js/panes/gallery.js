@@ -3,7 +3,8 @@
 //
 // A virtualized card grid over an image set (images.json, pk-images/1). Only the cards of the
 // visible rows exist in the DOM and images load lazily. The toolbar has the role switcher
-// (store `role`), facet presets, sort, text search and the annotate toggle; the facet sidebar
+// (store `role`), facet presets (a preset may also set the role: `{key, label, facets, role}`
+// or `{key, label, data: {facets, role}}`), sort, text search and the annotate toggle; the facet sidebar
 // shows each facet value with its count under the other facets (store `facets`). When the image
 // set is joined to a catalog (`catalog` in images.json or the dataset ref), the grid also follows
 // that catalog's filters (vis:<cat>), marks selected sources, and focus/hover use catalog rows,
@@ -224,6 +225,59 @@ function el(tag, cls, text) {
 
 // ------------------------------------------------------------------ pane
 
+/** Facets with sorted keys and sorted, non-empty string value lists (comparison form). */
+export function normalizeFacets(f) {
+  const out = {};
+  for (const k of Object.keys(f && typeof f === 'object' ? f : {}).sort()) {
+    const v = Array.isArray(f[k]) ? f[k].map(String).sort() : [];
+    if (v.length) out[k] = v;
+  }
+  return out;
+}
+
+/** Facets of a gallery preset: `facets`, else `data.facets`, else {}. */
+export function presetFacets(p) {
+  if (!p || typeof p !== 'object') return {};
+  if (p.facets && typeof p.facets === 'object') return p.facets;
+  if (p.data && typeof p.data === 'object' && p.data.facets && typeof p.data.facets === 'object') return p.data.facets;
+  return {};
+}
+
+/** Role of a gallery preset: `role`, else `data.role`, else null. */
+export function presetRole(p) {
+  if (!p || typeof p !== 'object') return null;
+  const r = typeof p.role === 'string' && p.role ? p.role : (p.data && typeof p.data.role === 'string' && p.data.role ? p.data.role : null);
+  return r;
+}
+
+/**
+ * Key of the preset that matches the current facets and role: its facets equal `facets`
+ * (normalizeFacets) and it names no role or names `role`. A preset naming the current role
+ * wins over one naming none. '' when none matches.
+ */
+export function matchPreset(presets, facets, role) {
+  const cur = JSON.stringify(normalizeFacets(facets));
+  let loose = '';
+  for (const p of presets || []) {
+    if (!p || JSON.stringify(normalizeFacets(presetFacets(p))) !== cur) continue;
+    const r = presetRole(p);
+    if (r !== null && role !== null && role !== undefined && r === role) return p.key;
+    if (r === null && !loose) loose = p.key;
+  }
+  return loose;
+}
+
+/**
+ * Store patch for choosing preset `p` (null: "All images"): its facets, plus its role when
+ * that role is one of `roles` (the role keys the pane offers; any role when roles is null).
+ */
+export function presetPatch(p, roles = null) {
+  const patch = {facets: p ? normalizeFacets(presetFacets(p)) : {}};
+  const r = p ? presetRole(p) : null;
+  if (r !== null && (!Array.isArray(roles) || roles.includes(r))) patch.role = r;
+  return patch;
+}
+
 export function mount(root, ctx) {
   const cfg = ctx.config || {};
   const store = ctx.store;
@@ -387,30 +441,25 @@ export function mount(root, ctx) {
     }
     presetSel.hidden = false;
     presetSel.append(new Option('All images', ''));
-    const cur = JSON.stringify(normFacets(facets()));
-    let matched = '';
-    for (const p of presets) {
-      presetSel.append(new Option(p.label || p.key, p.key));
-      if (JSON.stringify(normFacets(p.facets || {})) === cur) matched = p.key;
-    }
+    for (const p of presets) presetSel.append(new Option(p.label || p.key, p.key));
+    const matched = matchPreset(presets, facets(), role());
     if (!matched && Object.keys(normFacets(facets())).length) presetSel.append(new Option('Custom', '__custom'));
     presetSel.value = matched || (Object.keys(normFacets(facets())).length ? '__custom' : '');
   }
 
-  function normFacets(f) {
-    const out = {};
-    for (const k of Object.keys(f || {}).sort()) {
-      const v = Array.isArray(f[k]) ? f[k].map(String).sort() : [];
-      if (v.length) out[k] = v;
-    }
-    return out;
+  const normFacets = normalizeFacets;
+
+  /** Role keys the pane offers (doc roles, limited to options.roles when given). */
+  function roleKeys() {
+    return ((doc && doc.roles) || []).map((r) => r && r.key)
+      .filter((k) => k && (!Array.isArray(cfg.roles) || !cfg.roles.length || cfg.roles.includes(k)));
   }
 
   presetSel.addEventListener('change', () => {
     const key = presetSel.value;
     if (key === '__custom') return;
     const p = ((doc && doc.presets) || []).find((x) => x.key === key);
-    store.set({facets: p ? normFacets(p.facets || {}) : {}}, {source: ctx.id, history: true});
+    store.set(presetPatch(p || null, roleKeys()), {source: ctx.id, history: true});
   });
 
   function renderSort() {
@@ -991,6 +1040,7 @@ export function mount(root, ctx) {
   offs.push(store.on(['facets'], () => recompute()));
   offs.push(store.on(['role'], () => {
     renderRoles();
+    renderPresets();
     paint(true);
     refreshSet(setId);
   }));

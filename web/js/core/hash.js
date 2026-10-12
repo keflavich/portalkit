@@ -11,8 +11,13 @@
 //                                 default_off column, IMPLEMENTATION_NOTES 104)
 //   <pane>.x=<expr>, <pane>.y=<expr>   axes:<pane>.x / .y
 //   <pane>.frame=<preset>|b64:<b64url(f32 LE F)>   frame:<pane>
+//   <pane>.xr=<lo>,<hi>, <pane>.yr=<lo>,<hi>     axes:<pane>.xr / .yr (zoomed axis ranges)
+//   <pane>.raster=0|1             layers:<pane>.raster (raster layers off / on)
+//   <pane>.ovl=<id>,<id> | -      layers:<pane>.ovl (plot overlay layers shown; '-' none;
+//                                 absent = every overlay of the pane options)
 //   c=<by>[~<cmap>[~<lo>~<hi>]]   color
 //   av=, rv=, dm=                 numbers
+//   speed=<x>                     speed (tour / playback speed multiplier, default 1)
 //   tpl=<key>[~<grid>[~<scale>[~<band,band>]]]   template
 //   feat=<fam>,<fam>              features
 //   spec=<b64url(JSON)>           spec without xr;   wl=<w0>,<w1>  spec.xr
@@ -44,15 +49,16 @@ import {b64urlEncode, b64urlDecode, utf8Encode, utf8Decode, encodeHashValue} fro
 
 /** Stable key order for formatHash (section 6.2 table order). Pane-scoped keys sit after `f`. */
 export const HASH_ORDER = Object.freeze([
-  'id', 'sel', 'f', '@pane', 'c', 'av', 'rv', 'dm', 'tpl', 'feat', 'spec', 'wl',
+  'id', 'sel', 'f', '@pane', 'c', 'av', 'rv', 'dm', 'speed', 'tpl', 'feat', 'spec', 'wl',
   'sky', 'base', 'ovl', 'rung', 'beat', 'role', 'fac', 'lb', 'view',
 ]);
-const PANE_SUFFIX_ORDER = ['x', 'y', 'frame'];
-const PANE_KEY_RE = /^(.+)\.(x|y|frame)$/;
+const PANE_SUFFIX_ORDER = ['x', 'y', 'frame', 'xr', 'yr', 'raster', 'ovl'];
+/** Pane-scoped hash keys `<pane>.<suffix>`. */
+export const PANE_KEY_RE = /^(.+)\.(x|y|frame|xr|yr|raster|ovl)$/;
 
 /** Store keys that never appear in the hash are ignored by bindHash. */
 const SIMPLE_STORE_KEYS = new Set([
-  'focus', 'color', 'av', 'rv', 'dm', 'template', 'features', 'spec', 'sky', 'rung', 'beat',
+  'focus', 'color', 'av', 'rv', 'dm', 'speed', 'template', 'features', 'spec', 'sky', 'rung', 'beat',
   'role', 'facets', 'lightbox', 'layout',
 ]);
 
@@ -139,7 +145,10 @@ export const CLEARED = '-';
  * bindHash. `ovl` writes its own marker: stateToHash gives `ovl=-` for an explicitly empty
  * overlay list (IMPLEMENTATION_NOTES 72), and an absent overlay list means the layout default.
  */
-const NO_CLEAR_KEYS = new Set(['sel', 'av', 'rv', 'dm', 'ovl']);
+const NO_CLEAR_KEYS = new Set(['sel', 'av', 'rv', 'dm', 'speed', 'ovl']);
+
+/** Pane-key suffixes bindHash never writes the CLEARED marker for (see compute()). */
+const NO_CLEAR_SUFFIXES = new Set(['frame', 'raster', 'ovl']);
 
 /**
  * Number -> short decimal text. Magnitudes >= 1e-3 keep 1e-6 absolute precision (coordinates,
@@ -225,7 +234,7 @@ export function skyImplied(state) {
 /** Is `key` a store key that bindHash mirrors into the hash for this primary dataset? */
 export function isHashStoreKey(key, primaryDs) {
   if (SIMPLE_STORE_KEYS.has(key)) return true;
-  if (key.startsWith('axes:') || key.startsWith('frame:')) return true;
+  if (key.startsWith('axes:') || key.startsWith('frame:') || key.startsWith('layers:')) return true;
   if (primaryDs && (key === `sel:${primaryDs}` || key === `filters:${primaryDs}`)) return true;
   return false;
 }
@@ -255,6 +264,19 @@ export function stateToHash(state, opts = {}) {
       if (!a) continue;
       if (a.x !== undefined && a.x !== null && a.x !== '') out[`${pane}.x`] = String(a.x);
       if (a.y !== undefined && a.y !== null && a.y !== '') out[`${pane}.y`] = String(a.y);
+      for (const r of ['xr', 'yr']) {
+        const v = a[r];
+        if (Array.isArray(v) && v.length === 2 && v.every(Number.isFinite)) out[`${pane}.${r}`] = `${num(v[0])},${num(v[1])}`;
+      }
+    } else if (key.startsWith('layers:')) {
+      const pane = key.slice(7);
+      const L = state[key];
+      if (!L || typeof L !== 'object') continue;
+      if (typeof L.raster === 'boolean') out[`${pane}.raster`] = L.raster ? '1' : '0';
+      if (Array.isArray(L.ovl)) {
+        const ids = L.ovl.filter((o) => o !== null && o !== undefined && o !== '').map(String);
+        out[`${pane}.ovl`] = ids.length ? ids.join(',') : CLEARED;
+      }
     } else if (key.startsWith('frame:')) {
       const pane = key.slice(6);
       const fr = state[key];
@@ -272,6 +294,7 @@ export function stateToHash(state, opts = {}) {
   for (const k of ['av', 'rv', 'dm']) {
     if (typeof state[k] === 'number' && Number.isFinite(state[k])) out[k] = num(state[k]);
   }
+  if (typeof state.speed === 'number' && Number.isFinite(state.speed) && state.speed > 0) out.speed = num(state.speed);
   const tpl = state.template;
   if (tpl && tpl.key) {
     const scale = tpl.scale === undefined || tpl.scale === null ? '' : (typeof tpl.scale === 'number' ? num(tpl.scale) : String(tpl.scale));
@@ -346,7 +369,14 @@ export function hashToPatch(h, opts = {}) {
       if (key === 'sky') viewGiven = true;
       else if (key === 'ovl') ovlGiven = true;
       if (pm) {
-        if (pm[2] !== 'frame') {
+        if (pm[2] === 'ovl') {
+          // `<pane>.ovl=-`: explicitly no overlay layers
+          patch[`layers:${pm[1]}`] = Object.assign({}, cur(`layers:${pm[1]}`) || {}, {ovl: []});
+        } else if (pm[2] === 'raster') {
+          const prev = Object.assign({}, cur(`layers:${pm[1]}`) || {});
+          delete prev.raster;
+          patch[`layers:${pm[1]}`] = prev;
+        } else if (pm[2] !== 'frame') {
           const prev = Object.assign({}, cur(`axes:${pm[1]}`) || {});
           prev[pm[2]] = null;
           patch[`axes:${pm[1]}`] = prev;
@@ -378,6 +408,21 @@ export function hashToPatch(h, opts = {}) {
         }
         if (!prev.dims) prev.dims = [];
         patch[`frame:${pane}`] = prev;
+      } else if (pm[2] === 'xr' || pm[2] === 'yr') {
+        const parts = v.split(',').map(parseNum);
+        const prev = Object.assign({}, cur(`axes:${pane}`) || {});
+        prev[pm[2]] = parts.length === 2 && parts.every((x) => x !== undefined) && parts[0] !== parts[1] ? parts : null;
+        patch[`axes:${pane}`] = prev;
+      } else if (pm[2] === 'raster') {
+        const prev = Object.assign({}, cur(`layers:${pane}`) || {});
+        if (v === '0' || v === 'off' || v === 'false') prev.raster = false;
+        else if (v === '1' || v === 'on' || v === 'true') prev.raster = true;
+        else continue;
+        patch[`layers:${pane}`] = prev;
+      } else if (pm[2] === 'ovl') {
+        const prev = Object.assign({}, cur(`layers:${pane}`) || {});
+        prev.ovl = v.split(',').map((t) => t.trim()).filter(Boolean);
+        patch[`layers:${pane}`] = prev;
       } else {
         const prev = Object.assign({}, cur(`axes:${pane}`) || {});
         prev[pm[2]] = v;
@@ -419,6 +464,11 @@ export function hashToPatch(h, opts = {}) {
       case 'dm': {
         const n = parseNum(v);
         if (n !== undefined) patch[key] = n;
+        break;
+      }
+      case 'speed': {
+        const n = parseNum(v);
+        if (n !== undefined && n > 0) patch.speed = n;
         break;
       }
       case 'tpl': {
@@ -642,7 +692,8 @@ const QUIET_FOCUS_SOURCES = new Set(['broadcast']);
  * selection instead of clearing it. Store event 'hash:sel-dropped' {ds, length} fires when a
  * written hash starts leaving `sel` out for exceeding HASH_MAX_CHARS (once per transition).
  * Returns an unbind function with helpers: flush(), touch(), replaceNow(), compute() -> string,
- * computeInfo() -> {str, dropped, omitted}, selDropped() -> boolean (last write).
+ * computeInfo() -> {str, dropped, omitted}, selDropped() -> boolean (last write),
+ * setDefaults(defaults) (replace the page defaults compared against).
  */
 export function bindHash(store, opts = {}) {
   const win = opts.win || (typeof window !== 'undefined' ? window : null);
@@ -653,7 +704,7 @@ export function bindHash(store, opts = {}) {
   const selection = opts.selection || null;
   const setT = (fn, ms) => (win.setTimeout ? win.setTimeout(fn, ms) : setTimeout(fn, ms));
   const clearT = (t) => (win.clearTimeout ? win.clearTimeout(t) : clearTimeout(t));
-  const defaultsHash = opts.defaults ? pick(stateToHash(opts.defaults, {primaryDs}), filter) : null;
+  let defaultsHash = opts.defaults ? pick(stateToHash(opts.defaults, {primaryDs}), filter) : null;
   let timer = null;
   let applying = false;
   let lastFocusId = focusId(store.get('focus'));
@@ -681,7 +732,8 @@ export function bindHash(store, opts = {}) {
       // a view implied by the beat is left out, not cleared relative to a default view
       const implied = skyImplied(snap);
       for (const k of Object.keys(defaultsHash)) {
-        if (k in obj || NO_CLEAR_KEYS.has(k) || k.endsWith('.frame') || (k === 'sky' && implied.view)) continue;
+        const pk = PANE_KEY_RE.exec(k);
+        if (k in obj || NO_CLEAR_KEYS.has(k) || (pk && NO_CLEAR_SUFFIXES.has(pk[2])) || (k === 'sky' && implied.view)) continue;
         obj[k] = k === 'c' ? 'none' : CLEARED;
       }
       // with a beat set, an explicit view / overlay set equal to the page default is still
@@ -798,6 +850,25 @@ export function bindHash(store, opts = {}) {
         patch[sk] = null;
       }
     }
+    // Pane zoom ranges and layer toggles absent from the hash (and from the defaults): back to
+    // the pane's own default (no range, the option's layers).
+    const absent = (hk) => filter(hk) && !(hk in h) && !(defaultsHash && hk in defaultsHash);
+    for (const sk of Object.keys(snap)) {
+      const isAxes = sk.startsWith('axes:');
+      if (!isAxes && !sk.startsWith('layers:')) continue;
+      const pane = sk.slice(isAxes ? 5 : 7);
+      const base = sk in patch ? patch[sk] : snap[sk];
+      if (!base || typeof base !== 'object') continue;
+      let next = null;
+      for (const f of isAxes ? ['xr', 'yr'] : ['raster', 'ovl']) {
+        const has = isAxes ? Array.isArray(base[f]) : base[f] !== undefined;
+        if (!has || !absent(`${pane}.${f}`)) continue;
+        next = next || Object.assign({}, base);
+        if (isAxes) next[f] = null;
+        else delete next[f];
+      }
+      if (next) patch[sk] = next;
+    }
     applying = true;
     try {
       store.set(patch, {source: 'hash'});
@@ -857,6 +928,11 @@ export function bindHash(store, opts = {}) {
     write(false);
   };
   unbind.selDropped = () => selDropped;
+  // Replace the page defaults (e.g. once a manifest supplies a pane's default frame preset);
+  // the next write compares against them. Nothing is written by the call itself.
+  unbind.setDefaults = (defaults) => {
+    defaultsHash = defaults ? pick(stateToHash(defaults, {primaryDs}), filter) : null;
+  };
   unbind.compute = () => compute().str;
   unbind.computeInfo = () => {
     const r = compute();

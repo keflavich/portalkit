@@ -21,7 +21,9 @@
 // layers ([{url, extent: [x0, x1, y_bottom, y_top], x?, y?, cell?, opacity?}], matplotlib
 // extent order) are drawn under the points; `x` / `y` bind a layer to an axis pair and `cell`
 // to a grid cell (an unbound layer belongs to the single plot). Binned-statistic grids of the
-// manifest (`density[].stat`) for the current axes can be chosen as a background in the bar.
+// manifest (`density[].stat`) for the current axes can be chosen as a background in the bar;
+// the list also offers the binned-statistic grids of the context catalogs (`<ds>::<key>`).
+// A toolbar button (shown when the pane has raster layers) turns the rasters on and off.
 // `grid: [[x, y], ...]` shows small multiples with the same layers per cell (rasters, context
 // density, points or density, hollow_if, overlays); each cell can be expanded (focused and
 // popped out); closing the pop-out returns to the grid. An empty `grid` gives a single plot.
@@ -38,7 +40,8 @@
 //
 // Store: axes:<pane> {x, y, xlog, ylog, xinv, yinv, xr?, yr?} (xr / yr written when a zoom or
 // pan settles), color, av, rv, dm, filters:<ds> (via chips / legend), vis:<ds>, sel:<ds>,
-// focus, hover, tier:<pane>, layout. Distance modulus: dm folds into the axis constant
+// focus, hover, tier:<pane>, layout, layers:<pane> {raster?: false hides the raster layers,
+// ovl?: overlay ids shown (absent = all of options.overlays)}. Distance modulus: dm folds into the axis constant
 // (math/fold.js, section 7.3) on linear axes; the GL camera is shifted with foldCamera and
 // worker shapes / picks / bins are un-shifted, so recipes stay in catalog units. Overlay tracks
 // get dm = 0 because the data already carry it (IMPLEMENTATION_NOTES 37).
@@ -54,7 +57,7 @@ import {
   prepareCanvas, tokensOf, drawAxes, drawPoints, drawFocusRing, drawDensityGrid, toSVG, cmapColor,
 } from '../plot/canvas2d.js';
 import {attachBrush, drawBrushPreview, eventToViewPx} from '../plot/brushui.js';
-import {resolveOverlays, drawOverlays} from '../plot/overlays.js';
+import {resolveOverlays, drawOverlays, overlaySlug} from '../plot/overlays.js';
 import {XYRenderer} from '../gl/xyrenderer.js';
 import {XY_VERTEX_BYTES} from '../gl/budget.js';
 import {fold, oneHotRows, scatterDims, compileLinear, foldCamera} from '../math/fold.js';
@@ -517,6 +520,65 @@ export function contextDatasets(ctx, ds) {
 }
 
 /**
+ * Layer state of a scatter pane from store `layers:<pane>` ({raster?: bool, ovl?: string[]}):
+ * {raster: rasters shown (default true), ovl: overlay ids shown or null for all}.
+ */
+export function layerState(v) {
+  const o = v && typeof v === 'object' ? v : {};
+  return {raster: o.raster !== false, ovl: Array.isArray(o.ovl) ? o.ovl.map(String) : null};
+}
+
+/**
+ * Overlay layers shown for `ovl` (layerState().ovl): all when ovl is null, else the layers whose
+ * id (or its slug) is listed; listed ids are compared as given and as slugs, so a track listed
+ * by its label matches the resolved layer id.
+ */
+export function visibleOverlays(layers, ovl) {
+  const list = Array.isArray(layers) ? layers : [];
+  if (!Array.isArray(ovl)) return list;
+  const want = new Set();
+  for (const k of ovl) { want.add(String(k)); want.add(overlaySlug(k)); }
+  return list.filter((l) => l && (want.has(String(l.id)) || want.has(overlaySlug(l.id)) || (l.name && want.has(overlaySlug(l.name)))));
+}
+
+/** Store patch value for `layers:<pane>` with the raster switch set to `on`. */
+export function withRaster(v, on) {
+  const o = {...(v && typeof v === 'object' ? v : {})};
+  if (on) delete o.raster; else o.raster = false;
+  return o;
+}
+
+/** Separator of a context catalog's binned-statistic option value: `<ds>::<grid key>`. */
+export const CTX_STAT_SEP = '::';
+
+/**
+ * Binned-statistic grids (manifest density[] entries with a `stat` other than 'count') for the
+ * axes `ax` ({x, y, xlog?, ylog?}; linear axes only) of the pane's own catalog and of its
+ * context catalogs. ctxList: [{ds, manifest}] (context catalogs already open). Returns
+ * [{value, ds, grid}]: own grids use the grid key as value (ds null), context grids
+ * `<ds>::<key>`.
+ */
+export function statGridOptions(ownManifest, ctxList, ax) {
+  if (!ax || !ax.x || !ax.y || ax.xlog || ax.ylog) return [];
+  const match = (m) => (m && Array.isArray(m.density) ? m.density : [])
+    .filter((g) => g && g.key && g.stat && g.stat !== 'count' && g.x === ax.x && g.y === ax.y);
+  const out = match(ownManifest).map((grid) => ({value: grid.key, ds: null, grid}));
+  for (const c of ctxList || []) {
+    if (!c || !c.ds) continue;
+    for (const grid of match(c.manifest)) out.push({value: `${c.ds}${CTX_STAT_SEP}${grid.key}`, ds: c.ds, grid});
+  }
+  return out;
+}
+
+/** {ds, key} of a binned-statistic option value (ds null for the pane's own catalog). */
+export function parseStatValue(value, ctxIds = []) {
+  const v = String(value || '');
+  const k = v.indexOf(CTX_STAT_SEP);
+  if (k > 0 && ctxIds.includes(v.slice(0, k))) return {ds: v.slice(0, k), key: v.slice(k + CTX_STAT_SEP.length)};
+  return {ds: null, key: v};
+}
+
+/**
  * Pre-binned count grid of a context catalog for the axes `ax` ({x, y, xlog?, ylog?}):
  * the manifest `density[]` entry without `stat` whose x / y expressions equal the axes, on
  * linear axes only (grids are binned in linear catalog units, section 5.9); null when none
@@ -889,8 +951,26 @@ export async function mount(host, ctx) {
   const gridBtn = iconButton('▦', 'Back to the small multiples', 'pk-grid-back');
   gridBtn.hidden = true;
   gridBtn.addEventListener('click', () => leaveCell(true));
+  // Raster layers on/off (store layers:<pane>.raster, hash <pane>.raster=0|1); hidden when the
+  // pane has no raster layers.
+  const rasterBtn = iconButton('◩', 'Show or hide the raster layers', 'pk-raster-toggle');
+  rasterBtn.hidden = true;
+  rasterBtn.addEventListener('click', () => {
+    const cur = store.get(`layers:${id}`);
+    store.set({[`layers:${id}`]: withRaster(cur, !layerState(cur).raster)}, {source: id, history: true});
+  });
   const tools = ctx.tools || bar;
-  tools.append(brushModes.el, resetBtn, gridBtn);
+  tools.append(brushModes.el, resetBtn, gridBtn, rasterBtn);
+
+  function syncRasterBtn() {
+    const on = layerState(store.get(`layers:${id}`)).raster;
+    rasterBtn.hidden = !rasters.length;
+    rasterBtn.classList.toggle('pk-on', on);
+    rasterBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  }
+
+  /** Overlay layers shown under the store layers:<pane>.ovl choice (all when unset). */
+  const shownOverlays = () => visibleOverlays(S.overlays, layerState(store.get(`layers:${id}`)).ovl);
 
   const pickX = createAxisPicker({client, axis: 'x', label: 'x', value: pickerValue('x'), onChange: (p) => axisPatch('x', p)});
   const pickY = createAxisPicker({client, axis: 'y', label: 'y', value: pickerValue('y'), onChange: (p) => axisPatch('y', p)});
@@ -1096,11 +1176,31 @@ export async function mount(host, ctx) {
     schedule();
   }
 
-  /** Binned-statistic grids of the manifest for the current axes (linear axes only). */
+  // Context catalogs whose manifests feed the binned-statistic select (opened on demand).
+  const statCtx = new Map();      // ds -> client
+  const statCtxAsked = new Set();
+
+  /**
+   * Binned-statistic grids for the current axes (linear axes only) of this catalog and of the
+   * context catalogs (statGridOptions). Context catalogs open in the background; the select
+   * is rebuilt when one arrives.
+   */
   function statGrids() {
-    const ax = S.axes;
-    if (ax.xlog || ax.ylog) return [];
-    return (client.manifest.density || []).filter((g) => g && g.stat && g.stat !== 'count' && g.x === ax.x && g.y === ax.y);
+    const ids = contextDatasets(ctx, ds);
+    for (const cds of ids) {
+      if (statCtxAsked.has(cds)) continue;
+      statCtxAsked.add(cds);
+      Promise.resolve(app && typeof app.catalog === 'function' ? app.catalog(cds) : null).then((bg) => {
+        if (destroyed || !bg || !bg.manifest) return;
+        statCtx.set(cds, bg);
+        syncStatSelect();
+      }, (err) => {
+        if (err && err.name === 'AbortError') return;
+        console.warn(`scatter ${id}: context catalog ${cds} unavailable for statistics`, err);
+      });
+    }
+    const ctxList = ids.filter((c) => statCtx.has(c)).map((c) => ({ds: c, manifest: statCtx.get(c).manifest}));
+    return statGridOptions(client.manifest, ctxList, S.axes);
   }
 
   function syncStatSelect() {
@@ -1109,12 +1209,14 @@ export async function mount(host, ctx) {
     const o0 = el('option', null, 'no background');
     o0.value = '';
     statSel.append(o0);
-    for (const g of list) {
-      const o = el('option', null, `${g.stat} ${g.value ? exprLabel(client, g.value) : ''}`.trim());
-      o.value = g.key;
+    for (const {value, ds: gds, grid: g} of list) {
+      const c = gds ? statCtx.get(gds) : client;
+      const text = `${g.stat} ${g.value ? exprLabel(c, g.value) : ''}`.trim();
+      const o = el('option', null, gds ? `${gds}: ${text}` : text);
+      o.value = value;
       statSel.append(o);
     }
-    if (!list.some((g) => g.key === S.statKey)) S.statKey = '';
+    if (!list.some((g) => g.value === S.statKey)) S.statKey = '';
     statSel.value = S.statKey;
     statSel.hidden = !list.length;
     loadStat();
@@ -1124,7 +1226,10 @@ export async function mount(host, ctx) {
     const key = S.statKey;
     if (!key) { if (S.stat) { S.stat = null; schedule(); } return; }
     if (S.stat && S.stat.key === key) return;
-    client.density(key).then((g) => {
+    const ref = parseStatValue(key, [...statCtx.keys()]);
+    const src = ref.ds ? statCtx.get(ref.ds) : client;
+    if (!src) return;
+    src.density(ref.key).then((g) => {
       if (destroyed || S.statKey !== key || !g) return;
       S.stat = {key, img: statGridImage(g)};
       schedule();
@@ -1432,7 +1537,7 @@ export async function mount(host, ctx) {
   }
 
   function drawOverlayLayers(c, view, tk) {
-    const layers = [...runtimeLayers(tk), ...S.overlays];
+    const layers = [...runtimeLayers(tk), ...shownOverlays()];
     if (!layers.length) return [];
     return drawOverlays(c, view, layers, overlayState());
   }
@@ -1449,6 +1554,7 @@ export async function mount(host, ctx) {
   }
 
   function drawRasters(c, view, spec = S.axes, k = S.focusCell) {
+    if (!layerState(store.get(`layers:${id}`)).raster) return;
     for (const r of rasters) {
       if (!rasterApplies(r, spec, k)) continue;
       if (!r.img || !r.img.complete || !r.img.naturalWidth) continue;
@@ -1727,6 +1833,7 @@ export async function mount(host, ctx) {
     img.src = ctx.hub && typeof ctx.hub.resolve === 'function' ? ctx.hub.resolve(r.url).toString() : r.url;
     rasters.push(entry);
   }
+  syncRasterBtn();
 
   // ------------------------------------------------------------ small multiples
   // Each cell has a base canvas (axes, raster layers bound to the cell's axis pair, context
@@ -1918,7 +2025,8 @@ export async function mount(host, ctx) {
           drawPoints(g, view, pts, {tokens: tk});
         }
       }
-      if (S.overlays.length) drawOverlays(g, view, S.overlays, overlayState(c.spec.x, c.spec.y));
+      const ovs = shownOverlays();
+      if (ovs.length) drawOverlays(g, view, ovs, overlayState(c.spec.x, c.spec.y));
       drawCellRings(c, tk);
     }
     gridDrawn = true;
@@ -1968,6 +2076,11 @@ export async function mount(host, ctx) {
     else { settle(); schedule(); }
   }));
   offs.push(store.on([`vis:${ds}`], () => { loadVis().catch(warnErr('filter mask')); }));
+  offs.push(store.on([`layers:${id}`], () => {
+    syncRasterBtn();
+    schedule();
+    if (gridOn && S.focusCell === null) drawGrid();
+  }));
   offs.push(store.on(['color'], () => { loadColorState(); }));
   offs.push(store.on(['focus', 'hover'], () => { if (S.view) drawOver(S.view, tokensOf(ctx.theme())); if (gridOn && S.focusCell === null) drawGridRings(); }));
   offs.push(store.on(['av', 'rv'], () => schedule()));
@@ -2108,7 +2221,8 @@ export async function mount(host, ctx) {
       const gl = renderer ? renderer.stats() : null;
       return {renderMs: S.renderMs, tier: S.tier, mode: stage.dataset.mode || null, n, shown: S.lastCount,
         selected: sel ? sel.count : 0, inView: S.inView, gl, grid: !!(gridOn && S.focusCell === null), gridDrawn,
-        overlays: S.overlays.length, stat: S.stat ? S.stat.key : null,
+        overlays: S.overlays.length, overlaysShown: shownOverlays().length,
+        rasters: rasters.length, rasterOn: layerState(store.get(`layers:${id}`)).raster, stat: S.stat ? S.stat.key : null,
         context: {prebinned: S.ctxPre.grids.size, binned: S.ctxGrids.length},
         highlight: hl ? hl.rows().length : 0,
         view: viewStats(S.view, S.axes, {shift: S.shift, xinv: xInv(), yinv: yInv()}),

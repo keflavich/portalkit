@@ -45,7 +45,13 @@ web/css/{tokens,base,layout,print}.css, web/css/panes/ui.css
    evaluates code only: no data is read and nothing renders; `registry.load()` still attaches
    pane CSS and reports load errors at step 5.
 3. `createHub(page, store)` from `data/hub.js`; manifests of every catalog used by a
-   non-collapsed pane (and pane `background` catalogs) are fetched at once.
+   non-collapsed pane (and pane `background` catalogs) are fetched at once. When a catalog
+   opens, manifold panes on it whose page defaults leave the frame preset open (no
+   `options.frame`, no `page.state` preset) get the manifest's `manifold.default_frame` as
+   their default preset (`frameDefault(options, manifest)`: `options.frame`, else
+   `default_frame` when `manifestFrameKnown` accepts it, else `'pca'`), and boot passes the
+   updated defaults to `unbindHash.setDefaults`, so the default preset stays out of the hash.
+   Boot also wraps `hub.records(ds)` for foreign record sets (section 11).
 4. Runtime probe: WebGL2, `EXT_color_buffer_float`, `DecompressionStream`,
    `navigator.deviceMemory`. Each tiered pane gets `tier:<pane>` once its catalog's N is known.
 5. Header chrome and `mountLayout` (pane modules load lazily through the registry). Boot loads
@@ -102,6 +108,8 @@ output in `page.caps.enabled`; `app.notes` records the runtime reason.
 | `resolveIds(ds, ids)` | `Promise<number[]>` stored row indices, -1 when not found. A row matches when its id equals the text exactly (first stored row wins) or the text is one of its aliases (manifest `ids.alias_file`); substring hits never count. Ids already in the id cache, or resolved by an earlier call, answer at once. The rest (deduplicated) go to the worker in one `client.resolveIds(uniq, {aliases: true})` pass (note 102), which loads every ids chunk and the alias file once; resolved rows are memoised per dataset. Clients without `resolveIds` (test doubles) use the older path: `RESOLVE_BATCH_MIN` (16) or more unknown ids are matched in one pass over `client.export({mask: 'all', format: 'ids'})` (`matchIdList`) and the alias file, fewer go through `client.find` one at a time |
 | `idOf(ds, i)` | `Promise<string>` cached id lookup |
 | `applySelection(ds, str)` | apply an `ids:`/`bits:`/`r:` string as one replace (recipes replay on an empty scratch Selection through `client.brush`, `client.query` and presets, then load with `sel.replaceWith`) |
+| `selectionHit(ds, str)` | `Promise<Uint8Array \| null>`: the rows an `ids:`/`bits:`/`r:` string selects, computed on a scratch Selection without touching the dataset's selection (null when unreadable). `ui/chips.js` uses it so recipe presets combine with shift (add) / alt (subtract) |
+| `foreignRecordKey(ds, id)` | `Promise<string \| null>`: record key of catalog row `id` for a foreign record set with `id_column` (the row's value in that column), else the id itself |
 | `carryPayload()` | `{ds, focusId, sel}` for `stashCarry` |
 | `disableCap(cap, reason)` | runtime removal (e.g. WebGL context lost for good); updates `data-caps` and emits `caps:change` |
 | `hashLink()` | the canonical hash string for "copy link" actions (no side effects) |
@@ -187,13 +195,17 @@ store.batch(() => {...}); store.flush();
 
 The store key table is in ARCHITECTURE.md section 6.2. Defaults created by boot:
 `focus/hover = null`, `color = {by: null, cmap: 'viridis'}`, `av = 0`, `rv = 3.1`, `dm = 0`,
+`speed = 1` (or the first manifold / wavelength `options.speed`),
 `template = null`, `features = []` (or the first spectrum1d `options.features`),
 `spec = {pinned: [], variant: 'flux'}`, `sky = null`, `rung/beat/role = null`, `facets = {}`,
 `lightbox = null`, `layout = {popout: {}}`, per catalog `filters:<ds> = {}`,
 `vis:<ds> = {version: 0, count: null}` (count null until a filter is applied), and per
 non-context catalog `sel:<ds> = {version: 0, count: 0}`, `annot:<ds> = {version: 0}`. Scatter
 panes get `axes:<pane>` from their `x/y/xlog/ylog` options; manifold panes get
-`frame:<pane> = {preset: options.frame ?? 'pca', dims}`. `page.state` is merged on top, one
+`frame:<pane> = {preset: options.frame ?? null, dims}` (null: the pane opens on the manifest's
+`default_frame` when it names a known preset, else `'pca'`; boot fills the page default once
+the manifest is read, section 1). Scatter panes read `layers:<pane>` (absent by default):
+`{raster?: false, ovl?: [ids]}`. `page.state` is merged on top, one
 level deep for objects.
 
 ## 3. Selection (`core/selection.js`)
@@ -256,7 +268,7 @@ Shapes are in data coordinates. Projection (manifold) brushes are replayable onl
 
 Keys appear in this order; pane-scoped keys sit after `f`, grouped by pane, and unknown keys
 come last in alphabetical order:
-`id, sel, f, <pane>.x, <pane>.y, <pane>.frame, c, av, rv, dm, tpl, feat, spec, wl, sky, base, ovl, rung, beat, role, fac, lb, view`.
+`id, sel, f, <pane>.x, <pane>.y, <pane>.frame, <pane>.xr, <pane>.yr, <pane>.raster, <pane>.ovl, c, av, rv, dm, speed, tpl, feat, spec, wl, sky, base, ovl, rung, beat, role, fac, lb, view`.
 
 | Key | Store | Format |
 |---|---|---|
@@ -265,7 +277,11 @@ come last in alphabetical order:
 | `f` | `filters:<primary>` | base64url(UTF-8 JSON); raw JSON `{...}` accepted |
 | `<pane>.x`, `<pane>.y` | `axes:<pane>` | expression text |
 | `<pane>.frame` | `frame:<pane>` | preset name, or `b64:` + base64url(float32 LE `F`) |
+| `<pane>.xr`, `<pane>.yr` | `axes:<pane>.xr` / `.yr` | `lo,hi` (zoom range; `-` = auto range) |
+| `<pane>.raster` | `layers:<pane>.raster` | `0` raster layers hidden, `1` shown (absent = shown) |
+| `<pane>.ovl` | `layers:<pane>.ovl` | comma list of the plot overlay ids shown (`-` = none; absent = every `options.overlays` layer) |
 | `c` | `color` | `by~cmap~lo~hi` (trailing parts optional; `none` = no colouring) |
+| `speed` | `speed` | positive number: tour / playback speed factor (manifold Tour.setSpeed, clamped to 0.1-8) |
 | `av`, `rv`, `dm` | same | numbers: 1e-6 absolute precision for magnitudes >= 1e-3, 7 significant digits below (all numeric values in the hash use this rule) |
 | `tpl` | `template` | `key~grid~scale~band,band` |
 | `feat` | `features` | comma list |
@@ -339,11 +355,38 @@ selection is cleared. The `selection` adapter passed to `bindHash` is
 `{serialize(), apply(str), count()}`.
 
 `bindHash(store, opts)` returns `unbind` with `.flush()`, `.touch()` (debounced rewrite),
-`.replaceNow()`, `.compute()` (string, no side effects), `.computeInfo()` and `.selDropped()`.
-WP13's `legacyhash.js` maps legacy forms to this grammar (`mapLegacy` returns canonical
-key/value strings). When the mapping consumed the hash itself, boot uses only the mapped
-values; when it consumed only query parameters, the mapped values are merged over the
-canonical hash.
+`.replaceNow()`, `.compute()` (string, no side effects), `.computeInfo()`, `.selDropped()` and
+`.setDefaults(defaults)` (replace the page defaults the hash is compared against; boot calls it
+when a manifest supplies a manifold default frame). On navigation, absent `<pane>.xr`/`.yr`
+reset the zoom range to auto and absent `<pane>.raster`/`.ovl` remove those layer settings
+unless the page defaults carry them.
+WP13's `legacyhash.js` maps legacy forms to this grammar (`mapLegacy` returns
+`{hash, consumedSearch, fromHash}` with canonical key/value strings). When a grammar mapped the
+hash itself (`fromHash`), boot uses only the mapped values; when only query parameters were
+mapped, the mapped values are merged over the canonical hash. Query-string grammars
+(`gc-query`, `spherex-colours`, and the `?speed=` part of `wavelength` and `kv-view`) always
+apply and merge.
+
+Legacy mapping details:
+
+- Dim alias (`page.page.legacy.dim_alias = {legacy: unified}`): `kv-view` maps `x`/`y`/`z` and
+  the column part of `c` through it, and `spherex-colours` maps colours `c_<A>_<B>` and
+  magnitudes `m_<A>` through it (unaliased filter names become lower-case `<a>-<b>`).
+  `mapLegacy` reads the table from `loc.dimAlias`, else `loc.page`, else the page JSON.
+- Speed: `wavelength` and `kv-view` (the manifold pages) map `?speed=` (consumed from the query
+  string, also under a canonical hash) and a legacy hash `speed=` onto the canonical `speed`;
+  a value that is not a positive number is consumed and dropped. The shared vectors in
+  `hash_vectors.json` and `portalkit/legacy/hashmap.py` still drop `?speed=`;
+  `tests/js/legacyhash.test.mjs` lists those two vectors as known-divergent.
+- `spherex-colours` (query string of the legacy SPHEREx colours page): `ax`,`ay` -> the CCD
+  scatter's x colour `ax - ay` and `bx`,`by` -> its y colour (pane id `ccd`, else the first
+  scatter); `band` -> the CMD scatter's y magnitude with the CCD x colour as x (pane `cmd`,
+  else the second scatter; on a page with one scatter pane `band` and `cmd` are consumed and
+  dropped); `cmd=1` -> `view=<cmd>:half`; `c` -> `c`; `zoom=x0,x1,y0,y1` ->
+  `<ccd>.xr`/`.yr`; `yoo` (`1` = every `yoo_*` layer, else a comma list) -> `<ccd>.ovl` (the
+  CCD's other overlays stay on; a CCD with `yoo_*` overlays always gets an explicit list,
+  since the legacy page drew none without `yoo`); `hide=k1|k2` -> `f` with
+  `cats: {<colour-by>: [k1, k2]}`.
 
 ## 5. Layout (`layout/layout.js`)
 
@@ -633,6 +676,32 @@ same engine in-thread when module workers are unavailable.
 - `id(i)` reads only the ids chunk that holds row i; `find`, `query` with id filters, `export`,
   `order('id')` and `resolveIds` load every ids chunk.
 
+### Record sets (`data/records.js`)
+
+`RecordStore.open(indexUrl, {fetch, signal, shardBytes, recordLRU, base, page, idOf})`; shard and
+single-file URLs resolve against the index URL. `has(id)`, `hasRecord(id, {signal})` (async;
+exact for `idOf` sets), `ids()`, `get(id, {signal, token, channel})`, `load(id)`.
+
+Foreign record sets (shared contract (A)): a records DatasetRef may carry `base` (another
+portal's `data/` prefix, relative or same-host https, ending in `/`) and `id_column`. The build
+writes no shards for such a set; `url` is the foreign index `<base><key>/index.json`
+(`recordIndexUrl(ref)` builds it from `base` and `key` when `url` is missing), so every shard
+fetch lands under `base`. Boot wraps `hub.records(ds)` for every foreign ref (`isForeignRef`)
+and opens the store with `base = foreignPageBase(indexUrl)` (`<index>/../../`, the foreign
+portal's page directory), so PNG-mode sidecars resolve in the foreign portal; `{assets}` /
+`{res}` are substituted with this page's values (absolute shared bases, or relative ones that
+then resolve in the foreign portal). Without `id_column` the row id is the record key. With
+`id_column` the store also gets `idOf(id)` = `app.foreignRecordKey(ds, id)`: the row of `ref.catalog` with that id
+(`app.resolveIds` + `client.record`), then its `id_column` value (`foreignKeyOf(row, column)`:
+text, integers without a decimal point, null when missing or NaN). Keys are cached (LRU of
+4096). `has(id)` is true for an id whose key is not looked up yet, so callers that must tell
+"no record" from "superseded" use `await hasRecord(id)` (spectrum1d does, and it also treats a
+null `get()` on the current focus as "No spectrum"); `get(id)` resolves null when the row has
+no key or the key is missing from the foreign index, and otherwise returns a shallow copy of the cached record with `id` = the
+catalog row id and `key` = the foreign record key. Token / channel supersession applies after
+the key lookup as well. A public portal may reference only public bases (checked by the Python
+build).
+
 ## 12. Test hooks
 
 With `?pktest=1`, `window.__pk` exists from the first line of boot:
@@ -673,7 +742,7 @@ hits on redraw; no grid, a log axis or an unreadable grid: worker `bin2d`).
 mounted narrative pane (highlight-only beat, beat sky view, `suppress_view`, empty ids, a kept
 deep-link view with an instant scroll, one activation per `go()` and per hash beat change), and
 `controls.rafSetter` with a stand-in `requestAnimationFrame` installed after import and the
-timer fallback. The full suite is
+timer fallback. `wpe5.test.mjs` covers the wave E follow-ups (section 14). The full suite is
 `node --test tests/js/*.test.mjs`.
 
 ## 14. Runtime contracts from IMPLEMENTATION_NOTES 68-132
@@ -724,3 +793,18 @@ Where each JS-facing note lives (details in the module headers):
 | 130 | narrative `activate` applies the beat before scrolling; an instant-scroll re-entry is a no-op | `panes/narrative.js` (section 4) |
 | 131 | an images preset with a facet that matches no item is dropped at build (`bundle/images.py`); an empty value list reads as "no filter" | `panes/gallery.js` |
 | 132 | `ui/controls.js` `raf` looked up at call time | `ui/controls.js` (section 6) |
+
+Wave E follow-ups (tests in `tests/js/wpe5.test.mjs`):
+
+| Topic | Contract | Module |
+|---|---|---|
+| default frame | a manifold pane without a stored frame or `options.frame` opens on `manifest.manifold.default_frame` when it names a known preset (`initialPreset`), else `'pca'`; boot's page default follows (`frameDefault`, `unbindHash.setDefaults`); autoplay treats a null preset as unset | `panes/manifold.js`, `core/boot.js` |
+| speed | canonical `speed` (store and hash); legacy `?speed=` / `speed=` map onto it; the manifold Tour uses `tourSpeed(store speed, options)` and follows store changes | `core/hash.js`, `core/legacyhash.js`, `panes/manifold.js` |
+| dim alias, spherex-colours | `page.legacy.dim_alias`; the `spherex-colours` grammar (section 4) | `core/legacyhash.js` |
+| recipe presets | `applyPresetSelection(env, preset, op)`: every preset form (ids, bits, recipe) combines with shift (add) / alt (subtract); recipe rows come from `app.selectionHit` | `ui/chips.js` |
+| spectrum readout | `readoutSamples(series, wx)` searches each shown segment (binary search when that segment is sorted, linear scan when not) and reads out one value per segment covering wx, else the nearest sample | `panes/spectrum1d.js` |
+| fluxscale | `normalizeRecord` multiplies every non-wavelength channel by a finite positive `meta.fluxscale` (other than 1) once and records `meta.fluxscaleApplied` | `panes/spectrum1d.js` |
+| context statistics | the binned-statistic select lists the context catalogs' grids for the axes as `<ds>::<key>` (`statGridOptions`) | `panes/scatter.js` |
+| layer switches | `layers:<pane>` `{raster?: false, ovl?: [ids]}`: a toolbar button (shown when the pane has raster layers) toggles the rasters; `ovl` limits the drawn overlays (`visibleOverlays`); hash `<pane>.raster`, `<pane>.ovl` | `panes/scatter.js`, `core/hash.js` |
+| gallery preset role | a preset's `role` (or `data.role`) is applied with its facets when the pane offers that role; the preset select matches facets and role (`matchPreset`) | `panes/gallery.js` |
+| foreign records | `base` / `id_column` record refs (section 11) | `data/records.js`, `core/boot.js` |

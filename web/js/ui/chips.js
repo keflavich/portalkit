@@ -14,7 +14,8 @@
 //   S/N       "S/N ≥ k" chip cycling off -> 3 -> 5 -> 10 -> off, scoped to the active projection
 //             (filters:<ds>.snr = {min, scope: 'projection'}; hub.js derives the bands)
 //   presets   manifest presets of kind 'selection' (preselect buttons, op from the modifier
-//             keys, RecipeOp kind 'preset') and 'filter' (toggle the preset's filters)
+//             keys for every preset form, recipe presets included; RecipeOp kind 'preset') and
+//             'filter' (toggle the preset's filters)
 //   saved     named selections kept per viewer in localStorage; "Save" stores the current
 //             selection (ids / bits / recipe), a chip restores it, × forgets it. Emits
 //             'selection:saved' {ds, name}.
@@ -94,6 +95,60 @@ export function flagColumns(client) {
 export function nextSnr(cur) {
   const i = SNR_STEPS.indexOf(Number(cur) || 0);
   return SNR_STEPS[(i + 1) % SNR_STEPS.length];
+}
+
+/**
+ * Rows a selection preset selects, as a Uint8Array over the catalog. 'ids:' presets resolve
+ * through app.resolveIds (a toast counts the missing ones), 'bits:' presets unpack, and recipe
+ * ('r:') presets replay through app.selectionHit (core/boot.js); null when the preset is a recipe
+ * and the app has no selectionHit. env: {app, store, client, ds}.
+ */
+export async function presetSelectionHit(env, p) {
+  const {app, store, client, ds} = env;
+  const n = client.n;
+  const parsed = Selection.parse(p.sel || '');
+  if (!parsed) throw new Error(`preset ${p.key} has no readable selection`);
+  if (parsed.kind === 'ids') {
+    const idx = await app.resolveIds(ds, parsed.ids);
+    const hit = new Uint8Array(n);
+    let missing = 0;
+    for (const i of idx) {
+      if (i >= 0) hit[i] = 1;
+      else missing++;
+    }
+    if (missing && store) store.emit('toast', {level: 'warn', text: `${missing} ${plural(missing, 'source')} of “${p.label || p.key}” not found.`});
+    return hit;
+  }
+  if (parsed.kind === 'bits') return unpackBits(parsed.bytes, n);
+  if (app && typeof app.selectionHit === 'function') {
+    const hit = await app.selectionHit(ds, p.sel);
+    if (!hit) throw new Error(`preset ${p.key} has no readable selection`);
+    return hit;
+  }
+  return null;
+}
+
+/**
+ * Apply a selection preset with `op` ('replace' | 'add' | 'subtract' | 'intersect', normally
+ * opFromEvent of the click: shift adds, alt subtracts). Every preset kind, recipe presets
+ * included, combines with the current selection through Selection.apply and records a RecipeOp
+ * of kind 'preset'. A recipe preset falls back to app.applySelection (replace) only when the app
+ * cannot compute its rows (no app.selectionHit). Emits 'brush:commit'. env: {app, store, client,
+ * ds, pane}. Resolves to the Selection.
+ */
+export async function applyPresetSelection(env, p, op = 'replace') {
+  const {app, store, ds, pane} = env;
+  const sel = await app.selectionFor(ds);
+  const hit = await presetSelectionHit(env, p);
+  const recipe = {op, kind: 'preset', view: {ds}, key: p.key};
+  if (hit) {
+    sel.apply(hit, op, undefined, recipe);
+  } else {
+    if (op !== 'replace' && store) store.emit('toast', {level: 'warn', text: `“${p.label || p.key}” can only replace the selection here.`});
+    await app.applySelection(ds, p.sel);
+  }
+  if (store) store.emit('brush:commit', {pane, ds, shape: {kind: 'preset', key: p.key}, op, count: sel.count});
+  return sel;
 }
 
 /**
@@ -188,38 +243,7 @@ export function createChips(host, opts) {
     return b;
   }
 
-  async function presetHit(p) {
-    const n = client.n;
-    const parsed = Selection.parse(p.sel || '');
-    if (!parsed) throw new Error(`preset ${p.key} has no readable selection`);
-    if (parsed.kind === 'ids') {
-      const idx = await app.resolveIds(ds, parsed.ids);
-      const hit = new Uint8Array(n);
-      let missing = 0;
-      for (const i of idx) {
-        if (i >= 0) hit[i] = 1;
-        else missing++;
-      }
-      if (missing) store.emit('toast', {level: 'warn', text: `${missing} ${plural(missing, 'source')} of “${p.label || p.key}” not found.`});
-      return hit;
-    }
-    if (parsed.kind === 'bits') return unpackBits(parsed.bytes, n);
-    return null;
-  }
-
-  async function applyPreset(p, e) {
-    const sel = await app.selectionFor(ds);
-    const op = opFromEvent(e);
-    const hit = await presetHit(p);
-    const recipe = {op, kind: 'preset', view: {ds}, key: p.key};
-    if (hit) {
-      sel.apply(hit, op, undefined, recipe);
-    } else {
-      // recipe-encoded preset: boot replays it (replace only)
-      await app.applySelection(ds, p.sel);
-    }
-    store.emit('brush:commit', {pane, ds, shape: {kind: 'preset', key: p.key}, op, count: sel.count});
-  }
+  const applyPreset = (p, e) => applyPresetSelection({app, store, client, ds, pane}, p, opFromEvent(e));
 
   function filterPresetActive(p) {
     const want = p.filters || {};

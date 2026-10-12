@@ -58,11 +58,37 @@ function toF32(a) {
   return out;
 }
 
+/** meta.fluxscale of a record when it is a finite positive factor other than 1, else null. */
+export function fluxScaleOf(meta) {
+  const v = meta && typeof meta === 'object' ? Number(meta.fluxscale) : NaN;
+  return Number.isFinite(v) && v > 0 && v !== 1 ? v : null;
+}
+
+/**
+ * Channels with every flux-like channel (all channels: fluxes and their uncertainties) multiplied
+ * by `scale`. New Float32Arrays; the input channels are not modified.
+ */
+export function scaleChannels(channels, scale) {
+  const out = {};
+  for (const [k, v] of Object.entries(channels || {})) {
+    if (!(Array.isArray(v) || ArrayBuffer.isView(v))) { out[k] = v; continue; }
+    const a = new Float32Array(v.length);
+    for (let i = 0; i < v.length; i++) {
+      const x = v[i];
+      a[i] = x === null || x === undefined ? NaN : +x * scale;
+    }
+    out[k] = a;
+  }
+  return out;
+}
+
 /**
  * A decoded record (pks1 / sedcurve Spectrum, or a JSON spectrum {wave|wavelength|w|lam,
  * flux, err?, ...}) as {id, n, wave (micron, Float64Array), channels, units, unitW: 'um',
  * segments, maskRuns, maskBits, lines, meta, sorted}. Null for PNG entries and records
- * without a wavelength array.
+ * without a wavelength array. A finite positive meta.fluxscale (other than 1) multiplies every
+ * non-wavelength channel (fluxes and uncertainties); the result's meta then carries
+ * `fluxscaleApplied` with the factor, and a record that already carries it is not scaled again.
  */
 export function normalizeRecord(rec) {
   if (!rec || typeof rec !== 'object' || rec.kind === 'png') return null;
@@ -97,15 +123,106 @@ export function normalizeRecord(rec) {
     const v = wave[i];
     w[i] = v === null || v === undefined ? NaN : +v * wf;
   }
+  let meta = rec.meta && typeof rec.meta === 'object' ? rec.meta : {};
+  const scale = meta.fluxscaleApplied === undefined ? fluxScaleOf(meta) : null;
+  if (scale !== null) {
+    channels = scaleChannels(channels, scale);
+    meta = {...meta, fluxscaleApplied: scale};
+  }
   return {
     id: rec.id ?? null, n, wave: w, channels, units, unitW: 'um',
     segments: Array.isArray(rec.segments) ? rec.segments : [],
     maskRuns: Array.isArray(rec.maskRuns) ? rec.maskRuns : Array.isArray(rec.mask_runs) ? rec.mask_runs : [],
     maskBits: rec.maskBits || rec.mask_bits || {},
     lines: Array.isArray(rec.lines) ? rec.lines : [],
-    meta: rec.meta || {},
+    meta,
     sorted: isSorted(w),
   };
+}
+
+const segSortCache = new WeakMap(); // wave array -> Map('i0:i1' -> {sorted, lo, hi})
+
+/**
+ * {sorted, lo, hi} of wave[i0:i1] (lo/hi = finite min/max), cached per wave array. A segment with
+ * a non-finite wavelength counts as unsorted (binary search cannot step over NaN), so it is read
+ * out with the linear scan.
+ */
+function segmentInfo(wave, i0, i1) {
+  let m = segSortCache.get(wave);
+  if (!m) { m = new Map(); segSortCache.set(wave, m); }
+  const key = `${i0}:${i1}`;
+  let info = m.get(key);
+  if (!info) {
+    const sub = typeof wave.subarray === 'function' ? wave.subarray(i0, i1) : wave.slice(i0, i1);
+    let lo = Infinity, hi = -Infinity, finite = true;
+    for (let i = 0; i < sub.length; i++) {
+      const v = sub[i];
+      if (!Number.isFinite(v)) { finite = false; continue; }
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
+    info = {sorted: finite && isSorted(sub), lo, hi, sub};
+    m.set(key, info);
+  }
+  return info;
+}
+
+/** Nearest index to wx in wave[i0:i1]: binary search when sorted, else a linear scan. -1 if none. */
+export function nearestInSegment(wave, i0, i1, wx, sorted = null) {
+  if (!(i1 > i0) || !Number.isFinite(wx)) return -1;
+  const info = segmentInfo(wave, i0, i1);
+  const isSort = sorted === null ? info.sorted : sorted;
+  if (isSort) {
+    const sub = info.sub;
+    const j = lowerIndex(sub, wx);
+    let k = j;
+    if (j + 1 < sub.length && (j < 0 || Math.abs(sub[j + 1] - wx) < Math.abs(sub[j] - wx))) k = j + 1;
+    return k >= 0 && k < sub.length && Number.isFinite(sub[k]) ? i0 + k : -1;
+  }
+  let best = -1, bd = Infinity;
+  for (let i = i0; i < i1; i++) {
+    const d = Math.abs(wave[i] - wx);
+    if (d < bd) { bd = d; best = i; }
+  }
+  return best;
+}
+
+/**
+ * Readout samples of a series {wave, y, err?, ranges?: [{i0, i1, label, on}]} at wavelength wx:
+ * one {k, label, wave, y, err} per shown segment whose wavelength span covers wx (nearest sample
+ * of that segment), else the single nearest sample over the shown segments. Each segment is
+ * searched on its own (binary search when that segment is sorted, a linear scan when it is
+ * not), so overlapping and unsorted segments read out correctly.
+ */
+export function readoutSamples(series, wx) {
+  if (!series || !series.wave || !Number.isFinite(wx)) return [];
+  const wave = series.wave;
+  const ranges = (series.ranges || [{i0: 0, i1: wave.length, label: null, on: true}]).filter((r) => r && r.on !== false);
+  const pick = (k, r) => ({
+    k, label: r.label ?? null, wave: wave[k], y: series.y ? series.y[k] : NaN,
+    err: series.err && Number.isFinite(series.err[k]) ? series.err[k] : null,
+  });
+  const out = [];
+  let best = null, bd = Infinity;
+  for (const r of ranges) {
+    const k = nearestInSegment(wave, r.i0, r.i1, wx);
+    if (k < 0) continue;
+    const info = segmentInfo(wave, r.i0, r.i1);
+    if (wx >= info.lo && wx <= info.hi) out.push(pick(k, r));
+    const d = Math.abs(wave[k] - wx);
+    if (d < bd) { bd = d; best = pick(k, r); }
+  }
+  if (out.length) return out;
+  return best ? [best] : [];
+}
+
+/**
+ * Does the record store hold a record for row `id`? RecordStore.hasRecord (exact for foreign sets
+ * with id_column, whose sync has() is optimistic), else has().
+ */
+export async function hasRecordOf(store, id) {
+  if (store && typeof store.hasRecord === 'function') return store.hasRecord(id);
+  return !!store && store.has(id);
 }
 
 const ERR_RE = /^(err|error|unc|sigma|e)$|(_err|_error|_unc|_sigma)$|^(err_|e_|unc_|sigma_)/i;
@@ -722,7 +839,19 @@ export function mount(host, ctx) {
     // a failed record-set load is already reported by the rsP handler above
     const store_ = await rsP.then((s) => s, () => null);
     if (!store_ || my !== focusSeq) return;
-    if (!store_.has(id)) {
+    // hasRecord looks up the record key first for a foreign set with id_column (has() is
+    // optimistic there), so a row without a foreign record reports 'No spectrum'.
+    let present;
+    try {
+      present = await hasRecordOf(store_, id);
+    } catch (err) {
+      if (my !== focusSeq || destroyed) return;
+      if (err && err.name === 'AbortError') throw err;
+      console.warn(`spectrum ${id}: record lookup failed`, err);
+      present = false;
+    }
+    if (my !== focusSeq || destroyed) return;
+    if (!present) {
       focusId = id;
       focusRec = null;
       message = `No spectrum for ${id}`;
@@ -749,7 +878,18 @@ export function mount(host, ctx) {
       scheduleRender();
       return;
     }
-    if (raw === null || my !== focusSeq || destroyed) return;
+    if (my !== focusSeq || destroyed) return;
+    if (raw === null) {
+      // not superseded (focusSeq is unchanged), so the set has no record for this row
+      focusId = id;
+      focusRec = null;
+      message = `No spectrum for ${id}`;
+      ctx.setStatus('no spectrum');
+      refreshToolbar();
+      if (sedMode) loadPhotometry().catch(reportErr);
+      scheduleRender();
+      return;
+    }
     const rec = normalizeRecord(raw);
     focusId = id;
     focusRec = rec;
@@ -771,7 +911,7 @@ export function mount(host, ctx) {
       if (pinned.has(id)) continue;
       pinned.set(id, 'loading');
       rsP.then(async (s) => {
-        if (!s.has(id)) { pinned.set(id, null); return; }
+        if (!(await hasRecordOf(s, id))) { pinned.set(id, null); return; }
         const raw = await s.get(id, {channel: `${ctx.id}:pin`});
         if (pinned.get(id) === 'loading') pinned.set(id, normalizeRecord(raw));
       }).then(() => { refreshPins(); scheduleRender(); }, (err) => {
@@ -1284,14 +1424,10 @@ export function mount(host, ctx) {
     const [wx] = view.toData(hover.px, hover.py);
     const parts = [`λ ${fmtNum(wx, 6)} µm`];
     const s = V.main;
-    if (s && s.sorted !== false) {
-      const j = lowerIndex(s.wave, wx);
-      let k = j;
-      if (j + 1 < s.wave.length && (j < 0 || Math.abs(s.wave[j + 1] - wx) < Math.abs(s.wave[j] - wx))) k = j + 1;
-      if (k >= 0 && k < s.wave.length) {
-        const yv = s.y[k];
-        parts.push(`${s.name} ${fmtNum(yv, 4)}${s.err && Number.isFinite(s.err[k]) ? ` ± ${fmtNum(s.err[k], 2)}` : ''}${s.unit ? ` ${s.unit}` : ''}`);
-      }
+    const samples = s ? readoutSamples(s, wx) : [];
+    for (const r of samples) {
+      const tag = samples.length > 1 && r.label !== null ? `${r.label} ` : '';
+      parts.push(`${tag}${s.name} ${fmtNum(r.y, 4)}${r.err !== null ? ` ± ${fmtNum(r.err, 2)}` : ''}${s.unit ? ` ${s.unit}` : ''}`);
     }
     const fh = featLayout ? featureAt(featLayout, hover.px, 4) : null;
     if (fh) parts.push(`${fh.f.label || fh.f.name} ${fmtNum(fh.f.w0, 6)}${fh.dashed ? ' (no data)' : ''}`);

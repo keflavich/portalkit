@@ -2,6 +2,14 @@
 // gzip-member shards, single-member files, PNG mode and json-legacy directories.
 // decodePKS1 / decodePKI1 are pure; RecordStore needs only fetch (works in workers and node).
 // Python twin of the decoders: portalkit/bundle/records.py.
+//
+// Foreign record sets (shared contract (A)): a page DatasetRef {kind: 'records', url, base,
+// id_column?} names another portal's record set. `url` is the foreign index
+// (<base><key>/index.json; recordIndexUrl builds it when only base and key are given), and every
+// shard / file URL resolves against that index URL, i.e. under `base`. With `id_column` the
+// record of a catalog row is looked up by the row's value in that column (RecordStore opts.idOf,
+// wired by core/boot.js) instead of by the row id. PNG-mode sidecars of a foreign set resolve
+// against the foreign portal's page directory (foreignPageBase), the directory above its data/.
 
 import {RECORD_LRU, SHARD_LRU_BYTES} from '../core/constants.js';
 import {asU8, maybeGunzipSync, gunzip, dequantArray, readF32LE, readF64LE, readU16LE} from './codec.js';
@@ -232,12 +240,63 @@ export function resolvePageUrl(rel, {base = null, page = null, fallback = undefi
   return new URL(s, base || fallback).toString();
 }
 
+/**
+ * Index URL of a records DatasetRef (page-relative or absolute, unresolved): `ref.url`, or for a
+ * foreign ref (contract (A)) without one `<base><key>/index.json`, where key is `ref.key`. Null
+ * when neither is available.
+ */
+export function recordIndexUrl(ref) {
+  if (!ref || typeof ref !== 'object') return null;
+  if (typeof ref.url === 'string' && ref.url) return ref.url;
+  if (typeof ref.base === 'string' && ref.base && typeof ref.key === 'string' && ref.key) {
+    return `${ref.base.endsWith('/') ? ref.base : ref.base + '/'}${ref.key}/index.json`;
+  }
+  return null;
+}
+
+/** True for a foreign records DatasetRef (one that carries `base` or `id_column`). */
+export function isForeignRef(ref) {
+  return !!ref && typeof ref === 'object' && ref.kind === 'records'
+    && ((typeof ref.base === 'string' && !!ref.base) || (typeof ref.id_column === 'string' && !!ref.id_column));
+}
+
+/**
+ * Record key of a catalog row for a foreign set with `id_column` (contract (A)): the row's value
+ * in that column as text (integers without a decimal point), null when missing or NaN.
+ */
+export function foreignKeyOf(row, column) {
+  if (!row || typeof row !== 'object' || !column) return null;
+  const v = row[column];
+  if (v === null || v === undefined || v === '') return null;
+  if (typeof v === 'number') {
+    if (!Number.isFinite(v)) return null;
+    return String(v);
+  }
+  if (typeof v === 'bigint') return v.toString();
+  const t = String(v).trim();
+  return t ? t : null;
+}
+
+/**
+ * Page directory of the portal that owns a foreign record set (contract (A)): the directory above
+ * its `data/`, i.e. `<index url>/../../` for an index at `<base><key>/index.json`. PNG-mode
+ * sidecar URLs of a foreign set resolve against it, so `{res}` / relative paths land in the
+ * foreign portal.
+ */
+export function foreignPageBase(indexUrl) {
+  return new URL('../../', String(indexUrl)).toString();
+}
+
+const KEY_LRU = 4096;
+
 export class RecordStore {
   /**
    * Open a record set from its index.json URL. opts: {fetch, signal, shardBytes, recordLRU,
-   * base, page}. `base` is the page URL that PNG-mode sidecar URLs resolve against (default
+   * base, page, idOf}. `base` is the page URL that PNG-mode sidecar URLs resolve against (default
    * document.baseURI, else the index URL); `page` supplies `assets` / `res` for `{assets}` /
-   * `{res}` substitution in them.
+   * `{res}` substitution in them. `idOf(id, {signal})` (foreign sets with id_column) resolves a
+   * catalog row id to the record key (null when the row has none); without it the row id is
+   * the record key.
    */
   static async open(url, opts = {}) {
     const u = String(url);
@@ -260,6 +319,19 @@ export class RecordStore {
     this.legacy = index.kind === 'json-legacy';
     this.pageBase = opts.base ? String(opts.base) : documentBase();
     this.page = opts.page || null;
+    this.idOf = typeof opts.idOf === 'function' ? opts.idOf : null;
+    this.keyCache = new LRU(KEY_LRU); // row id -> record key | null (idOf results)
+  }
+
+  /** Record key of a row id: the id itself, or the idOf lookup (cached). */
+  async keyFor(id, signal) {
+    const s = String(id);
+    if (!this.idOf) return s;
+    if (this.keyCache.has(s)) return this.keyCache.get(s);
+    const k = await this.idOf(s, {signal});
+    const key = k === null || k === undefined || k === '' ? null : String(k);
+    this.keyCache.set(s, key);
+    return key;
   }
 
   /** Resolve a PNG sidecar URL against the page (with {assets}/{res} substituted). */
@@ -272,10 +344,31 @@ export class RecordStore {
     return new URL(rel, this.url).toString();
   }
 
-  /** True when the set has a record for `id` (json-legacy sets cannot tell and return true). */
+  /**
+   * True when the set has a record for `id` (json-legacy sets cannot tell and return true). With
+   * idOf, an id whose key is not looked up yet counts as present; get() then resolves null when
+   * the lookup finds none. Callers that must tell "no record" from "superseded" use hasRecord().
+   */
   has(id) {
     if (this.legacy) return true;
-    return Object.prototype.hasOwnProperty.call(this.entries, String(id));
+    let key = String(id);
+    if (this.idOf) {
+      if (!this.keyCache.has(key)) return this.n > 0;
+      key = this.keyCache.get(key);
+      if (key === null) return false;
+    }
+    return Object.prototype.hasOwnProperty.call(this.entries, key);
+  }
+
+  /**
+   * Async has(): with idOf the row's record key is looked up first (cached), so the answer is
+   * exact for foreign sets with id_column. Without idOf it equals has(id).
+   */
+  async hasRecord(id, {signal} = {}) {
+    if (this.legacy || !this.idOf) return this.has(id);
+    const key = await this.keyFor(id, signal);
+    throwIfAborted(signal);
+    return key !== null && Object.prototype.hasOwnProperty.call(this.entries, key);
   }
 
   /** Ids with records (empty for json-legacy). */
@@ -385,9 +478,11 @@ export class RecordStore {
    * Get one record. opts: {signal, token, channel}. When `token` is given, a response whose token
    * is older than the newest token issued on the same channel (default 'focus') resolves to null
    * (superseded focus). Unknown ids resolve to null; aborted requests reject with AbortError.
+   * With idOf the row id is mapped to the record key first; the result is a shallow copy with
+   * `id` = the row id and `key` = the record key.
    */
   async get(id, opts = {}) {
-    const key = String(id);
+    let key = String(id);
     const channel = opts.channel ?? DEFAULT_CHANNEL;
     const token = opts.token;
     if (token !== undefined) {
@@ -396,6 +491,12 @@ export class RecordStore {
     }
     const stale = () => token !== undefined && this.latest.get(channel) !== token;
     throwIfAborted(opts.signal);
+    if (this.idOf) {
+      const k = await this.keyFor(key, opts.signal);
+      throwIfAborted(opts.signal);
+      if (k === null || stale()) return null;
+      key = k;
+    }
     let rec = this.recordCache.get(key);
     if (rec === undefined) {
       rec = await this.load(key, opts.signal);
@@ -403,6 +504,9 @@ export class RecordStore {
     }
     throwIfAborted(opts.signal);
     if (stale()) return null;
+    // Foreign set with id_column: the record answers for the catalog row, so it carries the row
+    // id and keeps the foreign record key in `key` (the cached record itself is shared).
+    if (this.idOf && rec && typeof rec === 'object') return {...rec, id: String(id), key};
     return rec;
   }
 }

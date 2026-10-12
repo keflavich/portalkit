@@ -26,9 +26,12 @@
 // (IMPLEMENTATION_NOTES 35); otherwise the hash stores the selection bits.
 //
 // Store: frame:<pane> {preset?, F (2·D numbers), dims} written when motion settles (not
-// during drift), color, dm, vis:<ds>, sel:<ds>, focus, hover, tier:<pane>. A `preset` names
-// 'pca', `pair:i,j`, a manifest frame preset or an `axes` preset (unit weights on its x / y
-// dims; IMPLEMENTATION_NOTES 91).
+// during drift), color, dm, speed, vis:<ds>, sel:<ds>, focus, hover, tier:<pane>. A `preset`
+// names 'pca', `pair:i,j`, a manifest frame preset or an `axes` preset (unit weights on its x / y
+// dims; IMPLEMENTATION_NOTES 91). Without a stored frame the pane opens on options.frame, else
+// the manifest's manifold.default_frame (when it names a preset this pane knows), else 'pca'
+// (initialPreset). `speed` (hash speed=, legacy ?speed=) scales the tour (Tour.setSpeed; default
+// options.speed, else 1).
 // Events (IMPLEMENTATION_NOTES 71): listens for `narrative:highlight` {pane, ds, ids, beat,
 // goto?} addressed to this pane id, to 'manifold' or to no pane, and rings those rows in the
 // current projection (`goto` re-centres the view when some are out of view); emits
@@ -286,6 +289,38 @@ export function gpuFrame(folded, keys) {
 
 // =============================================================== pane
 
+/** True for a frame preset name the pane can resolve: 'pca', `pair:i,j` or a key of `presets`. */
+export function knownPreset(name, presets = []) {
+  if (typeof name !== 'string' || !name) return false;
+  if (name === 'pca' || /^pair:\d+,\d+$/.test(name)) return true;
+  return (presets || []).some((p) => p && p.key === name);
+}
+
+/**
+ * Frame preset a manifold pane opens on when the store holds no frame matrix: the stored
+ * preset (fr0.preset), else options.frame, else the manifest's manifold.default_frame when it
+ * names a known preset (knownPreset over `presets`), else 'pca'. Null when fr0 carries F.
+ */
+export function initialPreset(fr0, cfg, manifest, presets = []) {
+  const f = fr0 || {};
+  if (f.F && f.F.length) return null;
+  if (typeof f.preset === 'string' && f.preset) return f.preset;
+  const c = cfg || {};
+  if (typeof c.frame === 'string' && c.frame) return c.frame;
+  const df = manifest && manifest.manifold ? manifest.manifold.default_frame : null;
+  if (typeof df === 'string' && df && knownPreset(df, presets)) return df;
+  return 'pca';
+}
+
+/** Tour speed factor: store `speed`, else options.speed, else 1 (finite and > 0 only). */
+export function tourSpeed(storeSpeed, cfg) {
+  const a = Number(storeSpeed);
+  if (storeSpeed !== null && storeSpeed !== undefined && Number.isFinite(a) && a > 0) return a;
+  const b = Number(cfg && cfg.speed);
+  if (cfg && cfg.speed !== null && cfg.speed !== undefined && Number.isFinite(b) && b > 0) return b;
+  return 1;
+}
+
 export async function mount(host, ctx) {
   const {store, app, id} = ctx;
   const cfg = ctx.config || {};
@@ -352,14 +387,15 @@ export async function mount(host, ctx) {
   let F0 = null;
   if (Array.isArray(fr0.F) && fr0.F.length === 2 * D) F0 = Float64Array.from(fr0.F);
   else if (fr0.F && fr0.F.length === 2 * D) F0 = Float64Array.from(fr0.F);
-  if (!F0) F0 = await presetFrame(fr0.preset ?? cfg.frame ?? client.manifest.manifold?.default_frame ?? 'pca');
+  const preset0 = initialPreset(fr0, cfg, client.manifest, presets);
+  if (!F0) F0 = await presetFrame(preset0 || 'pca');
   ctx.setStatus('');
 
   // ------------------------------------------------------------ state
   const S = {
     tier: paneTier(ctx, n),
     path: null,              // 'gc' | 'xy' | 'canvas' | 'binned'
-    preset: fr0.F ? null : (fr0.preset ?? cfg.frame ?? 'pca'),
+    preset: fr0.F ? null : preset0,
     folded: null, foldKey: '',
     base: new Map(), baseN: 0, baseLoading: null,
     cpu: null,               // {x, y, vis, m} main-thread projection of rows [0, m)
@@ -388,7 +424,8 @@ export async function mount(host, ctx) {
   // or projected data; a failed base-column load or projection rejects
   const fp = firstPaintLatch();
 
-  const tour = new Tour(D, {F: F0, seed: 0x5eed, onSettle: () => { S.moving = false; settle(); }});
+  const tour = new Tour(D, {F: F0, seed: 0x5eed, speed: tourSpeed(store.get('speed'), cfg),
+    onSettle: () => { S.moving = false; settle(); }});
 
   // ------------------------------------------------------------ toolbar
   const tools = ctx.tools || bar;
@@ -1374,6 +1411,7 @@ export async function mount(host, ctx) {
   offs.push(store.on([`vis:${ds}`], () => { loadVis().catch(warnErr('filter mask')); }));
   offs.push(store.on(['color'], () => { loadColorState(); }));
   offs.push(store.on(['dm'], () => { S.foldKey = ''; settle(); }));
+  offs.push(store.on(['speed'], (changed, s) => { tour.setSpeed(tourSpeed(s.get('speed'), cfg)); }));
   offs.push(store.on(['av', 'rv'], () => schedule()));
   offs.push(store.on(['focus', 'hover'], () => { if (S.view) drawOver(S.view, tokensOf(ctx.theme())); }));
   offs.push(store.on(['theme'], () => loadColorState()));
@@ -1438,7 +1476,7 @@ export async function mount(host, ctx) {
   setPath();
   loadOverlays().catch(warnErr('overlays'));
   syncTourButtons();
-  if (cfg.tour === true && fr0.F === undefined && fr0.preset === undefined && cfg.autoplay) toggleDrift();
+  if (cfg.tour === true && fr0.F == null && fr0.preset == null && cfg.autoplay) toggleDrift();
   hl.sync();
 
   return {

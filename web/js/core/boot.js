@@ -34,6 +34,7 @@ import {loadCSS} from './loadscript.js';
 import {fmtCount, escapeHtml} from './fmt.js';
 import {mountLayout, normalizeTree, shownAtLoad} from '../layout/layout.js';
 import {createHub} from '../data/hub.js';
+import {RecordStore, recordIndexUrl, foreignKeyOf, isForeignRef, foreignPageBase} from '../data/records.js';
 import {Budget} from '../gl/budget.js';
 
 /** Pane types that get a rendering tier from their catalog's N (section 7.1). */
@@ -229,12 +230,42 @@ function isPlainObject(v) {
   return v !== null && typeof v === 'object' && !Array.isArray(v) && Object.getPrototypeOf(v) === Object.prototype;
 }
 
-/** Store defaults for a page (before page.state). Exported for tests and docs. */
+/**
+ * Frame preset a manifold pane opens on: the pane option `frame`, else the catalog manifest's
+ * `manifold.default_frame` when it names a known preset (manifestFrameKnown), else 'pca'.
+ * Mirrors panes/manifold.js initialPreset for a store without a frame.
+ */
+export function frameDefault(options, manifest) {
+  const o = options || {};
+  if (typeof o.frame === 'string' && o.frame) return o.frame;
+  const df = manifest && manifest.manifold && manifest.manifold.default_frame;
+  return typeof df === 'string' && df && manifestFrameKnown(manifest, df) ? df : 'pca';
+}
+
+/**
+ * True when `name` is a frame preset a manifold pane on this manifest can resolve: 'pca',
+ * `pair:i,j`, a manifold.frames key or a manifest preset of kind 'frame' / 'axes' (the same
+ * sources as panes/manifold.js framePresets).
+ */
+export function manifestFrameKnown(manifest, name) {
+  if (typeof name !== 'string' || !name) return false;
+  if (name === 'pca' || /^pair:\d+,\d+$/.test(name)) return true;
+  const m = manifest || {};
+  if (m.manifold && m.manifold.frames && Object.prototype.hasOwnProperty.call(m.manifold.frames, name)) return true;
+  return (m.presets || []).some((p) => p && p.key === name && (p.kind === 'frame' || p.kind === 'axes'));
+}
+
+/**
+ * Store defaults for a page (before page.state). Exported for tests and docs. A manifold pane
+ * without an options.frame gets preset null: boot fills it from the manifest's default_frame
+ * once the catalog opens (frameDefault). `speed` is the first manifold / wavelength pane
+ * options.speed, else 1.
+ */
 export function buildDefaults(page, norm) {
   const s = {
     focus: null, hover: null,
     color: {by: null, cmap: 'viridis'},
-    av: 0, rv: 3.1, dm: 0,
+    av: 0, rv: 3.1, dm: 0, speed: 1,
     template: null, features: [],
     spec: {pinned: [], variant: 'flux'},
     sky: null, rung: null, beat: null, role: null, facets: {}, lightbox: null,
@@ -250,12 +281,17 @@ export function buildDefaults(page, norm) {
       s[`annot:${ds}`] = {version: 0};
     }
   }
+  let speedSet = false;
   for (const leaf of norm.panes.values()) {
     const o = leaf.options || {};
+    if (!speedSet && (leaf.type === 'manifold' || leaf.type === 'wavelength') && Number(o.speed) > 0 && Number.isFinite(Number(o.speed))) {
+      s.speed = Number(o.speed);
+      speedSet = true;
+    }
     if (leaf.type === 'scatter') {
       s[`axes:${leaf.id}`] = {x: o.x ?? null, y: o.y ?? null, xlog: !!o.xlog, ylog: !!o.ylog, xinv: false, yinv: false};
     } else if (leaf.type === 'manifold') {
-      s[`frame:${leaf.id}`] = {preset: o.frame ?? 'pca', dims: Array.isArray(o.dims) ? o.dims.slice() : []};
+      s[`frame:${leaf.id}`] = {preset: typeof o.frame === 'string' && o.frame ? o.frame : null, dims: Array.isArray(o.dims) ? o.dims.slice() : []};
     } else if (leaf.type === 'spectrum1d' && Array.isArray(o.features) && !s.features.length) {
       s.features = o.features.slice();
     }
@@ -405,7 +441,8 @@ async function bootInner(t0, hooks) {
       if (res && res.hash && Object.keys(res.hash).length) {
         legacyHash = res.hash;
         legacyUsed = true;
-        legacyFromHash = !(Array.isArray(res.consumedSearch) && res.consumedSearch.length);
+        legacyFromHash = typeof res.fromHash === 'boolean' ? res.fromHash
+          : !(Array.isArray(res.consumedSearch) && res.consumedSearch.length);
       }
       if (res && Array.isArray(res.consumedSearch) && res.consumedSearch.length) {
         const params = new URLSearchParams(location.search);
@@ -473,6 +510,7 @@ async function bootInner(t0, hooks) {
       const p = Promise.resolve(hub.catalog(ds));
       app.catalogs.set(ds, p);
       p.then((client) => ensureSelection(ds, client), () => {});
+      p.then((client) => applyFrameDefaults(ds, client), () => {});
       // rows()/record() read the whole pos file only after the first paint (note 99)
       Promise.all([p, firstPaint]).then(([client]) => {
         if (client && typeof client.allowPositions === 'function') client.allowPositions();
@@ -480,6 +518,25 @@ async function bootInner(t0, hooks) {
     }
     return app.catalogs.get(ds);
   };
+
+  /**
+   * Manifold panes on catalog `ds` whose page defaults leave the frame preset open (no
+   * options.frame, no page.state preset) open on the manifest's default_frame (frameDefault).
+   * The page defaults the hash compares against follow, so the default preset stays out of the
+   * hash. The store is not touched: the pane resolves the same preset itself at mount.
+   */
+  function applyFrameDefaults(ds, client) {
+    let changed = false;
+    for (const leaf of norm.panes.values()) {
+      if (leaf.type !== 'manifold' || leaf.dataset !== ds) continue;
+      const k = `frame:${leaf.id}`;
+      const d = pageDefaults[k];
+      if (!d || d.preset || (d.F && d.F.length)) continue;
+      pageDefaults[k] = Object.assign({}, d, {preset: frameDefault(leaf.options, client && client.manifest)});
+      changed = true;
+    }
+    if (changed && unbindHash && typeof unbindHash.setDefaults === 'function') unbindHash.setDefaults(pageDefaults);
+  }
 
   function ensureSelection(ds, client) {
     if (app.selections.has(ds)) return app.selections.get(ds);
@@ -630,6 +687,49 @@ async function bootInner(t0, hooks) {
     return id;
   };
 
+  /**
+   * Foreign record sets (shared contract (A)): hub.records(ds) opens the foreign index
+   * (recordIndexUrl). PNG-mode sidecars resolve against the foreign portal's page directory
+   * (foreignPageBase), with this page's {assets}/{res} values substituted (absolute shared bases,
+   * or relative ones that then point into the foreign portal). With `id_column` an idOf maps a
+   * catalog row id to the row's value in id_column (row lookup through app.resolveIds +
+   * client.record on ref.catalog). Other refs use the hub as before.
+   */
+  const hubRecords = hub.records;
+  const foreignStores = new Map(); // ds -> Promise<RecordStore>
+  app.foreignRecordKey = async (ds, id, opts = {}) => {
+    const ref = page.datasets[ds] || {};
+    if (!ref.id_column || !ref.catalog) return id === null || id === undefined ? null : String(id);
+    const [i] = await app.resolveIds(ref.catalog, [String(id)]);
+    if (!(i >= 0)) return null;
+    const client = await app.catalog(ref.catalog);
+    const row = await client.record(i, {signal: opts.signal});
+    return foreignKeyOf(row, ref.id_column);
+  };
+  hub.records = (ds) => {
+    const ref = page.datasets[ds];
+    if (!isForeignRef(ref)) return hubRecords(ds);
+    if (foreignStores.has(ds)) return foreignStores.get(ds);
+    let url = ds;
+    const p = (async () => {
+      const rel = recordIndexUrl(ref);
+      if (!rel) throw new Error('foreign record set has no url or base');
+      url = typeof hub.resolve === 'function' ? hub.resolve(rel) : new URL(rel, document.baseURI);
+      return RecordStore.open(String(url), {
+        base: foreignPageBase(url), page: {assets: page.assets, res: page.res},
+        idOf: ref.id_column ? (id, o) => app.foreignRecordKey(ds, id, o) : undefined,
+      });
+    })().catch((err) => {
+      foreignStores.delete(ds);
+      if (err && err.name === 'AbortError') throw err;
+      store.emit('data:error', {ds, url: String(url), status: Number.isInteger(err && err.status) ? err.status : 0, message: (err && err.message) || String(err)});
+      store.emit('toast', {level: 'error', text: `Could not load ${ds}: ${(err && err.message) || err}`});
+      throw err;
+    });
+    foreignStores.set(ds, p);
+    return p;
+  };
+
   let unbindHash = null;
 
   /** Rows whose ids Selection.serialize may ask for (index-only ids ops of the recipe). */
@@ -693,6 +793,24 @@ async function bootInner(t0, hooks) {
       else sel.apply(tmp.mask, 'replace');
     }
     return sel;
+  };
+
+  /**
+   * Rows a serialized selection ('ids:' | 'bits:' | 'r:') selects on dataset ds, as a Uint8Array
+   * mask over the catalog, without touching the dataset's Selection (recipes replay on a scratch
+   * Selection). Null when the text cannot be read. Used by ui/chips.js so that recipe presets
+   * combine with shift (add) / alt (subtract) like the other presets.
+   */
+  app.selectionHit = async (ds, str) => {
+    const parsed = str ? Selection.parse(str) : null;
+    if (!parsed) return null;
+    const client = await app.catalog(ds);
+    const n = client.n;
+    if (parsed.kind === 'bits') return unpackBits(parsed.bytes, n);
+    const tmp = new Selection(n, {maxUndo: 1});
+    if (parsed.kind === 'ids') tmp.setIndices((await app.resolveIds(ds, parsed.ids)).filter((i) => i >= 0), 'replace');
+    else await replayRecipe(ds, tmp, parsed.ops);
+    return tmp.mask.slice();
   };
 
   async function recipeHit(ds, client, op, n) {

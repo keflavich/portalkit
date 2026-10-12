@@ -26,16 +26,26 @@
 //
 // tests/fixtures/legacy_snippets/hash_vectors.json holds the shared vectors that the Python
 // mirror (portalkit/legacy/hashmap.py) is tested against.
+//
+// Legacy dim names (shared contract (B)): page.page.legacy.dim_alias maps legacy dim keys onto
+// the unified ones ({"c_F162M_F210M": "f162m-f210m", "m_F162M": "f162m"}). kv-view applies it
+// to its x / y / z / c values and spherex-colours to its filter and colour names before the dims
+// are resolved (dimAlias / aliasDim).
+//
+// Tour speed (shared contract (D)): the canonical key is `speed` (a float multiplier, store key
+// `speed`). The wavelength and kv-view (manifold) grammars map the legacy `?speed=` query
+// parameter (consumed, also under a canonical hash) and a legacy `speed=` hash value onto it.
 
 import {b64urlEncode, deflateRaw, utf8Encode} from './selection.js';
 
 /** Canonical top-level hash keys (core/hash.js HASH_ORDER without '@pane'). */
 export const CANONICAL_KEYS = Object.freeze([
-  'id', 'sel', 'f', 'c', 'av', 'rv', 'dm', 'tpl', 'feat', 'spec', 'wl',
+  'id', 'sel', 'f', 'c', 'av', 'rv', 'dm', 'speed', 'tpl', 'feat', 'spec', 'wl',
   'sky', 'base', 'ovl', 'rung', 'beat', 'role', 'fac', 'lb', 'view',
 ]);
 const CANON = new Set(CANONICAL_KEYS);
-const PANE_KEY_RE = /^(.+)\.(x|y|frame)$/;
+/** Pane-scoped canonical keys (core/hash.js PANE_KEY_RE). */
+export const PANE_KEY_RE = /^(.+)\.(x|y|frame|xr|yr|raster|ovl)$/;
 
 /** Radius of the gc-query `sel=ra,dec` circle, arcsec. */
 export const SEL_RADIUS_ARCSEC = 0.5;
@@ -176,6 +186,35 @@ export function layoutInfo(loc = {}) {
 }
 
 /**
+ * Legacy dim alias table of the page (page.page.legacy.dim_alias, contract (B)): loc.dimAlias
+ * wins, then loc.page, then the page JSON in the document. {} when there is none.
+ */
+export function dimAlias(loc = {}) {
+  if (loc.dimAlias && typeof loc.dimAlias === 'object') return loc.dimAlias;
+  const page = loc.page || pageJSON();
+  const a = page && page.page && page.page.legacy && page.page.legacy.dim_alias;
+  return a && typeof a === 'object' && !Array.isArray(a) ? a : {};
+}
+
+/** A legacy dim key through the alias table (unchanged when the table has no entry). */
+export function aliasDim(alias, key) {
+  if (key === undefined || key === null) return key;
+  const k = String(key);
+  return alias && Object.prototype.hasOwnProperty.call(alias, k) && typeof alias[k] === 'string' ? alias[k] : k;
+}
+
+/** Scatter panes of the page layout in layout order: [{id, options}]. */
+export function scatterPanes(loc = {}) {
+  const page = loc.page || pageJSON();
+  const out = [];
+  if (!page || !page.layout) return out;
+  for (const p of panesOf(page.layout)) {
+    if (p.pane === 'scatter') out.push({id: p.id || p.pane, options: p.options || {}});
+  }
+  return out;
+}
+
+/**
  * Context for the dim-indexed grammars: {dims: [{key, scale?}], pane, ds}.
  * loc.dims / loc.pane / loc.ds win; the page JSON fills the gaps.
  */
@@ -238,6 +277,27 @@ const KV_ID_KEYS = ['name', 'src', 'source', 'id', 'star', 'obj', 'target'];
  * taken as a pane id. Legacy axes `x=<dim>&y=<dim>` become a unit frame on those two dims.
  */
 function kvView(loc) {
+  // the query-string part (legacy `?speed=`, contract (D)) applies also under a canonical hash
+  const sq = searchSpeed(loc);
+  const res = kvViewHash(loc);
+  if (!res && !sq.consumed.length) return null;
+  return {hash: res ? res.hash : {}, searchHash: sq.searchHash, consumed: sq.consumed};
+}
+
+/** Legacy `?speed=` -> canonical `speed` (contract (D)); an unreadable value is consumed and dropped. */
+function searchSpeed(loc) {
+  const q = parseSearch(loc);
+  const searchHash = {};
+  const consumed = [];
+  if ('speed' in q) {
+    consumed.push('speed');
+    const sp = speedText(q.speed);
+    if (sp !== undefined) searchHash.speed = sp;
+  }
+  return {searchHash, consumed};
+}
+
+function kvViewHash(loc) {
   const h = hashText(loc);
   if (!h || h.indexOf('=') < 0 || isCanonicalHash(h)) return null;
   const kv = parseKV(h, true);
@@ -246,6 +306,20 @@ function kvView(loc) {
     if (kv[k]) { out.id = kv[k]; break; }
   }
   const info = layoutInfo(loc);
+  const alias = dimAlias(loc);
+  for (const k of ['x', 'y', 'z']) if (kv[k]) kv[k] = aliasDim(alias, kv[k]);
+  if (kv.c) {
+    // colour-by: `<by>[~cmap~lo~hi]`; only the column part is a dim name
+    const t = kv.c.indexOf('~');
+    const by = aliasDim(alias, t < 0 ? kv.c : kv.c.slice(0, t));
+    const c = t < 0 ? by : by + kv.c.slice(t);
+    if (c !== kv.c) out.c = c;
+  }
+  if (kv.speed !== undefined) {
+    const sp = speedText(kv.speed);
+    if (sp !== undefined) out.speed = sp;
+    delete kv.speed;
+  }
   if (kv.view) {
     const v = kv.view;
     if (v.indexOf(':') >= 0) out.view = v;
@@ -269,6 +343,12 @@ function kvView(loc) {
   return {hash: Object.assign(canonicalPassThrough(kv), out), consumed: []};
 }
 
+/** A positive speed multiplier as hash text, or undefined. */
+function speedText(v) {
+  const sp = num(v);
+  return sp !== undefined && sp > 0 ? fmt(sp) : undefined;
+}
+
 function wavelength(loc) {
   const h = hashText(loc);
   const out = {};
@@ -282,17 +362,21 @@ function wavelength(loc) {
     kv = {rung: safeDecode(p[0]), ra: p[1], dec: p[2], fov: p[3]};
   }
   if (kv.rung) out.rung = kv.rung;
+  if (kv.speed !== undefined) {
+    // legacy `speed=` in the hash: the tour / playback speed (contract (D))
+    const sp = speedText(kv.speed);
+    if (sp !== undefined) out.speed = sp;
+    delete kv.speed;
+  }
   const ra = num(kv.ra);
   const dec = num(kv.dec);
   if (ra !== undefined && dec !== undefined) {
     const fov = num(kv.fov);
     out.sky = `${fmt(ra)},${fmt(dec)},${fmt(fov !== undefined && fov > 0 ? fov : DEFAULT_FOV_DEG)}`;
   }
-  const consumed = [];
-  const q = parseSearch(loc);
-  if ('speed' in q) consumed.push('speed');   // tour speed: no canonical key, dropped
+  const {searchHash: fromSearch, consumed} = searchSpeed(loc);
   if (!Object.keys(out).length && !consumed.length) return null;
-  return {hash: Object.keys(out).length ? Object.assign(canonicalPassThrough(kv), out) : {}, consumed};
+  return {hash: Object.keys(out).length ? Object.assign(canonicalPassThrough(kv), out) : {}, searchHash: fromSearch, consumed};
 }
 
 function beat(loc) {
@@ -443,22 +527,122 @@ function gcQuery(loc) {
   return {hash: out, consumed};
 }
 
+// ---------------------------------------------------------------------------------------
+// spherex-colours (contract (C)): the query string of the legacy SPHEREx colours.html
+//   ax, ay   CCD x axis = colour ax - ay       bx, by   CCD y axis = colour bx - by
+//   c        colour-by column                  band     CMD magnitude band (CMD y axis)
+//   cmd=1    CMD panel shown                   zoom     x0,x1,y0,y1 of the CCD
+//   yoo      Yoo overlay: '1' = every yoo_* layer of the CCD, else a comma list of layer ids
+//   hide     k1|k2 hidden levels of the colour-by category
+// The legacy page plots colours of NIRCam filter names (F162M); dim_alias maps the colour
+// `c_<A>_<B>` and the magnitude `m_<A>` onto unified dims, else the colour is `<a>-<b>` of the
+// lower-cased names. The CMD shares the CCD x colour. On a page with a single scatter pane
+// `band` and `cmd` are consumed and dropped.
+// ---------------------------------------------------------------------------------------
+
+const SPHX_KEYS = ['ax', 'ay', 'bx', 'by', 'c', 'band', 'cmd', 'zoom', 'yoo', 'hide'];
+
+/** Unified magnitude dim of a legacy filter name. */
+function sphxMag(alias, f) {
+  const k = `m_${f}`;
+  if (Object.prototype.hasOwnProperty.call(alias, k)) return String(alias[k]);
+  if (Object.prototype.hasOwnProperty.call(alias, f)) return String(alias[f]);
+  return String(f).toLowerCase();
+}
+
+/** Unified colour expression of legacy filters a - b. */
+function sphxColour(alias, a, b) {
+  const k = `c_${a}_${b}`;
+  if (Object.prototype.hasOwnProperty.call(alias, k)) return String(alias[k]);
+  return `${sphxMag(alias, a)}-${sphxMag(alias, b)}`;
+}
+
+function colourByOf(opts) {
+  const c = opts && opts.color;
+  if (typeof c === 'string' && c) return c;
+  if (c && typeof c === 'object' && typeof c.by === 'string' && c.by) return c.by;
+  return null;
+}
+
+function spherexColours(loc) {
+  const q = parseSearch(loc);
+  if (!SPHX_KEYS.some((k) => k in q)) return null;
+  const alias = dimAlias(loc);
+  const sc = scatterPanes(loc);
+  const ccdP = sc.find((p) => p.id === 'ccd') || sc[0] || {id: 'ccd', options: {}};
+  // The CMD keys (band, cmd) need a second scatter pane; without one they are consumed and
+  // dropped. A page without layout info (no page JSON) keeps the legacy pane ids ccd / cmd.
+  const cmdP = sc.length ? (sc.find((p) => p.id === 'cmd' && p !== ccdP) || sc.find((p) => p !== ccdP) || null)
+    : {id: 'cmd', options: {}};
+  const ccd = ccdP.id, cmd = cmdP ? cmdP.id : null;
+  const out = {};
+  const consumed = [];
+  const use = (...ks) => { for (const k of ks) if (k in q && !consumed.includes(k)) consumed.push(k); };
+  let xcol = null;
+  if (q.ax && q.ay) { xcol = sphxColour(alias, q.ax, q.ay); out[`${ccd}.x`] = xcol; }
+  if (q.bx && q.by) out[`${ccd}.y`] = sphxColour(alias, q.bx, q.by);
+  use('ax', 'ay', 'bx', 'by');
+  if (q.band && cmd) {
+    out[`${cmd}.y`] = sphxMag(alias, q.band);
+    if (xcol) out[`${cmd}.x`] = xcol;
+  }
+  use('band');
+  if (cmd && (q.cmd === '1' || q.cmd === 'true')) out.view = `${cmd}:half`;
+  use('cmd');
+  let by = null;
+  if (q.c) { by = aliasDim(alias, q.c); out.c = by; }
+  use('c');
+  if (q.zoom) {
+    const p = q.zoom.split(',').map(num);
+    if (p.length === 4 && p.every((v) => v !== undefined)) {
+      out[`${ccd}.xr`] = `${fmt(p[0])},${fmt(p[1])}`;
+      out[`${ccd}.yr`] = `${fmt(p[2])},${fmt(p[3])}`;
+    }
+  }
+  use('zoom');
+  // Yoo layers: the CCD's overlays option lists them; the legacy page drew none without `yoo`,
+  // so a CCD with yoo_* layers always gets an explicit layer list (`<ccd>.ovl`).
+  const ovls = Array.isArray(ccdP.options.overlays) ? ccdP.options.overlays.map(String) : [];
+  const yooAll = ovls.filter((o) => o.startsWith('yoo_'));
+  if (yooAll.length) {
+    let on = [];
+    const y = q.yoo;
+    if (y === '1' || y === 'true') on = yooAll.slice();
+    else if (y) {
+      const want = y.split(',').map((s) => s.trim()).filter(Boolean).map((s) => (s.startsWith('yoo_') ? s : `yoo_${s}`));
+      on = yooAll.filter((o) => want.includes(o));
+    }
+    const list = ovls.filter((o) => !o.startsWith('yoo_') || on.includes(o));
+    out[`${ccd}.ovl`] = list.length ? list.join(',') : '-';
+  }
+  use('yoo');
+  if (q.hide) {
+    const key = by || colourByOf(ccdP.options);
+    const levels = q.hide.split('|').map((s) => s.trim()).filter(Boolean);
+    if (key && levels.length) out.f = encodeJSON({cats: {[key]: levels}});
+  }
+  use('hide');
+  if (!Object.keys(out).length && !consumed.length) return null;
+  return {hash: out, consumed};
+}
+
 /** name -> rule; `source` tells whether the rule reads the hash or the query string. */
 const RULES = {
   'bare-name': {source: 'hash', fn: bareName},
-  'kv-view': {source: 'hash', fn: kvView},
+  'kv-view': {source: 'both', fn: kvView},
   'gc-query': {source: 'search', fn: gcQuery},
   wavelength: {source: 'both', fn: wavelength},
   beat: {source: 'hash', fn: beat},
   'gallery-index': {source: 'hash', fn: galleryIndex},
   'w51-rowid': {source: 'hash', fn: w51RowId},
   specviewer: {source: 'hash', fn: specviewer},
+  'spherex-colours': {source: 'search', fn: spherexColours},
 };
 
 /** Grammar name -> (loc) => canonical hash record, or null when the grammar does not apply. */
 export const GRAMMARS = Object.freeze(Object.fromEntries(Object.entries(RULES).map(([k, r]) => [k, (loc) => {
   const res = r.fn(loc || {});
-  return res ? res.hash : null;
+  return res ? Object.assign({}, res.hash, res.searchHash || {}) : null;
 }])));
 
 export const GRAMMAR_NAMES = Object.freeze(Object.keys(RULES));
@@ -467,12 +651,16 @@ export const GRAMMAR_NAMES = Object.freeze(Object.keys(RULES));
  * Map a legacy location onto canonical hash keys.
  *
  * Hash grammars are tried in the given order and the first that applies wins; a hash that
- * is already canonical is left alone. Search grammars (gc-query, wavelength's ?speed=) all
- * apply and merge. Unknown grammar names are ignored.
+ * is already canonical is left alone. Search grammars (gc-query, spherex-colours, the ?speed=
+ * of wavelength and kv-view) all apply and merge, also when the hash was canonical or another
+ * grammar mapped it.
+ * Unknown grammar names are ignored. `fromHash` is true when a grammar mapped the hash itself
+ * (boot then replaces the hash instead of merging the mapping under it).
  *
  * @param {string[]} grammars
- * @param {{hash?: string, search?: string, dims?: Array, pane?: string, ds?: string}} loc
- * @returns {{hash: Record<string,string>, consumedSearch: string[]}}
+ * @param {{hash?: string, search?: string, dims?: Array, pane?: string, ds?: string,
+ *          page?: object, dimAlias?: object}} loc
+ * @returns {{hash: Record<string,string>, consumedSearch: string[], fromHash: boolean}}
  */
 export function mapLegacy(grammars, loc = {}) {
   const names = Array.isArray(grammars) ? grammars : (grammars ? [grammars] : []);
@@ -481,6 +669,7 @@ export function mapLegacy(grammars, loc = {}) {
   let hash = {};
   const consumed = [];
   let hashDone = hashIsCanonical;
+  let fromHash = false;
   for (const name of names) {
     const rule = RULES[name];
     if (!rule) continue;
@@ -492,13 +681,16 @@ export function mapLegacy(grammars, loc = {}) {
       res = rule.fn(loc);
     }
     if (!res) continue;
-    if (rule.source !== 'search' && Object.keys(res.hash).length && !hashDone) {
+    if (rule.source === 'search') {
+      hash = Object.assign({}, hash, res.hash);
+    } else if (Object.keys(res.hash).length && !hashDone) {
       hash = Object.assign({}, res.hash, hash);
       hashDone = true;
-    } else if (rule.source === 'search') {
-      hash = Object.assign({}, hash, res.hash);
+      fromHash = true;
     }
+    // the query-string part of a 'both' rule merges whether or not the hash was mapped
+    if (res.searchHash) hash = Object.assign({}, hash, res.searchHash);
     for (const k of res.consumed) if (!consumed.includes(k)) consumed.push(k);
   }
-  return {hash, consumedSearch: consumed};
+  return {hash, consumedSearch: consumed, fromHash};
 }
