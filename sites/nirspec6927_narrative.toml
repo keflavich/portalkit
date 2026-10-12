@@ -1,0 +1,55 @@
+# JWST NIRSpec 6927 narrative pages + reference-star QA (WP31; ARCHITECTURE.md sections 14.1
+# and 14.7, wave 6). The legacy tree is the same one sites/nirspec6927.toml (WP22) serves
+# (/orange/adamginsburg/jwst/spectra/nirspec_6927, secure, login required); this family is a
+# separate build family ("nirspec6927_narrative") that deploys into the *same*
+# nirspec_6927/unified target directory through its own [[portal]] id -- legacy_dir and url
+# below are identical to WP22's, only the id differs. Every page id here is prefixed `n_` so
+# the two families never write the same output file.
+#
+# Tier A only: every page's data is already embedded as a `const DATA = {...}` payload in the
+# rendered legacy HTML (msata_finding, h2, refstar_map). `refstar_map_data.json` has no writer
+# anywhere in the legacy tree -- its data is read straight out of the rendered
+# nirspec_6927_refstar_map.html instead, so no rebuild is needed (adapters/nirspec6927_narrative.py).
+# Deep links: the msata scrollytelling writes/reads `#beat=<id>` (the `beat` grammar).
+family = "nirspec6927_narrative"
+adapter = "adapters.nirspec6927_narrative:ADAPTER"
+tier_default = "A"
+
+[[portal]]
+id = "nirspec6927_narrative"
+title = "JWST NIRSpec 6927 (Brick MSA): narrative + QA"
+visibility = "secure"
+legacy_dir = "/orange/adamginsburg/jwst/spectra/nirspec_6927"
+url = "https://data.rc.ufl.edu/secure/adamginsburg/jwst/spectra/nirspec_6927/unified/"
+inputs = [
+    "/orange/adamginsburg/jwst/spectra/nirspec_6927/nirspec_6927_msata_finding.html",
+    "/orange/adamginsburg/jwst/spectra/nirspec_6927/nirspec_6927_h2.html",
+    "/orange/adamginsburg/jwst/spectra/nirspec_6927/nirspec_6927_refstar_map.html",
+    "/orange/adamginsburg/jwst/spectra/nirspec_6927/nirspec_6927_sources.json",
+    "/orange/adamginsburg/jwst/spectra/nirspec_6927/h2/*.png",
+    "/orange/adamginsburg/jwst/spectra/nirspec_6927/refstar_check/*.png",
+]
+
+[[portal.page]]
+id = "n_index"
+legacy = []
+
+[[portal.page]]
+id = "n_msata"
+legacy = ["nirspec_6927_msata_finding.html"]
+grammar = ["beat"]
+
+[[portal.page]]
+id = "n_h2"
+legacy = ["nirspec_6927_h2.html"]
+grammar = ["bare-name"]
+
+[[portal.page]]
+id = "n_refstar_map"
+legacy = ["nirspec_6927_refstar_map.html"]
+grammar = ["bare-name"]
+
+[[portal.page]]
+id = "n_refstar_check"
+legacy = ["refstar_check/index.html"]
+grammar = ["gallery-index"]

@@ -1,0 +1,32 @@
+# CMZ Spitzer IRS spectra portal (WP31 extra; ARCHITECTURE.md section 14, wave 6). Public;
+# no generator script was found for this family -- it reads as a clone of the NIRSpec 6927
+# map/specviewer template (adapters/spitzer_spectra.py).
+family = "spitzer_spectra"
+adapter = "adapters.spitzer_spectra:ADAPTER"
+tier_default = "A"
+
+[[portal]]
+id = "spitzer_spectra"
+title = "CMZ Spitzer IRS spectra"
+visibility = "public"
+legacy_dir = "/orange/adamginsburg/cmz/spitzer_spectra"
+url = "https://data.rc.ufl.edu/pub/adamginsburg/cmz/spitzer_spectra/unified/"
+inputs = [
+    "/orange/adamginsburg/cmz/spitzer_spectra/spitzer_spectra_sources.json",
+    "/orange/adamginsburg/cmz/spitzer_spectra/specdata/*.json",
+    "/orange/adamginsburg/cmz/spitzer_spectra/pngs/*.png",
+]
+
+[[portal.page]]
+id = "index"
+legacy = ["index.html"]
+
+[[portal.page]]
+id = "spitzer_map"
+legacy = ["spitzer_spectra_map.html"]
+grammar = ["bare-name"]
+
+[[portal.page]]
+id = "spitzer_specviewer"
+legacy = ["spitzer_spectra_specviewer.html"]
+grammar = ["specviewer"]

@@ -1,0 +1,134 @@
+# RGB and ACES wavelength-tour HiPS pages (WP31 extras; ARCHITECTURE.md section 14, wave 6).
+# Two public, pre-rendered Aladin tour families under /orange/adamginsburg/web/public:
+# avm_images/<field>_rgb_wavelength_tour.html (embedded STEPS) and
+# ACES_Aladin_tour/<field>_wavelength_tour[_<variant>].html (external waypoints_*.json).
+# adapters/hips_tours.py discovers both by glob, not from this list; the [[portal.page]]
+# entries below exist for legacy-file bookkeeping/provenance only (section 9.3) -- a tour whose
+# page id is not declared here still builds (portalkit/build.py _merge_legacy no-ops for an
+# undeclared page id), so a new field dropped into either directory needs no TOML edit to work,
+# only to be accounted for here.
+family = "hips_tours"
+adapter = "adapters.hips_tours:ADAPTER"
+tier_default = "A"
+
+[[portal]]
+id = "hips_tours"
+title = "Wavelength tours"
+visibility = "public"
+legacy_dir = "/orange/adamginsburg/web/public"
+target_dir = "/orange/adamginsburg/web/public/avm_images/unified/hips_tours"
+url = "https://data.rc.ufl.edu/pub/adamginsburg/avm_images/unified/hips_tours/"
+inputs = [
+    "/orange/adamginsburg/web/public/avm_images/*_rgb_wavelength_tour.html",
+    "/orange/adamginsburg/web/public/ACES_Aladin_tour/*_wavelength_tour*.html",
+    "/orange/adamginsburg/web/public/ACES_Aladin_tour/waypoints_*_wavelength*.json",
+]
+
+[[portal.page]]
+id = "index"
+legacy = []
+
+[[portal.page]]
+id = "rgb_arches_2045_10678"
+legacy = ["avm_images/arches_2045_10678_rgb_wavelength_tour.html"]
+
+[[portal.page]]
+id = "rgb_arches_2045_10678_starsub"
+legacy = ["avm_images/arches_2045_10678_starsub_rgb_wavelength_tour.html"]
+
+[[portal.page]]
+id = "rgb_brick"
+legacy = ["avm_images/brick_rgb_wavelength_tour.html"]
+
+[[portal.page]]
+id = "rgb_crowded_l3_nrca"
+legacy = ["avm_images/crowded_l3_nrca_rgb_wavelength_tour.html"]
+
+[[portal.page]]
+id = "rgb_crowded_l3_nrcb"
+legacy = ["avm_images/crowded_l3_nrcb_rgb_wavelength_tour.html"]
+
+[[portal.page]]
+id = "rgb_sickle"
+legacy = ["avm_images/sickle_rgb_wavelength_tour.html"]
+
+[[portal.page]]
+id = "rgb_w51"
+legacy = ["avm_images/w51_rgb_wavelength_tour.html"]
+
+[[portal.page]]
+id = "aces_brick_linear"
+legacy = [
+    "ACES_Aladin_tour/brick_wavelength_tour_linear.html",
+    "ACES_Aladin_tour/waypoints_brick_wavelength_linear.json",
+]
+
+[[portal.page]]
+id = "aces_brick_other"
+legacy = [
+    "ACES_Aladin_tour/brick_wavelength_tour_other.html",
+    "ACES_Aladin_tour/waypoints_brick_wavelength_other.json",
+]
+
+[[portal.page]]
+id = "aces_sgrb2_linear"
+legacy = [
+    "ACES_Aladin_tour/sgrb2_wavelength_tour_linear.html",
+    "ACES_Aladin_tour/waypoints_sgrb2_wavelength_linear.json",
+]
+
+[[portal.page]]
+id = "aces_sgrb2_other"
+legacy = [
+    "ACES_Aladin_tour/sgrb2_wavelength_tour_other.html",
+    "ACES_Aladin_tour/waypoints_sgrb2_wavelength_other.json",
+]
+
+[[portal.page]]
+id = "aces_sickle"
+legacy = [
+    "ACES_Aladin_tour/sickle_wavelength_tour.html",
+    "ACES_Aladin_tour/waypoints_sickle_wavelength.json",
+]
+
+[[portal.page]]
+id = "aces_w51"
+legacy = [
+    "ACES_Aladin_tour/w51_wavelength_tour.html",
+    "ACES_Aladin_tour/waypoints_w51_wavelength.json",
+]
+
+[[portal.page]]
+id = "aces_w51_linear"
+legacy = [
+    "ACES_Aladin_tour/w51_wavelength_tour_linear.html",
+    "ACES_Aladin_tour/waypoints_w51_wavelength_linear.json",
+]
+
+[[portal.page]]
+id = "aces_w51_linear_starsub"
+legacy = [
+    "ACES_Aladin_tour/w51_wavelength_tour_linear_starsub.html",
+    "ACES_Aladin_tour/waypoints_w51_wavelength_linear_starsub.json",
+]
+
+[[portal.page]]
+id = "aces_w51_other"
+legacy = [
+    "ACES_Aladin_tour/w51_wavelength_tour_other.html",
+    "ACES_Aladin_tour/waypoints_w51_wavelength_other.json",
+]
+
+[[portal.page]]
+id = "aces_wd1_linear"
+legacy = [
+    "ACES_Aladin_tour/wd1_wavelength_tour_linear.html",
+    "ACES_Aladin_tour/waypoints_wd1_wavelength_linear.json",
+]
+
+[[portal.page]]
+id = "aces_wd2_linear"
+legacy = [
+    "ACES_Aladin_tour/wd2_wavelength_tour_linear.html",
+    "ACES_Aladin_tour/waypoints_wd2_wavelength_linear.json",
+]
