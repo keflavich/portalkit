@@ -13,7 +13,7 @@ The contract for every module, file format and test lives in
 ## Install
 
 ```bash
-cd /blue/adamginsburg/adamginsburg/repos/portalkit
+git clone <url> && cd portalkit
 pip install -e .                  # numpy, astropy
 pip install -e ".[test]"          # + pytest, playwright
 pip install -e ".[thumbs]"        # + matplotlib (portalkit thumbs)
@@ -27,22 +27,48 @@ regular `pip install .` produces a builder that cannot find the viewer.
 
 ## Quickstart
 
+The `demo` family (`adapters/demo.py`, `sites/demo.toml`) is self-contained: every row and
+spectrum is synthesized in memory from a fixed seed, so it builds right after a clone with
+no external data, no legacy mount and no network access.
+
 ```bash
-portalkit build nirspec6927 --limit 50          # fixture-mode build into the stage root
-portalkit check /blue/adamginsburg/adamginsburg/portalkit_stage/nirspec6927/<build_id>/nirspec6927
-portalkit serve /blue/adamginsburg/adamginsburg/portalkit_stage/nirspec6927/<build_id>/nirspec6927 --port 8765
-portalkit deploy nirspec6927 <build_id> --dry-run
-portalkit deploy nirspec6927 <build_id> --yes   # writes <legacy_dir>/unified/
-portalkit verify nirspec6927 --http
+export PK_STAGE_ROOT=./stage              # or pass --stage-root ./stage on every command below
+
+portalkit build demo --limit 50 --vendor-assets   # --vendor-assets: a fully self-contained
+                                                   # tree (see "Vendoring assets" below)
+portalkit check "$PK_STAGE_ROOT/demo/<build_id>" --gate G2
+portalkit serve "$PK_STAGE_ROOT/demo/<build_id>/demo" --port 8765
 portalkit status
 ```
 
-`build` writes only under the stage root. `deploy` writes unified pages next to the legacy
-pages (`<legacy_dir>/unified/`) and records every file it owns in
-`<target>/.portalkit-deploy.json`. `--replace` (back up legacy pages and leave redirect
-stubs) is run by the user per family, after reviewing the contact sheet. See
-section 10 of the contract for the full CLI and its exit codes, and section 11 for deploy
-safety.
+`build` writes only under the stage root. `portalkit check --gate G2` validates every
+document against the schemas and size budgets; `portalkit serve` runs a local dev server so
+`http://localhost:8765/` renders the built portal. `docs/adapters.md` walks through
+`adapters/demo.py` as the worked example for writing your own adapter.
+
+A deployable portal also has `deploy`/`verify`/`rollback` commands that write a unified tree
+next to a family's legacy pages (`<legacy_dir>/unified/`) and record every file they own in
+`<target>/.portalkit-deploy.json`; see section 10 of the contract for the full CLI and its
+exit codes, and section 11 for deploy safety. The `demo` family's `legacy_dir`/`target_dir`
+in `sites/demo.toml` are placeholders, not real paths, so skip `deploy` for it.
+
+### Vendoring assets
+
+The viewer JS/CSS and shared physics resources are normally served once, per version, from a
+published host (`portalkit/version.py`'s `ASSET_BASE`/`RES_BASE`, overridable with
+`$PK_ASSET_BASE`/`$PK_RES_BASE`). Anyone other than the author should instead build with
+`--vendor-assets`, which copies that tree into the build itself (`_pk/v<version>/`, `res/`)
+so the portal has no external dependency at serve time — the mode used in the quickstart
+above and the one to use for a first build on a new machine.
+
+### Author's HPG deployment
+
+The families under `sites/` besides `demo` (`nirspec6927`, `w51`, `robitaille`, ...) read
+real data from HiPerGator paths under `/orange/adamginsburg` and `/blue/adamginsburg`, and
+their adapters' `legacy_paths`/`inputs` assume that mount. Building or deploying them needs
+the author's data and runs from `/blue/adamginsburg/adamginsburg/repos/portalkit` on
+HiPerGator; a fresh clone elsewhere can read their adapters and site registries as further
+worked examples but cannot build them without that data.
 
 ## Layout
 
@@ -67,19 +93,24 @@ Further reading: [`docs/bundle.md`](docs/bundle.md) (data formats),
 ```bash
 python -m pytest -q                 # Level 0: unit tests (opt-in groups are skipped)
 python -m pytest -q -m "not e2e"    # unit tests only (same as above, e2e deselected)
-node --test tests/js/               # JS unit tests (pure modules)
+node --test tests/js/*.test.mjs     # JS unit tests (pure modules; 600+ tests)
 python -m pytest -m e2e             # Levels 1-2: archetype smoke, caps matrix (opt-in, Playwright)
 python -m pytest -m perf            # perf budgets            (opt-in)
 python -m pytest -m slow            # 5M-row fixtures         (opt-in)
 python -m pytest -m adapters        # adapter contract tests  (opt-in, needs real data)
 python -m pytest -m served          # live server checks      (opt-in)
+python -m pytest --run-e2e --run-perf --run-adapters --run-served   # same opt-in groups, via flags
 PK_RUN_ALL=1 python -m pytest       # everything
 ```
 
+`node --test tests/js/` (no glob) fails on recent Node: it resolves the bare directory as a
+single entry module instead of discovering `*.test.mjs` files in it, so always pass the glob.
+
 Markers are registered in `tests/conftest.py`. Tests without another marker are `unit`.
 The opt-in groups (`e2e`, `perf`, `slow`, `adapters`, `served`) are skipped unless the `-m`
-expression names them, `--run-<name>` is passed, or `PK_RUN_ALL=1` is set. Tests marked `js`
-are skipped when `node` is not on `PATH`.
+expression names them, the matching `--run-e2e`/`--run-perf`/`--run-slow`/`--run-adapters`/
+`--run-served` flag is passed, or `PK_RUN_ALL=1` is set. Tests marked `js` are skipped when
+`node` is not on `PATH`.
 
 Code rules checked by the suite: no bare `except`, and no `except Exception` /
 `except BaseException` without a re-raise (`tests/py/test_no_broad_except.py`); the Python

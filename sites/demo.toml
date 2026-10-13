@@ -1,0 +1,17 @@
+# Self-contained demo family (docs/adapters.md worked example). Builds right after a clone
+# with no external data: adapters/demo.py synthesizes every row and spectrum in memory from
+# a fixed seed. legacy_dir/target_dir below are placeholders only -- nothing is read from or
+# deployed to them by `portalkit build`/`check`/`serve`; they exist to satisfy the site
+# registry schema (which requires an absolute-looking path) and are never under /orange or
+# /blue. Point a real family's registry at real paths on your own deployment target instead.
+family = "demo"
+adapter = "adapters.demo:ADAPTER"
+tier_default = "A"
+
+[[portal]]
+id = "demo"
+title = "portalkit demo"
+visibility = "public"
+legacy_dir = "/opt/portalkit-demo/legacy"
+target_dir = "/opt/portalkit-demo/deploy"
+url = "http://localhost:8765/demo/"

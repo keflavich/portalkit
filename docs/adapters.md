@@ -2,7 +2,17 @@
 
 An adapter turns one data family (a JWST field, a survey, a set of spectra) into portalkit
 dataset specs and pages. The contract is ARCHITECTURE.md section 9; this page walks through
-the files, the build and the checks. `adapters/_template.py` is a working starting point.
+the files, the build and the checks. `adapters/_template.py` is a working starting point to
+copy.
+
+For a worked example you can run right after cloning, see `adapters/demo.py` and
+`sites/demo.toml`: a self-contained family whose rows and spectra are synthesized in memory
+from a fixed seed, so it needs no legacy mount, no network access and no committed data
+file. `portalkit build demo --limit 50` builds it, `portalkit check <build_dir> --gate G2`
+passes, and `tests/py/test_demo_adapter.py` is a contract-style test that runs as a normal
+unit test (no `--run-adapters` needed) because it depends on nothing outside the repo. Read
+it alongside this page: it is the smallest adapter that still exercises a catalog explorer
+(list/sky/scatter/detail panes) and a spectra page via `standard_pages()`.
 
 ## Files
 
@@ -152,6 +162,17 @@ portalkit build myfield --tier B --jobs 2
 portalkit check /blue/adamginsburg/adamginsburg/portalkit_stage/myfield/<build_id> --gate G1
 portalkit serve /blue/adamginsburg/adamginsburg/portalkit_stage/myfield/<build_id>/main
 portalkit status myfield
+```
+
+`myfield` above is a placeholder for a family with real data on your deployment target; run
+the same commands against the `demo` family (self-contained, Tier A only) to see them work
+with no setup:
+
+```bash
+export PK_STAGE_ROOT=./stage
+portalkit build demo --limit 50 --vendor-assets
+portalkit check "$PK_STAGE_ROOT/demo/<build_id>" --gate G2
+portalkit serve "$PK_STAGE_ROOT/demo/<build_id>/demo"
 ```
 
 The build writes `<stage_root>/<family>/<build_id>/<portal_id>/` with `portal.json`, one
