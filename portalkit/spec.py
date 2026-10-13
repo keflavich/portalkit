@@ -410,6 +410,9 @@ class LegacyRef:
     presets: dict[str, str] = field(default_factory=dict)   # file -> per-file stub preset
     # legacy dim key -> unified dim key of the page's dataset (page.legacy.dim_alias, (B))
     dim_alias: dict[str, str] = field(default_factory=dict)
+    # scatter pane id that receives gc-query's legacy CMD a/b/m axes as <cmd_pane>.x/.y instead
+    # of <manifold>.frame when set (page.legacy.cmd_pane, contract (E)); "" means unset.
+    cmd_pane: str = ""
 
 
 @dataclass

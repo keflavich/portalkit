@@ -188,6 +188,9 @@ def test_map_click_opens_detail(runs, portal_dir):
     after = run.ev(f"() => {{ const h = window.__pk.app.layout.pane('{det}');"
                    " const s = h && h.stats(); return s ? s.id : null; }")
     assert after is not None and after != before
+    # the click focuses {ds, i} first; the store's focus.id is filled once the id resolves
+    run.page.wait_for_function(
+        "() => { const f = window.__pk.store.get('focus'); return !!(f && f.id != null); }", timeout=30000)
     focus = run.store_get("focus")
     assert focus is not None and focus["ds"] == "gal" and focus.get("id") == after
     # the detail pane now wires gal_img (map.html's lightbox/static_sed_png fix this work

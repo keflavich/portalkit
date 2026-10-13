@@ -13,9 +13,10 @@ SED PNGs) are aborted by the harness and recorded.
 * wd2_manifold: support beyond MAXD_GPU -> CPU (worker) projection; preselects as saved
   selections; the 2640 spectra are plotted from the nirspec2640 portal's record shards
   (foreign record set ``nirspec``, ``../nirspec2640/data/spec/``). The staged wd2 build holds
-  no nirspec2640 portal, so the test writes a small synthetic record set for the wd2 spec ids
-  under ``foreign_dir``, which ``server`` mounts at ``/nirspec2640/data/`` (WPE9 item 6) so the
-  browser's real request for that foreign base resolves without per-test routing.
+  no nirspec2640 portal, so the module-scoped ``foreign_spec`` fixture writes a small synthetic
+  record set for the wd2 spec ids under ``foreign_dir`` -- before any test opens a page that
+  could focus a spec-bearing star -- which ``server`` mounts at ``/nirspec2640/data/`` (WPE9
+  item 6) so the browser's real request for that foreign base resolves without per-test routing.
 * sabbi: manifold with isochrones recorded as disabled (no HST MIST bands); the default frame
   is the first axes preset.
 * wd2_sedgallery: gallery items = SED PNGs, live SED with the blackbody model, range brushes
@@ -77,8 +78,8 @@ def portal_dir(tmp_path_factory) -> Path:
 @pytest.fixture(scope="module")
 def foreign_dir(tmp_path_factory) -> Path:
     """Backing directory for the ``/nirspec2640/data/`` mount (see ``server``): the staged wd2
-    build holds no nirspec2640 portal, so ``test_manifold_foreign_spectra`` writes a synthetic
-    record set here under ``spec/`` before fetching it through the mount."""
+    build holds no nirspec2640 portal, so the ``foreign_spec`` fixture writes a synthetic record
+    set here under ``spec/`` before any test fetches it through the mount."""
     return tmp_path_factory.mktemp("nirspec2640")
 
 
@@ -204,7 +205,7 @@ def test_colorcolor_grid_and_hash(runs, portal_dir):
 
 
 # -- wd2_manifold ----------------------------------------------------------------------------
-def test_manifold_cpu_projection_and_preselects(runs, portal_dir):
+def test_manifold_cpu_projection_and_preselects(runs, portal_dir, foreign_spec):
     man = _man(portal_dir, "src")
     D = len(man["manifold"]["dims"])
     assert D > MAXD_GPU
@@ -236,17 +237,17 @@ def test_manifold_cpu_projection_and_preselects(runs, portal_dir):
     _no_errors(run)
 
 
-def test_manifold_legacy_kv_hash(runs, portal_dir):
-    run = runs("wd2_manifold.html", hash="star=WD2-000014")
-    run.page.wait_for_function("() => { const f = window.__pk.store.get('focus'); return !!(f && f.i != null); }",
-                               timeout=60000)
-    assert str(run.store_get("focus")["id"]) == "WD2-000014"
-    _no_errors(run)
-
-
-def test_manifold_foreign_spectra(server, runs, portal_dir, foreign_dir):
-    """wd2 stages no spectrum shards: the spectrum pane reads ../nirspec2640/data/spec/, which
-    ``server`` mounts onto ``foreign_dir`` (WPE9 item 6) rather than routing it per-test."""
+@pytest.fixture(scope="module")
+def foreign_spec(runs, portal_dir, foreign_dir, server):
+    """Writes the synthetic nirspec2640 record set that ``../nirspec2640/data/spec/`` (mounted
+    onto ``foreign_dir`` by ``server``) serves, and returns ``(pick, w)``: ``pick`` is the
+    ``[row_index, spec_id]`` list of wd2 sources that carry a NIRSpec spectrum name, ``w`` the
+    synthetic wavelength grid. Built once per module, before any test opens ``wd2_manifold.html``
+    with a focus/hash that could make the spectrum pane fetch this record set while
+    ``foreign_dir`` is still empty -- that ordering was a 404 race (WPE11 item 5): a test earlier
+    in the module than the old ``test_manifold_foreign_spectra`` could focus a spec-bearing star
+    first and see a real network error.
+    """
     import numpy as np
 
     from portalkit.bundle import records
@@ -269,6 +270,21 @@ def test_manifold_foreign_spectra(server, runs, portal_dir, foreign_dir):
                         units={"flux": "Jy"})
     records.write(RecordSetSpec("spec", "pks1", "src", sorted({sid for _, sid in pick}), spec), foreign_dir / "spec")
     assert (foreign_dir / "spec" / "index.json").is_file()
+    return pick, w
+
+
+def test_manifold_legacy_kv_hash(runs, portal_dir, foreign_spec):
+    run = runs("wd2_manifold.html", hash="star=WD2-000014")
+    run.page.wait_for_function("() => { const f = window.__pk.store.get('focus'); return !!(f && f.i != null); }",
+                               timeout=60000)
+    assert str(run.store_get("focus")["id"]) == "WD2-000014"
+    _no_errors(run)
+
+
+def test_manifold_foreign_spectra(server, runs, portal_dir, foreign_dir, foreign_spec):
+    """wd2 stages no spectrum shards: the spectrum pane reads ../nirspec2640/data/spec/, which
+    ``server`` mounts onto ``foreign_dir`` (WPE9 item 6) rather than routing it per-test."""
+    pick, _w = foreign_spec
     before = len(server.requests)
     run = runs("wd2_manifold.html")
     run.wait_panes_settled()

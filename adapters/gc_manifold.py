@@ -27,12 +27,10 @@ public GC URLs. Nothing is re-encoded; only the u8 tile index is widened to u16.
   300k rows would otherwise get T1.
 * The legacy query grammar (``?a=&b=&m=&p=&x1..y2&cb&cd&cm&cl&ch&g&rv&fa&sel``, Treasury
   ``y``) is mapped by ``legacyhash.js`` (``grammar = ["gc-query"]`` in the site registry).
-  ``legacyContext`` resolves the state onto the page's one manifold pane, including the a/b/m
-  and Treasury ``y`` axis choice that legacy shows on the CMD pane; ``legacyhash.js``/
-  ``config.py`` now carry a pane hint for this (``page.legacy.cmd_pane``, WPE9 item 8), but
-  wiring it here needs ``cmd_pane`` added to :class:`~portalkit.spec.LegacyRef` and propagated
-  through ``build.py``'s ``_merge_legacy`` and ``schema.py``'s two ``page.legacy`` allowlists,
-  none of which this adapter owns (WPE10 contract issue, not fixed here).
+  ``legacyContext`` resolves the state onto the page's CMD pane (not the manifold pane),
+  including the a/b/m and Treasury ``y`` axis choice that legacy shows there; each page's
+  ``PageSpec.legacy`` sets ``cmd_pane = CMD_PANE`` so ``hashmap.py``'s ``_gc_query`` writes
+  ``<cmd>.x``/``<cmd>.y`` instead of a raw ``<manifold>.frame`` (WPE11 item 1).
 * The red-clump zoom (``findDensityPeak``: densest bin of a 40x40 grid over the 0.5-99.5
   percentile box of the legacy ``sampleJoint`` (every ``SAMPLE_STRIDE_CAP``-th row, kept only
   when every manifold dim decodes), half-width 1/10 of the default fit range) is computed at
@@ -574,7 +572,7 @@ class GcManifoldAdapter:
 
     # -- pages ------------------------------------------------------------------------------
     def pages(self, ctx, ds):
-        from portalkit.spec import PageSpec
+        from portalkit.spec import LegacyRef, PageSpec
         info_all = getattr(self, "_info", None)
         if info_all is None:
             raise ValueError("pages() needs datasets() first")
@@ -596,6 +594,12 @@ class GcManifoldAdapter:
                 id="index", archetype="manifold", title=info["f"]["portal"].title,
                 datasets=[cat, hips, f"readme_{k}", "flt", "ext"], layout=layout, portal=info["f"]["portal"].id,
                 state={f"tier:{MANIFOLD_PANE}": TIER, f"tier:{CMD_PANE}": TIER, f"axes:{CMD_PANE}": axes},
+                # cmd_pane (contract E) routes the gc-query legacy a/b/m axes onto the CMD scatter
+                # pane's x/y instead of the manifold pane's frame; _merge_legacy (build.py) fills
+                # in files/grammar/dim_alias from the site registry's [[portal.page]] entry and
+                # keeps this value, since cmd_pane names a pane of this page and has no site-TOML
+                # equivalent (WPE11 item 1).
+                legacy=LegacyRef(files=[], cmd_pane=CMD_PANE),
                 subtitle=f"{int(info['f']['man']['n']):,} sources, {len(info['bands'])} bands"))
         return out
 

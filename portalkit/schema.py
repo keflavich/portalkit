@@ -1015,9 +1015,12 @@ def validate_page(obj: Any) -> list[str]:
         _opt_str(e, "page", pg, "subtitle", nonempty=False)
         if "legacy" in pg and pg["legacy"] is not None and _obj(e, "page.legacy", pg["legacy"]):
             lg = pg["legacy"]
-            _keys(e, "page.legacy", lg, ("files",), ("grammar", "preset", "presets", "dim_alias"))
+            _keys(e, "page.legacy", lg, ("files",),
+                  ("grammar", "preset", "presets", "dim_alias", "cmd_pane"))
             if "files" in lg:
                 _strlist(e, "page.legacy.files", lg["files"])
+            if "cmd_pane" in lg:
+                _str(e, "page.legacy.cmd_pane", lg["cmd_pane"], nonempty=False)
             if "presets" in lg and _obj(e, "page.legacy.presets", lg["presets"]):
                 files = lg.get("files") if isinstance(lg.get("files"), list) else []
                 for k, v in lg["presets"].items():
@@ -1671,7 +1674,8 @@ def validate_images(obj: Any) -> list[str]:
           ("schema", "facets", "presets", "catalog", "pages", "items"))
     roles = obj.get("roles")
     role_keys: set = set()
-    if roles is not None and _list(e, "roles", roles):
+    roles_ok = roles is not None and _list(e, "roles", roles)
+    if roles_ok:
         role_keys = _unique_ids(e, "roles", roles, key="key")
         for i, r in enumerate(roles):
             rp = _p("roles", i)
@@ -1710,7 +1714,7 @@ def validate_images(obj: Any) -> list[str]:
                     e(_p(ip, "roles"), "item has no images")
                 for rk, rv in ro.items():
                     rp = _p(_p(ip, "roles"), rk)
-                    if role_keys and rk not in role_keys:
+                    if roles_ok and rk not in role_keys:
                         e(rp, f"role {rk!r} not declared in roles")
                     if _obj(e, rp, rv):
                         _keys(e, rp, rv, ("url",), ("w", "h", "thumb"))
@@ -1728,7 +1732,7 @@ def validate_images(obj: Any) -> list[str]:
             pp = _p("presets", i)
             if not _obj(e, pp, pr):
                 continue
-            _keys(e, pp, pr, ("key", "label", "facets"))
+            _keys(e, pp, pr, ("key", "label", "facets"), ("role",))
             if "facets" in pr and _obj(e, _p(pp, "facets"), pr["facets"]):
                 for fk, fv in pr["facets"].items():
                     fp = _p(_p(pp, "facets"), fk)
@@ -1738,6 +1742,9 @@ def validate_images(obj: Any) -> list[str]:
                         for v in fv:
                             if v not in facet_vals[fk]:
                                 e(fp, f"value {v!r} not among facet values")
+            if "role" in pr and _str(e, _p(pp, "role"), pr["role"], nonempty=False):
+                if roles_ok and pr["role"] not in role_keys:
+                    e(_p(pp, "role"), f"role {pr['role']!r} not declared in roles")
     _opt_str(e, "", obj, "catalog")
     if paged and _list(e, "pages", obj["pages"], nonempty=True):
         for i, pgf in enumerate(obj["pages"]):

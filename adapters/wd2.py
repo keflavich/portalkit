@@ -670,7 +670,12 @@ cross-matches.{lim}
                      links={"manifold": to["manifold"], "colorcolor": to["colorcolor"]}),
             PageSpec(id="wd2_wavelength_explorer", archetype="wavelength", title="Wavelength explorer",
                      datasets=["src", "hips"], subtitle=f"{len(ds['hips'].rungs)} RGB composites",
-                     links={"manifold": to["manifold"]}),
+                     links={"manifold": to["manifold"]},
+                     # grammar=["wavelength"] (legacyhash.js) is what gets a bare ?speed= query
+                     # param onto the canonical `speed` hash key on boot (WPE11 item 4); the site
+                     # registry's [[portal.page]] entry for this page sets only `legacy` (file
+                     # names), no grammar, so it must come from here.
+                     legacy=LegacyRef(files=[], grammar=["wavelength"])),
         ]
 
 

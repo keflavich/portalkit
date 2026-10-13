@@ -179,14 +179,24 @@ def test_av_and_density(portal_dir):
 
 def test_dm_slider(runs):
     run = runs("manifold")
+    # __pk.ready can resolve before the manifold pane's async mount builds its control bar
+    run.page.wait_for_selector("label.pk-ctl-dm input", state="attached", timeout=60000)
     assert run.ev("() => !!document.querySelector('label.pk-ctl-dm input')")
     assert (run.store_get("dm") or 0) == 0
     run.wait_panes_settled()
     panes = [p for p, st in run.pane_states().items() if st != "hidden"]
     before = {p: run.wait_canvas_stable(p) for p in panes}
+    token_js = ("() => { const h = window.__pk.app.layout.pane('manifold'); const s = h && h.stats && h.stats();"
+                " return s ? s.token : null; }")
+    tok0 = run.ev(token_js)
     run.ev("() => window.__pk.store.set({dm: 4.5}, {source: 'test'})")
     assert run.store_get("dm") == 4.5
+    # A uniform magnitude shift can leave an autoscaled frame pixel-identical (e.g. a colour or
+    # a lone magnitude axis), so a new manifold render token also counts as a redraw.
     changed = [p for p in panes if run.wait_canvas_change(p, before[p], timeout_ms=8000) != before[p]]
+    if not changed and tok0 is not None:
+        run.page.wait_for_function(f"() => ({token_js})() > {int(tok0)}", timeout=30000)
+        changed = ["manifold"]
     assert changed, f"no pane redrew after dm changed ({panes})"
     run.ev("() => window.__pk.store.set({dm: 0}, {source: 'test'})")
     assert not _errs(run)

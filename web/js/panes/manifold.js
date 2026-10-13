@@ -212,16 +212,38 @@ export function remapFrame(F, fromDims, toDims) {
 }
 
 /**
+ * Weight of one axes-preset axis expression in `dims`-space (the manifold's own dim keys,
+ * which may themselves be virtual-dim expression strings, e.g. a colour `a-b` registered as
+ * its own dim rather than decomposed, ARCHITECTURE.md 5.2/7.3). When `expr` names one of
+ * `knownDims` exactly, the weight is unit on that single dim (the manifold already carries it
+ * as one entry; decomposing it into its base columns here would double-count it against that
+ * dim's OWN entry and scatter weight onto the wrong indices, WPE11 item 3). Otherwise `expr`
+ * is an ad hoc linear combination with no dim of its own, compiled to base-column weights as
+ * before (fold.js later decomposes any composite dim into base columns for GPU rendering, so
+ * dims-space weight here is always the right representation to carry forward).
+ */
+function axisWeight(expr, knownDims) {
+  if (knownDims && knownDims.has(expr)) {
+    const w = Object.create(null);
+    w[expr] = 1;
+    return {w, c: 0, keys: [expr]};
+  }
+  return compileLinear(expr);
+}
+
+/**
  * Frame presets of a catalog: [{key, label, dims, F|{x,y,wx,wy}, kind}] from manifold.frames,
  * manifest presets of kind 'frame', and (IMPLEMENTATION_NOTES 91) presets of kind 'axes'. `x`
  * and `y` of an axes preset are independent linear expressions (section 4.4 grammar, e.g. a CMD
  * colour `a-b` plotted against a magnitude `a` that shares a band) rather than necessarily a
- * single dim key each, compiled here to base-column weights `wx`/`wy` (fold.js compileLinear);
- * `dims` is the union of their base keys. The two rows are NOT required to be orthogonal — an
- * axes preset renders as the literal 2-D projection it names (axesFrame/applyFrame below), never
- * through orthonormalize. When `dimKeys` is given, an axes preset is kept only if every base key
- * `x`/`y` touches is among those dims (nothing to project it onto otherwise). Earlier entries win
- * on a repeated key.
+ * single dim key each, compiled here to dims-space weights `wx`/`wy` (axisWeight above): unit
+ * weight on the dim itself when `x`/`y` names one of the manifold's own dims (including a
+ * virtual colour dim whose key IS that expression string), else decomposed to base columns via
+ * fold.js compileLinear; `dims` is the union of their (dims-space or base) keys. The two rows
+ * are NOT required to be orthogonal — an axes preset renders as the literal 2-D projection it
+ * names (axesFrame/applyFrame below), never through orthonormalize. When `dimKeys` is given, an
+ * axes preset is kept only if every key `x`/`y` touches is among those dims (nothing to project
+ * it onto otherwise). Earlier entries win on a repeated key.
  */
 export function framePresets(client, dimKeys = null) {
   const man = client.manifest || {};
@@ -229,6 +251,7 @@ export function framePresets(client, dimKeys = null) {
   const seen = new Set();
   const add = (q) => { if (q.key && !seen.has(q.key)) { seen.add(q.key); out.push(q); } };
   const mdims = (man.manifold && man.manifold.dims) || [];
+  const mset = new Set(mdims);
   for (const [k, F] of Object.entries((man.manifold && man.manifold.frames) || {})) {
     if (Array.isArray(F) && F.length === 2 * mdims.length) add({key: k, label: k, dims: mdims, F, kind: 'frame'});
   }
@@ -240,8 +263,8 @@ export function framePresets(client, dimKeys = null) {
     } else if (p.kind === 'axes' && typeof p.x === 'string' && typeof p.y === 'string' && p.x && p.y && p.x !== p.y) {
       let wx, wy;
       try {
-        wx = compileLinear(p.x);
-        wy = compileLinear(p.y);
+        wx = axisWeight(p.x, mset);
+        wy = axisWeight(p.y, mset);
       } catch (err) {
         if (err instanceof SyntaxError) continue;
         throw err;
@@ -431,9 +454,13 @@ export async function mount(host, ctx) {
   else if (fr0.F && fr0.F.length === 2 * D) F0 = Float64Array.from(fr0.F);
   const preset0 = initialPreset(fr0, cfg, client.manifest, presets);
   if (!F0) F0 = await presetFrame(preset0 || 'pca');
-  // An axes-preset frame is a raw (possibly non-orthonormal) 2-D projection (framePresets docstring
-  // above); Tour's constructor must not Gram-Schmidt it back into orthogonality on mount.
-  const raw0 = isAxesPresetName(fr0.preset) || isAxesPresetName(preset0);
+  // An axes-preset frame, or a frame handed in directly with no preset name (e.g. a gc-query
+  // legacy CMD/CCD hash decoded straight to `frame:<pane>.F`, hashmap.py's _gc_query), is a raw
+  // (possibly non-orthonormal) 2-D projection (framePresets docstring above); Tour's constructor
+  // must not Gram-Schmidt it back into orthogonality on mount. A later leg still snaps to the
+  // nearest orthonormal frame first (Tour's own raw/setRaw docstring), so this only affects the
+  // frame actually shown before the first tour move.
+  const raw0 = Boolean(fr0.F && fr0.F.length) || isAxesPresetName(fr0.preset) || isAxesPresetName(preset0);
   ctx.setStatus('');
 
   // ------------------------------------------------------------ state
@@ -1459,7 +1486,11 @@ export async function mount(host, ctx) {
     }
     if (fr.F && fr.F.length === 2 * D) {
       S.preset = fr.preset || null;
-      goTo(Float64Array.from(fr.F), {raw: isAxesPresetName(fr.preset)});
+      // Mirror the mount-time rule (raw0 above): a literal F with no preset name (e.g. a gc-query
+      // legacy CMD/CCD hash decoded straight to `frame:<pane>.F`) or naming an axes preset is the
+      // raw, possibly non-orthonormal 2-D projection it carries; an F tagged with an orthonormal
+      // frame preset still animates as a tour leg.
+      goTo(Float64Array.from(fr.F), {raw: !fr.preset || isAxesPresetName(fr.preset)});
     } else if (fr.preset) {
       presetFrame(fr.preset).then((F) => { S.preset = fr.preset; goTo(F, {raw: isAxesPresetName(fr.preset)}); }, warnErr('frame preset'));
     }

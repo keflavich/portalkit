@@ -630,15 +630,18 @@ def test_png_row_prefers_the_observation_product():
     assert mod._png_row([m, {**m, "g2": "G235M"}], "G235MG395H", "001") is m
 
 
-def test_gallery_presets_are_facet_distinct(runs):
-    """WPE10 contract issue: schema.py's pk-images preset validator has no "role" key (see
-    adapters/jwst_archive.py's comment above `pre = [...]`), so the dropdown still carries
-    only the role-less GALLERY_PRESETS entries (the role variants stay legacy-stub-only)
-    until that lands; this guards the current, narrower shape."""
-    pre = runs["B"]["ds"]["pngs"].presets
-    facs = [json.dumps(p.data["facets"], sort_keys=True) for p in pre]
-    assert len(set(facs)) == len(facs) == 4
-    assert all(set(p.data) == {"facets"} for p in pre)
+def test_gallery_presets_carry_every_registry_entry_and_role(runs):
+    """schema.py's pk-images preset validator allows "role" (WPE11 item 2), so the dropdown
+    carries every GALLERY_PRESETS entry, role variants included, each with the registry's own
+    facets/role (not folded into facets)."""
+    pre = {p.key: p for p in runs["B"]["ds"]["pngs"].presets}
+    assert set(pre) == {k for k, *_ in mod.GALLERY_PRESETS}
+    for key, lab, fac, role in mod.GALLERY_PRESETS:
+        p = pre[key]
+        assert p.label == lab and p.data["facets"] == fac
+        assert set(p.data) == ({"facets", "role"} if role else {"facets"})
+        if role:
+            assert p.data["role"] == role
 
 
 # -- checklist export -> archive-checklist-diff ---------------------------------------------------

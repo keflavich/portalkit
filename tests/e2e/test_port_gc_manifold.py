@@ -14,7 +14,9 @@ directory); without it the module builds the fixture (``portalkit build gc_manif
 
 * T2 GPU path forced on the manifold and CMD panes (``tier:<pane>`` page state).
 * gc-query grammar: ``cb=<dim index>`` -> ``c=<dim key>`` through the pane's dims; ``rv``;
-  ``a/b/m`` and ``p=ccd&x1..y2`` -> a ``manifold.frame`` matrix over the legacy dim order.
+  ``a/b/m`` -> the CMD scatter pane's own x/y (page.legacy.cmd_pane = "cmd", WPE11 item 1);
+  ``p=ccd&x1..y2`` -> a ``manifold.frame`` matrix over the legacy dim order (cmd_pane has no
+  effect on this branch, hashmap.py's ``_gc_query``).
 * FEATURE_CAVEATS shown as caveats in the readme.
 * The red-clump zoom: the readme link sets the CMD axes to the build-time box.
 """
@@ -217,8 +219,11 @@ def test_readme_caveats_and_red_clump_link(runs, build_dir):
 
 
 def test_gc_query_cmd_and_ccd_frames(runs, build_dir):
-    """gc-query a/b/m (CMD) and p=ccd&x1..y2 (CCD) index the manifold dims in legacy order and
-    become a `manifold.frame` matrix (colour short - long, magnitude bright up)."""
+    """gc-query a/b/m indexes the manifold dims in legacy order and, since every page here sets
+    page.legacy.cmd_pane = "cmd" (WPE11 item 1), lands on the CMD scatter pane's own x/y
+    (colour a-b, magnitude m) rather than a `manifold.frame` matrix. p=ccd&x1..y2 has no
+    cmd_pane routing of its own (hashmap.py's _gc_query) and still becomes a `manifold.frame`
+    matrix over the legacy dim order (colour short - long, magnitude bright up)."""
     import base64
     import struct
     from portalkit.legacy.extract import script_json
@@ -235,10 +240,10 @@ def test_gc_query_cmd_and_ccd_frames(runs, build_dir):
         return list(struct.unpack(f"<{2 * D}f", b)), run.ev("() => location.search")
 
     run = runs(query="a=1&b=2&m=1")
-    F, search = frame_of(run)
-    want = [0.0] * (2 * D)
-    want[1], want[2], want[D + 1] = 1.0, -1.0, -1.0
-    assert F == pytest.approx(want), (F, dims)
+    run.page.wait_for_function("() => /(^#|&)cmd\\.x=/.test(location.hash)", timeout=30000)
+    h = dict(kv.split("=", 1) for kv in run.ev("() => location.hash").lstrip("#").split("&") if "=" in kv)
+    assert h["cmd.x"] == f"{dims[1]}-{dims[2]}" and h["cmd.y"] == dims[1]
+    search = run.ev("() => location.search")
     assert not re.search(r"[?&](a|b|m)=", search), search
     _wait_manifold(run)
     _no_errors(run)

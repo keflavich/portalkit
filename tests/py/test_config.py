@@ -274,21 +274,15 @@ def test_manifest_takes_precedence_over_spec():
 # ---------------------------------------------------------------------------
 # page.legacy.cmd_pane (contract (E), WPE9#8): gc-query's legacy CMD axes (a/b/m) map onto
 # <cmd_pane>.x/.y instead of <manifold>.frame when set; config.py checks it names a scatter
-# pane of the page. Two cross-ownership gaps limit how far this can be tested end to end
-# (see contract_issues): LegacyRef (spec.py) has no declared `cmd_pane` field, so these tests
-# set it as a plain extra attribute on the dataclass instance -- exactly what an adapter will
-# do once that field exists; and schema.py's page.legacy key allowlist does not include
-# "cmd_pane" yet, and config.assemble() always runs validate_page(doc) and raises on any
-# error, so *every* page carrying cmd_pane currently fails assembly on that schema error
-# alone, however correct config.py's own merge/validation of it is. The tests below cover
-# config.py's own logic directly (_cmd_pane_errors) and confirm, through assemble()'s raised
-# errors, that schema.py's gap is the only thing standing between this and a clean document.
+# pane of the page. LegacyRef (spec.py) declares `cmd_pane` and schema.py's page.legacy key
+# allowlist includes it (WPE11 item 1), so a page carrying a valid cmd_pane now assembles
+# cleanly end to end; the tests below cover config.py's own logic directly
+# (_cmd_pane_errors) and confirm, through assemble(), that a valid cmd_pane survives to the
+# served document and an invalid one is the only error raised.
 # ---------------------------------------------------------------------------
 
 def _legacy_with_cmd_pane(cmd_pane):
-    lg = LegacyRef(files=["old.html"], grammar=["gc-query"])
-    lg.cmd_pane = cmd_pane
-    return lg
+    return LegacyRef(files=["old.html"], grammar=["gc-query"], cmd_pane=cmd_pane)
 
 
 def test_cmd_pane_errors_scatter_pane_of_page_ok():
@@ -310,27 +304,26 @@ def test_cmd_pane_errors_wrong_pane_type():
     assert any("cmd_pane" in e and "'list'" in e and "not scatter" in e for e in errs)
 
 
-def test_cmd_pane_passed_through_and_only_the_known_schema_gap_blocks_assembly():
-    """config.py's own merge/validation accepts a valid cmd_pane silently; assembly still
-    fails, but on schema.py's "unknown key 'cmd_pane'" alone (the gap above), not on
-    anything _cmd_pane_errors checks."""
+def test_cmd_pane_passed_through_and_assembles_cleanly():
+    """config.py's own merge/validation accepts a valid cmd_pane, and it reaches the served
+    document under page.legacy.cmd_pane as a schema-valid key (WPE11 item 1)."""
     layout = {"row": [{"pane": "manifold", "id": "man", "dataset": "src"},
                       {"pane": "scatter", "id": "cmd"}]}
     page = PageSpec(id="m", archetype="explorer", title="M", datasets=["src"], layout=layout,
                     legacy=_legacy_with_cmd_pane("cmd"))
-    with pytest.raises(config.ConfigError) as ei:
-        _assemble(page, {"src": _cat()})
-    assert ei.value.errors == ["page.legacy: unknown key 'cmd_pane'"]
+    doc = _assemble(page, {"src": _cat()})
+    assert doc["page"]["legacy"]["cmd_pane"] == "cmd"
+    assert validate_page(doc) == []
 
 
-def test_cmd_pane_invalid_pane_error_surfaces_alongside_schema_gap():
+def test_cmd_pane_invalid_pane_error_surfaces():
     layout = {"pane": "manifold", "id": "man", "dataset": "src"}
     page = PageSpec(id="m", archetype="explorer", title="M", datasets=["src"], layout=layout,
                     legacy=_legacy_with_cmd_pane("nope"))
     with pytest.raises(config.ConfigError) as ei:
         _assemble(page, {"src": _cat()})
     assert any("cmd_pane" in e and "nope" in e and "not a pane" in e for e in ei.value.errors)
-    assert any("unknown key 'cmd_pane'" in e for e in ei.value.errors)
+    assert not any("unknown key 'cmd_pane'" in e for e in ei.value.errors)
 
 
 def test_cmd_pane_absent_is_not_an_error():

@@ -951,10 +951,36 @@ def test_images_preset_role(tmp_path):
     assert "void" not in by_key
     assert any("unk" in w and "role" in w and "not declared" in w for w in res.warnings)
     assert any("'void'" in w and "preset dropped" in w for w in res.warnings)
-    # schema.py's preset key check predates this contract item (WPE9#4); it does not yet
-    # allow "role" as an optional preset key (tracked in contract_issues, not owned here).
+    # schema.py's preset key check allows "role" (WPE11 item 2): a role-carrying preset is a
+    # valid pk-images/1 document, not just a bundle/images.py-internal shape.
+    assert schema.validate_images(doc) == []
+
+
+def test_images_preset_role_schema_rejects_undeclared_role():
+    """A preset whose ``role`` names a role the document never declared is a schema error (the
+    same ``role_keys`` check the item-roles validator already applies)."""
+    doc = {"schema": "pk-images/1", "roles": [{"key": "rgb", "label": "RGB"}],
+           "items": [], "facets": [],
+           "presets": [{"key": "p", "label": "P", "facets": {}, "role": "zzz"}]}
     errs = schema.validate_images(doc)
-    assert any("unknown key 'role'" in e for e in errs)
+    assert any("role" in e and "'zzz'" in e and "not declared" in e for e in errs)
+
+
+def test_images_preset_role_schema_rejects_undeclared_role_with_empty_roles():
+    """``roles: []`` (zero roles declared, not an absent/invalid ``roles`` key) must still reject
+    any role reference: no role is declared, so every role reference is undeclared (WPE11 review
+    fix -- the ``role_keys`` guard previously treated an empty-but-valid roles list the same as
+    'the check does not apply')."""
+    doc = {"schema": "pk-images/1", "roles": [], "items": [], "facets": [],
+           "presets": [{"key": "p", "label": "P", "facets": {}, "role": "zzz"}]}
+    errs = schema.validate_images(doc)
+    assert any("role" in e and "'zzz'" in e and "not declared" in e for e in errs)
+
+    doc2 = {"schema": "pk-images/1", "roles": [],
+            "items": [{"id": "i1", "roles": {"zzz": {"url": "a.png"}}}], "facets": [],
+            "presets": []}
+    errs2 = schema.validate_images(doc2)
+    assert any("role" in e and "'zzz'" in e and "not declared" in e for e in errs2)
 
 
 def test_images_pagination(tmp_path):

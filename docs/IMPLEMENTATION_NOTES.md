@@ -625,3 +625,23 @@ code and tests themselves; see `docs/deploy.md` ("Mounts") for item 6.
     `presets[]` key allowlist (and ideally validated as a string among the image set's declared role keys)
     by schema.py's owning WP.
 
+## Resolved in WPE11
+
+Notes 147 and 148 above named two gaps outside WPE9's own files that blocked `cmd_pane` and images
+preset `role` in a real build. Both are closed:
+
+- **`cmd_pane` (note 147).** `spec.LegacyRef` now declares a `cmd_pane` field directly (no more
+  dynamic-attribute workaround), `build.py`'s `_merge_legacy` carries an adapter-set `cmd_pane` through
+  the merge with the site TOML's own `page.legacy` table, `schema.validate_page`'s `page.legacy` key
+  allowlist now includes `"cmd_pane"`, and `adapters/gc_manifold.py` sets it on the CMD scatter pane.
+  `config.assemble()` no longer raises `ConfigError` for a page that sets `cmd_pane`.
+- **Images preset `role` (note 148).** `schema.validate_images`'s preset key allowlist now includes
+  `"role"`, and `adapters/jwst_archive.py` serves its role-carrying gallery presets directly, dropping
+  the filter work-around. A preset or item role is also validated as a string among the document's
+  declared `roles` keys, including the empty-`roles` case (an undeclared role is rejected even when
+  `roles: []`).
+
+`tests/py/test_config.py::test_cmd_pane_passed_through_and_assembles_cleanly` and
+`tests/py/test_catalog_bundle.py::test_images_preset_role` (plus a negative test for an undeclared
+role) cover both closures.
+

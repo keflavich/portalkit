@@ -493,7 +493,11 @@ def _merge_legacy(page: PageSpec, portal: Any) -> PageSpec:
                         preset=page.legacy.preset or pc.preset,
                         presets={k: v for k, v in presets.items() if k in files},
                         # the site entry wins over the adapter's PageSpec (section 4.1)
-                        dim_alias={**(getattr(page.legacy, "dim_alias", None) or {}), **alias})
+                        dim_alias={**(getattr(page.legacy, "dim_alias", None) or {}), **alias},
+                        # cmd_pane names a pane of THIS page (config._cmd_pane_errors); the site
+                        # registry has no equivalent concept, so only the adapter's own value
+                        # ever applies here, and it must survive this merge (WPE11 item 1).
+                        cmd_pane=getattr(page.legacy, "cmd_pane", "") or "")
     return dataclasses.replace(page, legacy=leg)
 
 
