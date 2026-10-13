@@ -18,6 +18,7 @@ import {T1_MAX} from '../core/constants.js';
 import {fmtQuant, fmtNum, fmtValue, MISSING} from '../core/fmt.js';
 import {sedPoints} from '../data/filters.js';
 import {itemUrl} from './lightbox.js';
+import {hasRecordOf} from '../panes/spectrum1d.js';
 
 const SKIP_ROLES = new Set(['id', 'ra', 'dec', 'text', 'url', 'image', 'limit', 'error']);
 const ROLE_RANK = {category: 0, flag: 1, mag: 2, color: 3, flux: 4, value: 5};
@@ -427,9 +428,21 @@ export function install(app) {
     for (const rds of datasetsOf('records', (r) => r.catalog === ds && (r.record || 'pks1') === 'pks1')) {
       const rs = await app.hub.records(rds);
       if (my !== token) return;
-      if (!rs.has(id)) continue;
+      // hasRecordOf looks up the record key first for a foreign set with id_column (has() is
+      // optimistic there); a false result or a null get() both mean 'no record in this set',
+      // so try the next candidate record set rather than aborting the whole figure search.
+      let present;
+      try {
+        present = await hasRecordOf(rs, id);
+      } catch (err) {
+        if (err && err.name === 'AbortError') throw err;
+        present = false;
+      }
+      if (my !== token) return;
+      if (!present) continue;
       const spec = await rs.get(id, {token: my, channel: 'hover'});
-      if (my !== token || !spec || !spec.channels) return;
+      if (my !== token) return;
+      if (!spec || !spec.channels) continue; // a null get() means no record for this row
       const names = Object.keys(spec.channels);
       const ch = spec.channels.flux || spec.channels[names[0]];
       if (!ch) continue;

@@ -11,7 +11,7 @@ import {prepareCanvas, tokensOf, drawAxes, cmapTable, CMAP_NAMES, makeScratchCan
 import {eventToViewPx} from '../plot/brushui.js';
 import {pki1Values} from '../data/records.js';
 import {pageDatasets, raf} from './sed.js';
-import {validRange, sig7, linkedFullExtent} from './spectrum1d.js';
+import {validRange, sig7, linkedFullExtent, hasRecordOf} from './spectrum1d.js';
 
 export const meta = {type: 'spectrum2d', caps: ['spectrum_2d_viewer'], needs: ['records']};
 
@@ -397,7 +397,20 @@ export function mount(host, ctx) {
     id = String(id);
     const s = await rsP.then((x) => x, () => null);
     if (!s || my !== seq) return;
-    if (!s.has(id)) {
+    // hasRecordOf looks up the record key first for a foreign set with id_column (has() is
+    // optimistic there), so a row without a foreign record reports 'No 2D spectrum' rather than
+    // hanging in a loading state (mirrors spectrum1d).
+    let present;
+    try {
+      present = await hasRecordOf(s, id);
+    } catch (err) {
+      if (my !== seq || destroyed) return;
+      if (err && err.name === 'AbortError') throw err;
+      console.warn(`2D spectrum ${id}: record lookup failed`, err);
+      present = false;
+    }
+    if (my !== seq || destroyed) return;
+    if (!present) {
       rec = null; focusId = id; codes = null; stretchInfo = null; pngImg = null; pngNatural = null; message = `No 2D spectrum for ${id}`;
       ctx.setStatus('none');
       scheduleRender();
@@ -417,7 +430,15 @@ export function mount(host, ctx) {
       scheduleRender();
       return;
     }
-    if (r === null || my !== seq || destroyed) return;
+    if (my !== seq || destroyed) return;
+    if (r === null) {
+      // not superseded (seq is unchanged), so the set has no record for this row
+      rec = null; focusId = id; values = null; codes = null; stretchInfo = null; pngImg = null; pngNatural = null;
+      message = `No 2D spectrum for ${id}`;
+      ctx.setStatus('none');
+      scheduleRender();
+      return;
+    }
     focusId = id;
     rec = r;
     values = null;

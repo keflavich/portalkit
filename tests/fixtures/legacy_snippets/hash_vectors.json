@@ -155,7 +155,8 @@
    },
    "hash": {
     "rung": "nir",
-    "sky": "10,-5,0.25"
+    "sky": "10,-5,0.25",
+    "speed": "2"
    },
    "consumedSearch": [
     "speed"
@@ -171,10 +172,31 @@
     "hash": "#rung=nir",
     "search": "?speed=2"
    },
-   "hash": {},
+   "hash": {
+    "speed": "2"
+   },
    "consumedSearch": [
     "speed"
    ],
+   "decoded": {}
+  },
+  {
+   "name": "kv-view speed",
+   "grammars": [
+    "kv-view"
+   ],
+   "loc": {
+    "hash": "#x=a&y=b&speed=1.5",
+    "search": "",
+    "page": {
+     "page": {},
+     "layout": null
+    }
+   },
+   "hash": {
+    "speed": "1.5"
+   },
+   "consumedSearch": [],
    "decoded": {}
   },
   {
@@ -1016,6 +1038,190 @@
    },
    "hash": {},
    "consumedSearch": [],
+   "decoded": {}
+  },
+  {
+   "name": "dim alias: kv-view x/y/c",
+   "grammars": [
+    "kv-view"
+   ],
+   "loc": {
+    "hash": "#x=c_F162M_F210M&y=m_F162M&c=c_F162M_F210M~magma~0~2",
+    "search": "",
+    "page": {
+     "page": {
+      "legacy": {
+       "dim_alias": {
+        "c_F162M_F210M": "f162m-f210m",
+        "m_F162M": "f162m",
+        "m_F210M": "f210m",
+        "c_F150W_F200W": "f150w-f200w"
+       }
+      }
+     },
+     "layout": null
+    },
+    "dims": [
+     "f162m",
+     "f162m-f210m"
+    ],
+    "pane": "mani",
+    "ds": "src"
+   },
+   "hash": {
+    "c": "f162m-f210m~magma~0~2",
+    "mani.frame": "b64:AAAAAAAAgD8AAIA_AAAAAA"
+   },
+   "consumedSearch": [],
+   "decoded": {
+    "mani.frame": [
+     0.0,
+     1.0,
+     1.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "name": "spherex-colours: axes, cmd, colour-by, zoom, yoo, hide",
+   "grammars": [
+    "spherex-colours"
+   ],
+   "loc": {
+    "hash": "",
+    "search": "?ax=F162M&ay=F210M&bx=F150W&by=F200W&c=s&band=F162M&cmd=1&zoom=0,1,-0.5,2&yoo=1&hide=young|evolved",
+    "page": {
+     "page": {
+      "legacy": {
+       "dim_alias": {
+        "c_F162M_F210M": "f162m-f210m",
+        "m_F162M": "f162m",
+        "m_F210M": "f210m",
+        "c_F150W_F200W": "f150w-f200w"
+       }
+      }
+     },
+     "layout": {
+      "row": [
+       {
+        "pane": "scatter",
+        "id": "ccd",
+        "options": {
+         "overlays": [
+          "yoo_a",
+          "yoo_b",
+          "g23_vector"
+         ],
+         "color": "s"
+        }
+       },
+       {
+        "pane": "scatter",
+        "id": "cmd",
+        "options": {}
+       }
+      ]
+     }
+    }
+   },
+   "hash": {
+    "ccd.x": "f162m-f210m",
+    "ccd.y": "f150w-f200w",
+    "cmd.y": "f162m",
+    "cmd.x": "f162m-f210m",
+    "view": "cmd:half",
+    "c": "s",
+    "ccd.xr": "0,1",
+    "ccd.yr": "-0.5,2",
+    "ccd.ovl": "yoo_a,yoo_b,g23_vector",
+    "f": "eyJjYXRzIjp7InMiOlsieW91bmciLCJldm9sdmVkIl19fQ"
+   },
+   "consumedSearch": [
+    "ax",
+    "ay",
+    "bx",
+    "by",
+    "band",
+    "cmd",
+    "c",
+    "zoom",
+    "yoo",
+    "hide"
+   ],
+   "decoded": {}
+  },
+  {
+   "name": "spherex-colours: one scatter pane (named ccd) drops the CMD keys",
+   "grammars": [
+    "spherex-colours"
+   ],
+   "loc": {
+    "hash": "",
+    "search": "?ax=F162M&ay=F210M&band=F162M&cmd=1",
+    "page": {
+     "page": {
+      "legacy": {
+       "dim_alias": {
+        "c_F162M_F210M": "f162m-f210m",
+        "m_F162M": "f162m",
+        "m_F210M": "f210m",
+        "c_F150W_F200W": "f150w-f200w"
+       }
+      }
+     },
+     "layout": {
+      "pane": "scatter",
+      "id": "ccd",
+      "options": {}
+     }
+    }
+   },
+   "hash": {
+    "ccd.x": "f162m-f210m"
+   },
+   "consumedSearch": [
+    "ax",
+    "ay",
+    "band",
+    "cmd"
+   ],
+   "decoded": {}
+  },
+  {
+   "name": "spherex-colours: one scatter pane (named cmd) drops the CMD keys",
+   "grammars": [
+    "spherex-colours"
+   ],
+   "loc": {
+    "hash": "",
+    "search": "?ax=F162M&ay=F210M&band=F162M&cmd=1",
+    "page": {
+     "page": {
+      "legacy": {
+       "dim_alias": {
+        "c_F162M_F210M": "f162m-f210m",
+        "m_F162M": "f162m",
+        "m_F210M": "f210m",
+        "c_F150W_F200W": "f150w-f200w"
+       }
+      }
+     },
+     "layout": {
+      "pane": "scatter",
+      "id": "cmd",
+      "options": {}
+     }
+    }
+   },
+   "hash": {
+    "cmd.x": "f162m-f210m"
+   },
+   "consumedSearch": [
+    "ax",
+    "ay",
+    "band",
+    "cmd"
+   ],
    "decoded": {}
   }
  ]

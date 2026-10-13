@@ -14,6 +14,10 @@
 //                        "play" buttons did
 //   t.manual(j, a, b)    compass drag: move dim j's projection toward (a, b)
 //   t.nextPair(±1)       tour-set hop through all basis-pair frames
+//   t.setRaw(F)          jump with NO orthonormalization (an axes-preset frame, e.g. a CMD
+//                        colour `a-b` vs a magnitude `a`); any later leg (to/drift/playAxis/
+//                        nextPair/manual) snaps the live frame to its nearest orthonormal
+//                        frame first, so touring resumes cleanly
 //   F = t.step(dtMs)     advance; returns the live frame (reused buffer, copy to keep it)
 //
 // Frames use the vendor layout: Float64Array(2D), [px_0..px_{D-1}, py_0..py_{D-1}].
@@ -42,7 +46,10 @@ function axisIndex(axis) {
 export class Tour {
   /**
    * D: number of displayed dims (>= 2).
-   * opts: {F?: initial frame (default e0/e1), seed?: number, rng?: () => [0,1),
+   * opts: {F?: initial frame (default e0/e1), raw?: false (keep `F` exactly, no
+   *        orthonormalization — an axes-preset frame, ARCHITECTURE.md 6.10/9.1, whose x/y are
+   *        independent linear expressions and may be non-orthogonal, e.g. a CMD colour `a-b`
+   *        and a magnitude `a` that share a band), seed?: number, rng?: () => [0,1),
    *        legMs, hopMs, dwellMs, speed = 1, ease = true, onSettle?(F, kind)}
    */
   constructor(D, opts = {}) {
@@ -59,7 +66,7 @@ export class Tour {
     this.F = new Float64Array(2 * D);
     if (opts.F && opts.F.length === 2 * D) {
       this.F.set(opts.F);
-      if (!isOrthonormal(this.F, 1e-6)) orthonormalize(this.F);
+      if (!opts.raw && !isOrthonormal(this.F, 1e-6)) orthonormalize(this.F);
     } else {
       this.F.set(basisFrame(D, 0, 1));
     }
@@ -99,6 +106,23 @@ export class Tour {
     return this.F;
   }
 
+  /**
+   * Jump to F immediately with NO orthonormalization; stops any motion. For an axes-preset
+   * frame (section 6.10/9.1): x and y are independent linear expressions over base dims and
+   * may be non-orthogonal (a CMD colour `a-b` plotted against a magnitude `a` that shares a
+   * band), so the display must show the literal projection, not a Gram-Schmidt rotation of it.
+   * `step()`/`_startLeg` snap the live frame to its nearest orthonormal frame before any
+   * subsequent leg starts (drift, axis play, pair hop or `to()`), so touring resumes cleanly
+   * from wherever `setRaw` left the frame.
+   */
+  setRaw(F) {
+    this.stop();
+    if (!F || F.length !== 2 * this.D) throw new RangeError('frame length must be 2·D');
+    this.F.set(F);
+    this._settle('setRaw');
+    return this.F;
+  }
+
   /** Stop all motion; the frame stays where it is. */
   stop() {
     this.mode = 'idle';
@@ -110,6 +134,9 @@ export class Tour {
   }
 
   _startLeg(target, ms, {noSpin = false} = {}) {
+    // Resume touring from the nearest orthonormal frame: a leg's geodesic needs an orthonormal
+    // starting point, but the live frame may be a raw axes-preset projection left by setRaw().
+    if (!isOrthonormal(this.F, 1e-6)) orthonormalize(this.F);
     let T = target;
     if (!isOrthonormal(T, 1e-9)) T = orthonormalize(copyFrame(T));
     let geo = geodesic(this.F, T, {noSpin});
@@ -263,6 +290,8 @@ export class Tour {
   manual(j, a, b, opts = {}) {
     if (!Number.isInteger(j) || j < 0 || j >= this.D) return this.F;
     this.stop();
+    // Resume touring from the nearest orthonormal frame (see setRaw).
+    if (!isOrthonormal(this.F, 1e-6)) orthonormalize(this.F);
     const F = manualRotate(this.F, j, [a, b], opts);
     this.F.set(F);
     return this.F;

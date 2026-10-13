@@ -4,7 +4,7 @@
 // Failures emit `data:error {ds, url, status, message}` plus an error toast, then reject.
 
 import {DataClient} from './client.js';
-import {RecordStore} from './records.js';
+import {RecordStore, isForeignRef, foreignPageBase, recordIndexUrl} from './records.js';
 import {fetchJSON, getStats} from './fetch.js';
 import {isActive} from '../workers/ops/query.js';
 import {baseKeys} from './expr.js';
@@ -219,9 +219,17 @@ export function createHub(page, store, opts = {}) {
     let url;
     const p = (async () => {
       const r = ref(ds);
-      url = resolve(r.url);
+      // recordIndexUrl falls back to a foreign ref's `<base><key>/index.json` when it carries no
+      // `url` of its own (contract (A), base+key form) — `r.url` alone is undefined there.
+      url = resolve(recordIndexUrl(r));
       // PNG-mode sidecars resolve against the page URL with {assets}/{res} substituted (note 81).
-      return RecordStore.open(url.toString(), {fetch: opts.fetch, base, page: {assets: page && page.assets, res: page && page.res}});
+      // A foreign record set (contract (A)) is a different portal: its PNG-mode sidecars resolve
+      // against ITS page directory (foreignPageBase of the foreign index URL), not this page's,
+      // matching boot.js's hub.records override (core/boot.js ~709) so a non-boot caller of
+      // createHub (e.g. a direct test) sees the same sidecar URLs as a booted page. id_column
+      // lookups (idOf) stay boot.js's job: they need catalog row access this hub does not have.
+      const pngBase = isForeignRef(r) ? foreignPageBase(url.toString()) : base;
+      return RecordStore.open(url.toString(), {fetch: opts.fetch, base: pngBase, page: {assets: page && page.assets, res: page && page.res}});
     })().catch((err) => {
       records.delete(ds);
       return fail(ds, url || ds, err);

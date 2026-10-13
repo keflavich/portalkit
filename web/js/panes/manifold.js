@@ -49,7 +49,7 @@ import {XYRenderer} from '../gl/xyrenderer.js';
 import {gcVertexBytes, XY_VERTEX_BYTES} from '../gl/budget.js';
 import {Renderer as GCRenderer} from '../vendor/gc/gl/renderer.js';
 import {basisFrame, orthonormalize, axisInfo, axisLabel} from '../vendor/gc/math/frame.js';
-import {fold, dimExpr, foldCamera, foldFade, projectRows} from '../math/fold.js';
+import {fold, dimExpr, foldCamera, foldFade, projectRows, compileLinear} from '../math/fold.js';
 import {Tour} from '../math/tour.js';
 import {drawCompass, attachCompass} from '../math/compass.js';
 import {fmtCount} from '../core/fmt.js';
@@ -212,11 +212,16 @@ export function remapFrame(F, fromDims, toDims) {
 }
 
 /**
- * Frame presets of a catalog: [{key, label, dims, F, kind}] from manifold.frames, manifest
- * presets of kind 'frame', and (IMPLEMENTATION_NOTES 91) presets of kind 'axes', which become
- * the frame with unit weight on dim x (row 0) and dim y (row 1). When `dimKeys` is given, an
- * axes preset is kept only if both its x and y are among those dims. Earlier entries win on a
- * repeated key.
+ * Frame presets of a catalog: [{key, label, dims, F|{x,y,wx,wy}, kind}] from manifold.frames,
+ * manifest presets of kind 'frame', and (IMPLEMENTATION_NOTES 91) presets of kind 'axes'. `x`
+ * and `y` of an axes preset are independent linear expressions (section 4.4 grammar, e.g. a CMD
+ * colour `a-b` plotted against a magnitude `a` that shares a band) rather than necessarily a
+ * single dim key each, compiled here to base-column weights `wx`/`wy` (fold.js compileLinear);
+ * `dims` is the union of their base keys. The two rows are NOT required to be orthogonal — an
+ * axes preset renders as the literal 2-D projection it names (axesFrame/applyFrame below), never
+ * through orthonormalize. When `dimKeys` is given, an axes preset is kept only if every base key
+ * `x`/`y` touches is among those dims (nothing to project it onto otherwise). Earlier entries win
+ * on a repeated key.
  */
 export function framePresets(client, dimKeys = null) {
   const man = client.manifest || {};
@@ -233,11 +238,45 @@ export function framePresets(client, dimKeys = null) {
     if (p.kind === 'frame' && Array.isArray(p.dims) && Array.isArray(p.F)) {
       add({key: p.key, label: p.label || p.key, dims: p.dims, F: p.F, kind: 'frame'});
     } else if (p.kind === 'axes' && typeof p.x === 'string' && typeof p.y === 'string' && p.x && p.y && p.x !== p.y) {
-      if (have && !(have.has(p.x) && have.has(p.y))) continue;
-      add({key: p.key, label: p.label || p.key, dims: [p.x, p.y], F: [1, 0, 0, 1], kind: 'axes'});
+      let wx, wy;
+      try {
+        wx = compileLinear(p.x);
+        wy = compileLinear(p.y);
+      } catch (err) {
+        if (err instanceof SyntaxError) continue;
+        throw err;
+      }
+      const bdims = [...new Set([...wx.keys, ...wy.keys])];
+      if (!bdims.length) continue;
+      if (have && !bdims.every((k) => have.has(k))) continue;
+      add({key: p.key, label: p.label || p.key, dims: bdims, x: p.x, y: p.y, wx, wy, kind: 'axes'});
     }
   }
   return out;
+}
+
+/**
+ * Frame over `toDims` for an axes preset `p` (framePresets, kind 'axes'): row 0 / row 1 are
+ * `p.wx`/`p.wy` (base-column weights) placed at each dim's index, zero elsewhere. No
+ * orthonormalization (docstring above): x and y may be non-orthogonal, and this is the exact
+ * 2-D projection the preset names. Null unless BOTH rows land a nonzero weight on `toDims`
+ * (mirrors remapFrame's per-row n0>1e-12 && n1>1e-12 guard) — a preset whose x or y has zero net
+ * weight on this view (a constant expression, or dims that cancel) must fall through to the
+ * caller's basisFrame fallback instead of rendering a degenerate flat axis.
+ */
+export function axesFrame(p, toDims) {
+  const D = toDims.length;
+  const out = new Float64Array(2 * D);
+  let n0 = 0, n1 = 0;
+  toDims.forEach((k, i) => {
+    const vx = Number(p.wx.w[k]) || 0;
+    const vy = Number(p.wy.w[k]) || 0;
+    out[i] = vx;
+    out[D + i] = vy;
+    n0 += vx ** 2;
+    n1 += vy ** 2;
+  });
+  return (n0 > 1e-12 && n1 > 1e-12) ? out : null;
 }
 
 /**
@@ -375,7 +414,7 @@ export async function mount(host, ctx) {
     }
     const p = presets.find((q) => q.key === name);
     if (p) {
-      const F = remapFrame(p.F, p.dims, dimKeys);
+      const F = p.kind === 'axes' ? axesFrame(p, dimKeys) : remapFrame(p.F, p.dims, dimKeys);
       if (F) return F;
       store.emit('toast', {level: 'warn', text: `Preset ${p.label} shares no dims with this view`});
     } else {
@@ -384,11 +423,17 @@ export async function mount(host, ctx) {
     return basisFrame(D, 0, 1);
   }
 
+  /** True when `name` is a known axes-kind preset (framePresets): render raw, no orthonormalize. */
+  const isAxesPresetName = (name) => presets.some((q) => q.key === name && q.kind === 'axes');
+
   let F0 = null;
   if (Array.isArray(fr0.F) && fr0.F.length === 2 * D) F0 = Float64Array.from(fr0.F);
   else if (fr0.F && fr0.F.length === 2 * D) F0 = Float64Array.from(fr0.F);
   const preset0 = initialPreset(fr0, cfg, client.manifest, presets);
   if (!F0) F0 = await presetFrame(preset0 || 'pca');
+  // An axes-preset frame is a raw (possibly non-orthonormal) 2-D projection (framePresets docstring
+  // above); Tour's constructor must not Gram-Schmidt it back into orthogonality on mount.
+  const raw0 = isAxesPresetName(fr0.preset) || isAxesPresetName(preset0);
   ctx.setStatus('');
 
   // ------------------------------------------------------------ state
@@ -424,7 +469,7 @@ export async function mount(host, ctx) {
   // or projected data; a failed base-column load or projection rejects
   const fp = firstPaintLatch();
 
-  const tour = new Tour(D, {F: F0, seed: 0x5eed, speed: tourSpeed(store.get('speed'), cfg),
+  const tour = new Tour(D, {F: F0, raw: raw0, seed: 0x5eed, speed: tourSpeed(store.get('speed'), cfg),
     onSettle: () => { S.moving = false; settle(); }});
 
   // ------------------------------------------------------------ toolbar
@@ -468,7 +513,7 @@ export async function mount(host, ctx) {
     if (!v) return;
     const F = await presetFrame(v);
     S.preset = v;
-    goTo(F);
+    goTo(F, {raw: isAxesPresetName(v)});
   });
   bar.append(presetSel);
   const dimInfo = el('span', 'pk-manifold-dims pk-muted', `${D} dims · ${baseKeys.length} columns`);
@@ -520,9 +565,16 @@ export async function mount(host, ctx) {
   axY.addEventListener('click', () => axisLoop('y'));
   resetBtn.addEventListener('click', resetZoom);
 
-  function goTo(F) {
-    tour.to(F);
-    startMotion();
+  /**
+   * Apply frame F. `opts.raw` (an axes preset) jumps with no orthonormalization (Tour.setRaw) —
+   * the literal 2-D projection the preset names, not a Gram-Schmidt rotation of it. Otherwise
+   * (a named frame preset, 'pca' or a dim pair, all already orthonormal) animates to it as
+   * before; a later tour move (drift/axis/pair) snaps the live frame to the nearest orthonormal
+   * frame first (Tour._startLeg), so touring resumes cleanly from a raw frame.
+   */
+  function goTo(F, opts = {}) {
+    if (opts.raw) tour.setRaw(F);
+    else { tour.to(F); startMotion(); }
     syncTourButtons();
   }
 
@@ -1405,8 +1457,12 @@ export async function mount(host, ctx) {
       if (F) { S.preset = null; goTo(F); }
       return;
     }
-    if (fr.F && fr.F.length === 2 * D) { S.preset = fr.preset || null; goTo(Float64Array.from(fr.F)); }
-    else if (fr.preset) presetFrame(fr.preset).then((F) => { S.preset = fr.preset; goTo(F); }, warnErr('frame preset'));
+    if (fr.F && fr.F.length === 2 * D) {
+      S.preset = fr.preset || null;
+      goTo(Float64Array.from(fr.F), {raw: isAxesPresetName(fr.preset)});
+    } else if (fr.preset) {
+      presetFrame(fr.preset).then((F) => { S.preset = fr.preset; goTo(F, {raw: isAxesPresetName(fr.preset)}); }, warnErr('frame preset'));
+    }
   }));
   offs.push(store.on([`vis:${ds}`], () => { loadVis().catch(warnErr('filter mask')); }));
   offs.push(store.on(['color'], () => { loadColorState(); }));

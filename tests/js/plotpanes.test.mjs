@@ -233,13 +233,40 @@ test('framePresets turns axes presets into unit-weight dim-pair frames', () => {
   const all = man.framePresets(client);
   assert.deepEqual(all.map((p) => p.key), ['pca', 'cmd', 'other', 'fr']);
   const cmd = all.find((p) => p.key === 'cmd');
-  assert.deepEqual(cmd, {key: 'cmd', label: 'CMD', dims: ['c', 'a'], F: [1, 0, 0, 1], kind: 'axes'});
+  // x/y are compiled linear expressions (compileLinear), not a baked {F} matrix: the axes preset's
+  // two rows need not be orthogonal/unit (e.g. a colour sharing a band with a magnitude), so the
+  // raw weights are kept and only projected (axesFrame), never orthonormalized (item 4 fix).
+  assert.deepEqual(
+    {key: cmd.key, label: cmd.label, dims: cmd.dims, x: cmd.x, y: cmd.y, kind: cmd.kind},
+    {key: 'cmd', label: 'CMD', dims: ['c', 'a'], x: 'c', y: 'a', kind: 'axes'},
+  );
+  // compileLinear builds `w` as a null-prototype object (fold.js); compare its own keys/values.
+  assert.deepEqual({...cmd.wx.w}, {c: 1});
+  assert.equal(cmd.wx.c, 0);
+  assert.deepEqual(cmd.wx.keys, ['c']);
+  assert.deepEqual({...cmd.wy.w}, {a: 1});
+  assert.equal(cmd.wy.c, 0);
+  assert.deepEqual(cmd.wy.keys, ['a']);
   const dimKeys = ['b', 'c', 'a'];
   const some = man.framePresets(client, dimKeys);
   assert.deepEqual(some.map((p) => p.key), ['pca', 'cmd', 'fr']);
-  // remapped onto the pane's dims: row 0 = +1 on c (index 1), row 1 = +1 on a (index 2)
-  const F = man.remapFrame(cmd.F, cmd.dims, dimKeys);
-  assert.deepEqual(man.pairOfFrame(F, 3), {i: 1, si: 1, j: 2, sj: 1});
+  // axesFrame projects onto the pane's dims with no orthonormalization: row 0 = +1 on c (index 1),
+  // row 1 = +1 on a (index 2), exactly the literal x='c', y='a' projection.
+  const F = man.axesFrame(cmd, dimKeys);
+  assert.deepEqual(Array.from(F), [0, 1, 0, 0, 0, 1]);
+  assert.equal(man.axesFrame({wx: {w: {}}, wy: {w: {}}}, dimKeys), null);
+  // Reviewer finding (WPE8 verify pass): a preset whose x or y has zero net weight on this view
+  // (a constant expression, or dims that cancel, e.g. 'a-a') must be rejected per-row, mirroring
+  // remapFrame's n0>1e-12 && n1>1e-12 guard -- not just "any weight anywhere across both rows".
+  // x row all-zero, y row nonzero: must be null, not a degenerate [0,0,1,0] frame.
+  assert.equal(man.axesFrame({wx: {w: {}}, wy: {w: {a: 1}}}, ['a', 'b']), null);
+  // y row all-zero, x row nonzero: must also be null.
+  assert.equal(man.axesFrame({wx: {w: {a: 1}}, wy: {w: {}}}, ['a', 'b']), null);
+  // both rows nonzero: still projects normally (no orthonormalization).
+  assert.deepEqual(
+    Array.from(man.axesFrame({wx: {w: {a: 1}}, wy: {w: {b: 1}}}, ['a', 'b'])),
+    [1, 0, 0, 1],
+  );
 });
 
 // ------------------------------------------------------------------ narrative highlight (note 71)

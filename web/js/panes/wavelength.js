@@ -72,10 +72,13 @@ export function stepRung(pos, n) {
   return p - lo > 0.5 ? hi : lo;
 }
 
-function speedFactor(cfg) {
-  let q = null;
-  if (typeof location !== 'undefined') q = new URLSearchParams(location.search).get('speed');
-  const v = +(q ?? cfg.speed ?? 1);
+/**
+ * Playback speed multiplier: the store key `speed` (§6.2; written by legacy `?speed=`/`speed=`
+ * via mapLegacy before boot strips consumed query/hash keys, so reading `location.search` here
+ * is too late), else `options.speed`, else 1.
+ */
+function speedFactor(store, cfg) {
+  const v = +(store.get('speed') ?? cfg.speed ?? 1);
   return Number.isFinite(v) && v > 0 ? v : 1;
 }
 
@@ -125,7 +128,7 @@ export function mount(el, ctx) {
   // (IMPLEMENTATION_NOTES 109); aladinFor() then restarts this pane's viewer on that retry.
   retryAladinOnce(app.page).catch(() => {});
 
-  const sf = speedFactor(cfg);
+  const sf = speedFactor(store, cfg);
   const speeds = SPEEDS.slice();
   if (!speeds.some((s) => Math.abs(s.factor - sf) < 1e-9)) speeds.push({label: `${sf}×`, factor: sf});
   speeds.sort((a, b) => a.factor - b.factor);
@@ -135,6 +138,16 @@ export function mount(el, ctx) {
     if (Math.abs(s.factor - sf) < 1e-9) o.selected = true;
     speedSel.append(o);
   }
+  /** Pick (or add and pick) the <option> matching factor `v`, without firing 'change'. */
+  const selectSpeed = (v) => {
+    const sv = String(v);
+    if (!Array.from(speedSel.options).some((o) => o.value === sv)) {
+      const o = h('option', null, {value: sv});
+      o.textContent = `${v}×`;
+      speedSel.append(o);
+    }
+    speedSel.value = sv;
+  };
 
   const S = {h: null, rungs: [], pos: 0, mounted: new Map(), seq: 0, canFade: null, playing: false, raf: 0,
     applyQueued: false, markers: null, hips: null, home: null, writeTimer: null, rungTimer: null, error: null};
@@ -323,6 +336,8 @@ export function mount(el, ctx) {
   });
   play.addEventListener('click', togglePlay);
   speedSel.addEventListener('change', () => {
+    const v = +speedSel.value || 1;
+    if (v !== (+store.get('speed') || 1)) store.set({speed: v}, {source: id});
     if (S.playing) { stop(); start(); }
   });
   reset.addEventListener('click', () => {
@@ -452,6 +467,13 @@ export function mount(el, ctx) {
       stop();
       setPos(k, {write: false});
     }
+  }));
+  offs.push(store.on(['speed'], (changed, st, sources) => {
+    if (sources.size === 1 && sources.has(id)) return;
+    const v = speedFactor(st, cfg);
+    if (Math.abs(v - (+speedSel.value || 1)) < 1e-9) return;
+    selectSpeed(v);
+    if (S.playing) { stop(); start(); }
   }));
   offs.push(store.on(['sky'], (changed, st, sources) => {
     if (sources.size === 1 && sources.has(id)) return;

@@ -308,6 +308,25 @@ test('hub.records: pki1 PNG sidecars resolve against the page URL (spectra_png f
   hub.dispose();
 });
 
+// WPE8 item 2: a FOREIGN record set's {png} sidecars must resolve against the FOREIGN portal's
+// page directory (foreignPageBase of its index URL), not this (local) page's own base, so a
+// non-boot caller of createHub (this test) sees the same sidecar URLs boot.js's hub.records
+// override produces.
+test('hub.records: a foreign record set resolves its PNG sidecars against the foreign page, not the local one', async () => {
+  const idxUrl = 'https://foreign.test/w51/s2d/index.json';   // foreignPageBase -> https://foreign.test/
+  const files = new Map([[idxUrl, pngIndex()]]);
+  const hub = createHub(
+    pageFor({s2d: {kind: 'records', base: 'https://foreign.test/w51/', key: 's2d', catalog: 'src', record: 'pki1'}}),
+    makeStore(), {base: 'https://cli.test/p/index.html', worker: false, fetch: fakeFetch(files)});
+  const rs = await hub.records('s2d');
+  const r1 = await rs.get('src-1');
+  assert.equal(r1.png, 'https://foreign.test/img/s2d/src-1.png', 'resolved against the foreign page, not https://cli.test/p/');
+  // {res} still substitutes with the LOCAL page's res (boot's foreign override keeps page.assets/res)
+  assert.equal((await rs.get('src-2')).png, 'https://cdn.test/res/s2d/src-2.png');
+  assert.equal((await rs.get('src-3')).png, 'https://cdn.test/pk/v1/img/src-3.png');
+  hub.dispose();
+});
+
 test('RecordStore: explicit base/page options; without them PNGs resolve against the index', async () => {
   const idx = 'https://cli.test/q/data/s2d/index.json';
   const files = new Map([[idx, pngIndex()]]);

@@ -29,6 +29,7 @@ import {mount as mountTable} from '../../web/js/panes/table.js';
 import {mount as mountDetail, propertyText, quantizedKey} from '../../web/js/panes/detail.js';
 import {mount as mountSky} from '../../web/js/panes/sky.js';
 import {mount as mountWavelength} from '../../web/js/panes/wavelength.js';
+import {mount as mountSpectrum2d} from '../../web/js/panes/spectrum2d.js';
 import * as aladin from '../../web/js/sky/aladin.js';
 
 const PAGE = 'https://example.org/portal/brick/index.html';
@@ -514,11 +515,36 @@ class FakeEl {
   set textContent(t) { this.children = []; this._text = String(t); }
   get textContent() { return this._text + this.children.map((c) => c.textContent).join(''); }
   get firstChild() { return this.children[0] || null; }
-  setAttribute(k, v) { this.attrs[k] = String(v); }
+  /** A <select>'s <option> children, for code (e.g. wavelength.js's speed <select>) that reads
+   * `sel.options` directly rather than querying the DOM. */
+  get options() { return this.children.filter((c) => c.tagName === 'OPTION'); }
+  get selected() { return !!this._selected; }
+  /** Setting an <option>'s `selected = true` (as the DOM does on build) mirrors its value onto
+   * the parent <select>, matching a real <select>'s value-follows-selected-option behaviour. */
+  set selected(v) {
+    this._selected = v;
+    if (v && this.parent && this.parent.tagName === 'SELECT') this.parent.value = this.value;
+  }
+  setAttribute(k, v) {
+    this.attrs[k] = String(v);
+    // the DOM mirrors the `value` attribute onto the `.value` property at creation time (e.g.
+    // h(tag, cls, {value}) building an <option> before it is selected/appended).
+    if (k === 'value') this.value = String(v);
+  }
   getAttribute(k) { return Object.prototype.hasOwnProperty.call(this.attrs, k) ? this.attrs[k] : null; }
   removeAttribute(k) { delete this.attrs[k]; }
   hasAttribute(k) { return Object.prototype.hasOwnProperty.call(this.attrs, k); }
-  append(...cs) { for (const c of cs) { if (c && typeof c === 'object') { c.parent = this; this.children.push(c); } } }
+  append(...cs) {
+    for (const c of cs) {
+      if (c && typeof c === 'object') {
+        c.parent = this;
+        this.children.push(c);
+        // an <option selected> appended before (or after) its parent <select> mirrors its value,
+        // matching a real <select>'s value-follows-selected-option behaviour.
+        if (c.tagName === 'OPTION' && c._selected && this.tagName === 'SELECT') this.value = c.value;
+      }
+    }
+  }
   remove() { if (this.parent) this.parent.children = this.parent.children.filter((c) => c !== this); }
   addEventListener(t, fn) { (this.listeners[t] = this.listeners[t] || []).push(fn); }
   removeEventListener(t, fn) { if (this.listeners[t]) this.listeners[t] = this.listeners[t].filter((f) => f !== fn); }
@@ -1103,6 +1129,48 @@ test('hover card reads one record on its channel and never values()', () => with
   assert.match(text, /12\.25/);
 }));
 
+// WPE8 item 1: the mini-spectrum lookup in addFigure() must use hasRecordOf (exact for a foreign
+// id_column set via hasRecord(), not the optimistic has()) and must treat a null get() as 'no
+// record', trying the next candidate 'pks1' record-set dataset rather than stopping.
+test('hover mini-spectrum: optimistic has() trap and a null get() both fall through to the next record set', () => withDom(async () => {
+  const client = fakeClient();
+  const store = createStore({});
+  const calls = [];
+  const sets = {
+    // a foreign id_column set: has() is optimistic (true) but hasRecord() is exact (false) -
+    // must be skipped, not treated as present.
+    spec1: {has: () => true, hasRecord: async (id) => { calls.push(['spec1.hasRecord', id]); return false; },
+      get: async () => { calls.push(['spec1.get']); return {channels: {flux: new Float32Array([1])}, wave: new Float32Array([1])}; }},
+    // hasRecord() reports present, but get() resolves null (no row for this key) - also skipped.
+    spec2: {has: () => false, hasRecord: async (id) => { calls.push(['spec2.hasRecord', id]); return true; },
+      get: async (id) => { calls.push(['spec2.get', id]); return null; }},
+    // the real record: reached only after both prior candidates are correctly skipped.
+    spec3: {has: () => false, hasRecord: async (id) => { calls.push(['spec3.hasRecord', id]); return true; },
+      get: async (id) => { calls.push(['spec3.get', id]); return {channels: {flux: new Float32Array([1, 2])}, wave: new Float32Array([1, 2])}; }},
+  };
+  const app = {
+    store,
+    page: {datasets: {
+      cat: {kind: 'catalog'},
+      spec1: {kind: 'records', catalog: 'cat'},
+      spec2: {kind: 'records', catalog: 'cat'},
+      spec3: {kind: 'records', catalog: 'cat'},
+    }},
+    catalog: async () => client,
+    idOf: async () => 'x',
+    hub: {json: async () => null, records: async (ds) => sets[ds]},
+    theme: () => ({}),
+  };
+  const {card} = installHover(app);
+  store.set({hover: {ds: 'cat', i: 42}});
+  await settle();
+  assert.deepEqual(calls, [
+    ['spec1.hasRecord', 's42'], ['spec2.hasRecord', 's42'], ['spec2.get', 's42'],
+    ['spec3.hasRecord', 's42'], ['spec3.get', 's42'],
+  ], 'spec1 skipped on hasRecord()=false (never reaches get); spec2 skipped on a null get()');
+  assert.ok(card.querySelector('.pk-hover-fig'), 'the figure drew from spec3');
+}));
+
 function fakeHandle() {
   return {state: 'ready', on: () => () => {}, view: () => ({ra: 0, dec: 0, fov: 1, fovy: 1})};
 }
@@ -1359,6 +1427,48 @@ test('wavelength: mount retries a failed Aladin prefetch; view listeners before 
   }
   assert.deepEqual(client.calls.values, [], 'no positions before first paint');
   assert.ok(pane.stats().markers, 'markers created');
+  pane.destroy();
+  fp.release();
+  await settle();
+  delete globalThis.window.A;
+  aladin.resetAladin();
+}));
+
+// WPE8 item 3: wavelength.js's playback speed reads the store key `speed` (written by legacy
+// `?speed=`/hash `speed=` via mapLegacy before boot strips consumed query keys), not
+// `location.search` directly, and keeps the <select> and the store in sync both ways while
+// ignoring its own echo.
+test('wavelength: speed select follows the store key "speed" and writes it back, ignoring its own echo', () => withDom(async () => {
+  aladin.resetAladin();
+  const {A} = fakeAladinLib();
+  globalThis.window.A = A;
+  const client = quantizedPosClient(20);
+  const store = createStore({});
+  const fp = gate();
+  const root = new FakeEl('div');
+  const app = skyApp(client, fp);
+  const ctx = {id: 'wl1', config: {hips: 'hips', markers: 'cat'}, store, app, dataset: null, setStatus() {},
+    theme: () => ({}), tools: null, hub: {json: () => Promise.resolve(null), resolve: (u) => new URL(u, PAGE)}};
+  const pane = mountWavelength(root, ctx);
+  await settle(10);
+  const speedSel = root.querySelector('.pk-wl-speed');
+  assert.equal(speedSel.value, '1', 'no store speed and no options.speed: default 1');
+
+  // another pane / legacy ?speed= writes the store directly: the select follows it
+  store.set({speed: 2}, {source: 'legacy'});
+  await settle();
+  assert.equal(speedSel.value, '2');
+
+  // the user picks a value from the control: it writes {speed} back to the store with its own id
+  let lastSources = null;
+  store.on(['speed'], (changed, st, sources) => { lastSources = sources; });
+  speedSel.value = '0.5';
+  speedSel.fire('change');
+  await settle();
+  assert.equal(store.get('speed'), 0.5);
+  assert.ok(lastSources.has('wl1') && lastSources.size === 1, 'the write carries source: wl1');
+  assert.equal(speedSel.value, '0.5', 'the select keeps its own value (no self-echo override)');
+
   pane.destroy();
   fp.release();
   await settle();
@@ -1657,6 +1767,49 @@ test('manifold: firstPaint resolves at the first projected draw; a failed base l
   } finally {
     console.warn = warn;
   }
+}));
+
+// WPE8 item 1: spectrum2d.js's loadFocus must use hasRecordOf (exact hasRecord() for a foreign
+// id_column set, not the optimistic has()) and must treat a null get() the same way, both
+// reporting 'No 2D spectrum for <id>' (status 'none') rather than hanging in 'loading…'.
+test('spectrum2d loadFocus: optimistic has() and a null get() both resolve to "no record"', () => withDom(async () => {
+  const store = createStore({focus: null});
+  const statusCalls = [];
+  const rs = {
+    has: () => true, // always optimistic, as a foreign id_column set's has() would be
+    hasRecord: async (id) => id === 'C',
+    get: async (id) => (id === 'C' ? {nx: 2, ny: 2, data: new Uint8Array([1, 2, 3, 4]), enc: 'u8'} : null),
+  };
+  const ctx = {
+    id: 's2d', config: {records: 'spec2d'}, store,
+    app: {page: {datasets: {spec2d: {kind: 'records'}}}},
+    hub: {records: async () => rs},
+    setStatus(...a) { statusCalls.push(a); },
+    theme: () => ({}),
+  };
+  const pane = await mountSpectrum2d(new FakeEl('div'), ctx);
+  await settle();
+  assert.deepEqual(statusCalls.pop(), [''], 'no focus yet: blank status');
+
+  // A: hasRecord() exact = false even though has() is optimistically true -> 'no record', no get()
+  store.set({focus: {ds: 'cat', id: 'A'}});
+  await settle();
+  assert.deepEqual(statusCalls.pop(), ['none']);
+  assert.equal(pane.stats().id, 'A');
+
+  // B: hasRecord() = true but get() resolves null (no row for this key) -> also 'no record'
+  store.set({focus: {ds: 'cat', id: 'B'}});
+  await settle();
+  assert.deepEqual(statusCalls.pop(), ['none']);
+  assert.equal(pane.stats().id, 'B');
+
+  // C: hasRecord() = true and get() returns a real 2D record -> loads normally
+  store.set({focus: {ds: 'cat', id: 'C'}});
+  await settle();
+  const last = statusCalls[statusCalls.length - 1];
+  assert.equal(last[0], '2×2');
+  assert.equal(pane.stats().id, 'C');
+  pane.destroy();
 }));
 
 // ------------------------------------------------------------------ landing counts (WPE2)

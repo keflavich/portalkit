@@ -196,6 +196,19 @@ export function dimAlias(loc = {}) {
   return a && typeof a === 'object' && !Array.isArray(a) ? a : {};
 }
 
+/**
+ * page.legacy.cmd_pane (page.page.legacy.cmd_pane): the id of the scatter pane that the legacy
+ * CMD (gc-query a/b/m and the Treasury `y` band toggle) targets when the page gives one — gc_
+ * manifold pages put the CMD in a scatter pane 'cmd' rather than the manifold frame itself.
+ * null when the page sets none, in which case a/b/m and `y` keep targeting `<manifold>.frame`
+ * as before. `p=ccd` always targets `<manifold>.frame`, cmd_pane or not.
+ */
+function legacyCmdPane(loc = {}) {
+  const page = loc.page || pageJSON();
+  const p = page && page.page && page.page.legacy && page.page.legacy.cmd_pane;
+  return typeof p === 'string' && p ? p : null;
+}
+
 /** A legacy dim key through the alias table (unchanged when the table has no entry). */
 export function aliasDim(alias, key) {
   if (key === undefined || key === null) return key;
@@ -428,6 +441,7 @@ function gcQuery(loc) {
   const consumed = [];
   const use = (...ks) => { for (const k of ks) if (k in q && !consumed.includes(k)) consumed.push(k); };
   const pane = ctx.pane;
+  const cmdPane = legacyCmdPane(loc);
 
   // projection: CCD (x1-x2 vs y1-y2) or CMD (a-b vs m)
   if (q.p === 'ccd') {
@@ -446,11 +460,17 @@ function gcQuery(loc) {
     const ia = int(q.a), ib = int(q.b), im = int(q.m);
     const da = dimAt(ctx, ia), db = dimAt(ctx, ib), dm = dimAt(ctx, im);
     if (da && db && dm) {
-      const F = new Array(2 * D).fill(0);
-      F[ia] += weight(da);
-      F[ib] -= weight(db);
-      F[D + im] = -1;          // magnitude axis, bright up
-      out[`${pane}.frame`] = encodeFrame(F);
+      if (cmdPane) {
+        // the CMD lives in its own scatter pane (expr axes), not the manifold frame
+        out[`${cmdPane}.x`] = `${da.key}-${db.key}`;
+        out[`${cmdPane}.y`] = dm.key;
+      } else {
+        const F = new Array(2 * D).fill(0);
+        F[ia] += weight(da);
+        F[ib] -= weight(db);
+        F[D + im] = -1;          // magnitude axis, bright up
+        out[`${pane}.frame`] = encodeFrame(F);
+      }
       use('a', 'b', 'm', 'p');
     }
   }
@@ -460,11 +480,16 @@ function gcQuery(loc) {
     const keys = ctx.dims.map((d) => d.key);
     const iy = keys.indexOf(q.y);
     if (iy >= 0 && D >= 2) {
-      const F = new Array(2 * D).fill(0);
-      F[0] += weight(ctx.dims[0]);
-      F[1] -= weight(ctx.dims[1]);
-      F[D + iy] = -1;
-      out[`${pane}.frame`] = encodeFrame(F);
+      if (cmdPane) {
+        out[`${cmdPane}.x`] = `${ctx.dims[0].key}-${ctx.dims[1].key}`;
+        out[`${cmdPane}.y`] = ctx.dims[iy].key;
+      } else {
+        const F = new Array(2 * D).fill(0);
+        F[0] += weight(ctx.dims[0]);
+        F[1] -= weight(ctx.dims[1]);
+        F[D + iy] = -1;
+        out[`${pane}.frame`] = encodeFrame(F);
+      }
     }
     use('y');
   }

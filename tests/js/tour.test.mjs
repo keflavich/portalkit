@@ -227,6 +227,68 @@ test('setSpeed clamps and scales time', () => {
   assert.ok(maxDiff(t.frame, T) < 1e-9, 'speed 2 finishes a 1000 ms leg in 500 ms');
 });
 
+test('setRaw holds a non-orthonormal frame exactly and fires onSettle', () => {
+  const D = 3;
+  const settled = [];
+  const t = new Tour(D, {onSettle: (F, kind) => settled.push(kind)});
+  // x = dim0 - dim1 (a CMD colour), y = dim0 (a magnitude that shares dim0 with the colour):
+  // the rows are neither orthogonal nor unit, by design (an axes-preset frame).
+  const raw = Float64Array.from([1, -1, 0, 1, 0, 0]);
+  t.drift();
+  t.step(500); // currently mid-motion, orthonormal
+  t.setRaw(raw);
+  assert.deepEqual(Array.from(t.frame), Array.from(raw));
+  assert.equal(t.mode, 'idle');
+  assert.ok(!t.animating && !t.playing);
+  assert.ok(!ortho(t.frame, 1e-6), 'raw frame is intentionally non-orthonormal');
+  assert.deepEqual(settled, ['setRaw']);
+  assert.throws(() => t.setRaw(new Float64Array(4)), RangeError);
+  assert.throws(() => t.setRaw(null), RangeError);
+});
+
+test('constructor opts.raw keeps a non-orthonormal initial frame exactly', () => {
+  const raw = Float64Array.from([1, -1, 0, 1, 0, 0]);
+  const t = new Tour(3, {F: raw, raw: true});
+  assert.deepEqual(Array.from(t.frame), Array.from(raw));
+  assert.ok(!ortho(t.frame, 1e-6));
+  // without the flag the same matrix is repaired, as before
+  const u = new Tour(3, {F: raw});
+  assert.ok(ortho(u.frame, 1e-6));
+});
+
+test('a tour move from a raw (setRaw) frame resumes from the nearest orthonormal frame', () => {
+  const D = 3;
+  const raw = Float64Array.from([1, -1, 0, 1, 0, 0]);
+  // drift
+  const t = new Tour(D);
+  t.setRaw(raw);
+  t.drift([0, 1, 2]);
+  assert.ok(ortho(t.frame, 1e-6), 'drift snapped the live frame before its first leg');
+  // playAxisLoop
+  const u = new Tour(D);
+  u.setRaw(raw);
+  u.playAxisLoop('x');
+  assert.ok(ortho(u.frame, 1e-6));
+  // nextPair
+  const v = new Tour(D);
+  v.setRaw(raw);
+  v.nextPair();
+  assert.ok(ortho(v.frame, 1e-6));
+  // to() from a raw start still lands exactly on the (orthonormal) target
+  const w = new Tour(D);
+  w.setRaw(raw);
+  const T = basisFrame(D, 1, 2);
+  w.to(T, 200);
+  w.step(200);
+  assert.ok(maxDiff(w.frame, T) < 1e-9);
+  // manual (compass drag)
+  const m = new Tour(D);
+  m.setRaw(raw);
+  m.manual(2, 0.5, 0.5);
+  assert.equal(m.mode, 'idle');
+  assert.ok(ortho(m.frame, 1e-6));
+});
+
 test('a degenerate (antipodal) target still animates to a valid frame', () => {
   const D = 3;
   const t = new Tour(D);

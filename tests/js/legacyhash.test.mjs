@@ -24,21 +24,9 @@ function decodeFrame(s) {
   return out;
 }
 
-// Grammars whose shared vectors are pending in hash_vectors.json (owned by the fixture WP); this
-// file covers them with its own cases below until the vectors land.
-const PENDING_VECTORS = new Set(['spherex-colours']);
-
-// Known JS / Python divergence: these shared vectors predate the canonical `speed` key
-// (contract (D)). JS maps their ?speed=2 to speed=2; the vectors and portalkit/legacy/hashmap.py
-// still consume and drop it. Remove the entries once hash_vectors.json and hashmap.py are updated.
-const SPEED_DIVERGENT = new Map([
-  ['wavelength kv + speed', {speed: '2'}],
-  ['wavelength speed only on canonical hash', {speed: '2'}],
-]);
-
 test('vectors cover every grammar', () => {
   const used = new Set(VECTORS.cases.flatMap((c) => c.grammars));
-  for (const g of GRAMMAR_NAMES) assert.ok(used.has(g) || PENDING_VECTORS.has(g), `no vector for ${g}`);
+  for (const g of GRAMMAR_NAMES) assert.ok(used.has(g), `no vector for ${g}`);
   assert.deepEqual([...GRAMMAR_NAMES].sort(), Object.keys(GRAMMARS).sort());
 });
 
@@ -46,8 +34,7 @@ for (const c of VECTORS.cases) {
   test(`vector: ${c.name}`, () => {
     const r = mapLegacy(c.grammars, c.loc);
     assert.deepEqual(r.consumedSearch, c.consumedSearch);
-    const want = Object.assign({}, c.hash);
-    if (SPEED_DIVERGENT.has(c.name) && !('speed' in want)) Object.assign(want, SPEED_DIVERGENT.get(c.name));
+    const want = c.hash;
     assert.deepEqual(Object.keys(r.hash).sort(), Object.keys(want).sort());
     if ('speed' in want) assert.equal(r.hash.speed, want.speed);
     for (const [k, v] of Object.entries(c.hash)) {
@@ -72,6 +59,39 @@ test('mapped hashes are canonical', () => {
       assert.ok(CANONICAL_KEYS.includes(k) || /^.+\.(x|y|frame|xr|yr|raster|ovl)$/.test(k), `${c.name}: ${k}`);
     }
   }
+});
+
+// ------------------------------------------------------------------ page.legacy.cmd_pane (item 6)
+
+const GC_DIMS = ['f115w', 'f200w', 'f356w', 'f444w'];
+const CMD_PAGE = {page: {legacy: {cmd_pane: 'cmd'}}, layout: {row: [
+  {pane: 'manifold', id: 'manifold', dataset: 'gc', options: {dims: GC_DIMS}},
+  {pane: 'scatter', id: 'cmd', options: {}},
+]}, datasets: {gc: {}}};
+
+test('gc-query a/b/m targets page.legacy.cmd_pane.x/y, not <manifold>.frame', () => {
+  const r = mapLegacy(['gc-query'], {search: '?a=0&b=1&m=2', page: CMD_PAGE});
+  assert.deepEqual(r.hash, {'cmd.x': 'f115w-f200w', 'cmd.y': 'f356w'});
+  assert.deepEqual(r.consumedSearch, ['a', 'b', 'm']);
+});
+
+test('gc-query Treasury y toggle also targets cmd_pane', () => {
+  const r = mapLegacy(['gc-query'], {search: '?y=f356w', page: CMD_PAGE});
+  assert.deepEqual(r.hash, {'cmd.x': 'f115w-f200w', 'cmd.y': 'f356w'});
+  assert.deepEqual(r.consumedSearch, ['y']);
+});
+
+test('gc-query p=ccd still targets <manifold>.frame even with cmd_pane set', () => {
+  const r = mapLegacy(['gc-query'], {search: '?p=ccd&x1=0&x2=1&y1=1&y2=3', page: CMD_PAGE});
+  assert.ok('manifold.frame' in r.hash);
+  assert.ok(!('cmd.x' in r.hash) && !('cmd.y' in r.hash));
+});
+
+test('gc-query without page.legacy.cmd_pane falls back to <manifold>.frame as before', () => {
+  const page = {page: {}, layout: {row: [{pane: 'manifold', id: 'manifold', dataset: 'gc', options: {dims: GC_DIMS}}]}, datasets: {gc: {}}};
+  const r = mapLegacy(['gc-query'], {search: '?a=0&b=1&m=2', page});
+  assert.ok('manifold.frame' in r.hash);
+  assert.equal(Object.keys(r.hash).some((k) => k.endsWith('.x') || k.endsWith('.y')), false);
 });
 
 test('isCanonicalHash', () => {

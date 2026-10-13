@@ -375,9 +375,16 @@ Legacy mapping details:
   `mapLegacy` reads the table from `loc.dimAlias`, else `loc.page`, else the page JSON.
 - Speed: `wavelength` and `kv-view` (the manifold pages) map `?speed=` (consumed from the query
   string, also under a canonical hash) and a legacy hash `speed=` onto the canonical `speed`;
-  a value that is not a positive number is consumed and dropped. The shared vectors in
-  `hash_vectors.json` and `portalkit/legacy/hashmap.py` still drop `?speed=`;
-  `tests/js/legacyhash.test.mjs` lists those two vectors as known-divergent.
+  a value that is not a positive number is consumed and dropped. `wavelength.js` itself reads
+  the resulting store key `speed` (not `location.search`, which boot has already stripped of
+  consumed keys by the time a pane mounts) and subscribes to it (Wave E8 item 3); the shared
+  vectors in `hash_vectors.json` and `portalkit/legacy/hashmap.py` carry `speed` in their
+  expected hash for these cases.
+- `page.legacy.cmd_pane` (a scatter pane id): when set, `gc-query`'s a/b/m and the Treasury `y`
+  band toggle write `<cmd_pane>.x`/`.y` (a colour expression and a magnitude key) instead of
+  `<manifold>.frame`, for a `gc_manifold` page that puts its CMD in its own scatter pane rather
+  than in the manifold's projection; `p=ccd x1..y2` is unaffected and always targets
+  `<manifold>.frame` (Wave E8 item 6).
 - `spherex-colours` (query string of the legacy SPHEREx colours page): `ax`,`ay` -> the CCD
   scatter's x colour `ax - ay` and `bx`,`by` -> its y colour (pane id `ccd`, else the first
   scatter); `band` -> the CMD scatter's y magnitude with the CCD x colour as x (pane `cmd`,
@@ -695,12 +702,23 @@ then resolve in the foreign portal). Without `id_column` the row id is the recor
 (`app.resolveIds` + `client.record`), then its `id_column` value (`foreignKeyOf(row, column)`:
 text, integers without a decimal point, null when missing or NaN). Keys are cached (LRU of
 4096). `has(id)` is true for an id whose key is not looked up yet, so callers that must tell
-"no record" from "superseded" use `await hasRecord(id)` (spectrum1d does, and it also treats a
-null `get()` on the current focus as "No spectrum"); `get(id)` resolves null when the row has
+"no record" from "superseded" use `await hasRecord(id)` — or the shared `hasRecordOf(store, id)`
+helper (`panes/spectrum1d.js`: `store.hasRecord(id)` when present, else `store.has(id)`) — and
+also treat a null `get()` on the current focus as "No spectrum"/"no record". `spectrum1d.js`,
+`panes/spectrum2d.js`'s `loadFocus()` and `ui/hover.js`'s mini-spectrum lookup (`addFigure`, the
+`pks1` record-set loop) all follow this pattern, so a foreign record set behaves the same in
+every pane that reads one (Wave E8 item 1). `get(id)` resolves null when the row has
 no key or the key is missing from the foreign index, and otherwise returns a shallow copy of the cached record with `id` = the
 catalog row id and `key` = the foreign record key. Token / channel supersession applies after
 the key lookup as well. A public portal may reference only public bases (checked by the Python
 build).
+
+`data/hub.js`'s own `records(ds)` (used directly by any non-boot caller of `createHub`, e.g. a
+test or a standalone embed) resolves a foreign ref's index URL through `recordIndexUrl(ref)`
+(so a `base`+`key` ref with no `url` of its own still opens) and opens the store with
+`base = foreignPageBase(indexUrl)` for a foreign ref, matching `core/boot.js`'s `hub.records`
+override exactly (Wave E8 item 2) — a page's PNG-mode sidecars resolve in the foreign portal
+whether or not boot's wrapper is in the loop.
 
 ## 12. Test hooks
 
@@ -742,8 +760,12 @@ hits on redraw; no grid, a log axis or an unreadable grid: worker `bin2d`).
 mounted narrative pane (highlight-only beat, beat sky view, `suppress_view`, empty ids, a kept
 deep-link view with an instant scroll, one activation per `go()` and per hash beat change), and
 `controls.rafSetter` with a stand-in `requestAnimationFrame` installed after import and the
-timer fallback. `wpe5.test.mjs` covers the wave E follow-ups (section 14). The full suite is
-`node --test tests/js/*.test.mjs`.
+timer fallback. `wpe5.test.mjs` covers the wave E (E5-7) follow-ups and `tour.test.mjs`,
+`client.test.mjs` and `listpanes.test.mjs` cover the wave E8 follow-ups (section 14): `Tour`'s
+`setRaw`/`opts.raw`, `hub.records` on a foreign ref (PNG sidecars against the foreign page),
+and mounted `spectrum2d`/`wavelength` panes (foreign `hasRecordOf`/null-`get()`, the mini-spectrum
+fallback in `hover.js`, and the `speed` store round trip). `legacyhash.test.mjs` covers
+`page.legacy.cmd_pane`. The full suite is `node --test tests/js/*.test.mjs`.
 
 ## 14. Runtime contracts from IMPLEMENTATION_NOTES 68-132
 
@@ -770,7 +792,7 @@ Where each JS-facing note lives (details in the module headers):
 | 85 | landing search opens one worker per search manifest on the first keystroke | `panes/landing.js` |
 | 86 | scatter folds `dm` into linear-magnitude axes and passes `dm = 0` to overlays; the manifold reads `cfg.overlays` | `panes/scatter.js`, `panes/manifold.js` |
 | 90 | `mapLegacy(grammar, {hash, search, page})` | `core/boot.js`, `core/legacyhash.js` |
-| 91 | `<manifold>.frame=<preset>` accepts `axes` presets as well as `frame` presets | `panes/manifold.js` |
+| 91 | `<manifold>.frame=<preset>` accepts `axes` presets as well as `frame` presets; an axes preset renders as the exact (possibly non-orthogonal) 2-D projection its `x`/`y` name, never orthonormalized (Wave E8 item 4) | `panes/manifold.js`, `math/tour.js` |
 | 92 | `sel=` form = shorter (in the URL) of the recipe form and `bits:`; brush recipes compete only above 200 000 rows | `core/selection.js` (section 3) |
 | 93 | `app.importCsv(text, {mode, ds, radiusArcsec})` | `core/boot.js` (section 1), `ui/export.js` |
 | 98 | `chunk_starts` head chunks; pos stays one file | `workers/data.worker.js` |
@@ -808,3 +830,16 @@ Wave E follow-ups (tests in `tests/js/wpe5.test.mjs`):
 | layer switches | `layers:<pane>` `{raster?: false, ovl?: [ids]}`: a toolbar button (shown when the pane has raster layers) toggles the rasters; `ovl` limits the drawn overlays (`visibleOverlays`); hash `<pane>.raster`, `<pane>.ovl` | `panes/scatter.js`, `core/hash.js` |
 | gallery preset role | a preset's `role` (or `data.role`) is applied with its facets when the pane offers that role; the preset select matches facets and role (`matchPreset`) | `panes/gallery.js` |
 | foreign records | `base` / `id_column` record refs (section 11) | `data/records.js`, `core/boot.js` |
+
+Wave E8 follow-ups (tests in `tests/js/listpanes.test.mjs`, `tests/js/client.test.mjs`,
+`tests/js/tour.test.mjs`, `tests/js/plotpanes.test.mjs`, `tests/js/legacyhash.test.mjs`):
+
+| Topic | Contract | Module |
+|---|---|---|
+| foreign has/get in spectrum2d, hover | `spectrum2d.js`'s `loadFocus()` and `hover.js`'s mini-spectrum lookup use `hasRecordOf` (exact `hasRecord()` for a foreign `id_column` set, not the optimistic `has()`) and treat a null `get()` for the row as "no record", mirroring `spectrum1d.js` | `panes/spectrum2d.js`, `ui/hover.js` |
+| foreign PNG sidecars, non-boot `createHub` | `hub.js`'s own `records(ds)` resolves a foreign ref's index URL via `recordIndexUrl` and its PNG-mode sidecars against `foreignPageBase`, matching boot's override | `data/hub.js` |
+| wavelength speed reads the store | `wavelength.js` reads the store key `speed` (default `options.speed` or 1) and subscribes to it, instead of `location.search` (boot strips consumed legacy query keys before a pane can read them); writes `{speed}` back with its own pane id as `source` | `panes/wavelength.js` |
+| axes-preset frames render raw | `framePresets()` compiles an `axes`-kind preset's `x`/`y` to base-column weights (`fold.compileLinear`) instead of assuming a literal dim-key pair; `axesFrame(p, dims)` builds the exact (possibly non-orthogonal/non-unit) 2×D projection; every path that applies a frame (mount, preset `<select>`, the `frame:<pane>` store echo) passes `{raw: true}` for an axes preset so `Tour` never Gram-Schmidt's it | `panes/manifold.js` |
+| `Tour.setRaw` / `opts.raw` | `new Tour(D, {raw: true})` keeps its initial frame exactly; `setRaw(F)` jumps with no orthonormalization and fires `onSettle`; any leg start (`drift`/`playAxisLoop`/`nextPair`/`to`, and `manual`) first snaps a non-orthonormal live frame to its nearest orthonormal one, so touring resumes cleanly from a raw frame | `math/tour.js` |
+| `page.legacy.cmd_pane` | when set, the legacy GC CMD (`gc-query` a/b/m and the Treasury `y` band toggle) writes `<cmd_pane>.x` / `<cmd_pane>.y` (a colour expression and a magnitude key) instead of `<manifold>.frame`; `p=ccd x1..y2` always targets `<manifold>.frame` regardless | `core/legacyhash.js` |
+| shared hash goldens | `hash_vectors.json` carries vectors for `dim_alias`, `spherex-colours` (including a one-scatter-pane page that drops the CMD keys) and `?speed=`/hash `speed=` on both `wavelength` and `kv-view`; `legacyhash.test.mjs` no longer special-cases pending or JS/Python-divergent vectors | `tests/fixtures/legacy_snippets/hash_vectors.json`, `tests/js/legacyhash.test.mjs` |
