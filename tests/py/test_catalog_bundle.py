@@ -928,6 +928,35 @@ def test_images_preset_matching_nothing_is_dropped(tmp_path):
     assert "presets" not in res0.doc and schema.validate_images(res0.doc) == []
 
 
+def test_images_preset_role(tmp_path):
+    """A preset's ``data.role`` (e.g. the nb/bb role presets of section 4.3's legacy role
+    galleries) is emitted as the preset's own top-level ``role``, not folded into ``facets``
+    (contract item WPE9#4). An undeclared role is dropped with a warning; the preset is still
+    written when it has facets (or none at all) left to keep it non-void."""
+    presets = [
+        Preset("nb", "Narrowband", "role", {"role": "rgb"}),                     # role-only
+        Preset("bb", "Broadband", "role", {"role": "sed", "facets": {"band": ["K"]}}),
+        Preset("unk", "unknown role", "role", {"role": "ir"}),                   # undeclared
+        Preset("void", "role + void facets", "role",
+               {"role": "rgb", "facets": {"band": ["Z"]}}),                      # facets drop it
+    ]
+    res = images.write(_image_set(6, presets=presets), tmp_path / "img")
+    doc = json.loads((tmp_path / "img" / "images.json").read_text("utf-8"))
+    by_key = {p["key"]: p for p in doc["presets"]}
+    assert by_key["nb"] == {"key": "nb", "label": "Narrowband", "facets": {}, "role": "rgb"}
+    assert by_key["bb"] == {"key": "bb", "label": "Broadband", "facets": {"band": ["K"]},
+                             "role": "sed"}
+    # undeclared role: dropped from the preset (no facets left -> kept as "all images")
+    assert by_key["unk"] == {"key": "unk", "label": "unknown role", "facets": {}}
+    assert "void" not in by_key
+    assert any("unk" in w and "role" in w and "not declared" in w for w in res.warnings)
+    assert any("'void'" in w and "preset dropped" in w for w in res.warnings)
+    # schema.py's preset key check predates this contract item (WPE9#4); it does not yet
+    # allow "role" as an optional preset key (tracked in contract_issues, not owned here).
+    errs = schema.validate_images(doc)
+    assert any("unknown key 'role'" in e for e in errs)
+
+
 def test_images_pagination(tmp_path):
     rng = np.random.default_rng(0)
     items = [ImageItem(id=f"i{i}", roles={"rgb": f"img/{rng.integers(1 << 60):x}/{i}.png"},

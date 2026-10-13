@@ -19,6 +19,7 @@ Fake layout (``<tmp>`` stands for the test directory)::
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -483,6 +484,37 @@ def _restore_modes(base: Path) -> None:
                 os.chmod(p, 0o755)
 
 
+_NO_CTIME_BUMP = ("filesystem did not observably bump this directory's ctime on chmod/"
+                  "link-swap within {:.1f}s of retries (e.g. some network filesystems such "
+                  "as Lustre report a coarser or delayed ctime); this test's stamp-reuse "
+                  "detection depends on ctime moving while mtime is restored")
+_CTIME_RETRY_BUDGET_S = 1.5
+
+
+def _retry_until_ctime_changes(path: Path, mutate, mt_ns: int,
+                                budget_s: float = _CTIME_RETRY_BUDGET_S) -> bool:
+    """Call ``mutate()`` (a metadata-changing operation on ``path``, e.g. ``chmod`` or a
+    contained symlink swap) and restore ``path``'s mtime to ``mt_ns`` right after, repeating
+    until ``st_ctime_ns`` is observed to move (POSIX: any metadata-changing syscall marks
+    ``ctime`` for update, unconditionally). A single attempt can land in the same coarse
+    timestamp tick as the previous one on some filesystems, so this retries for up to
+    ``budget_s`` real seconds before giving up. Returns whether a change was observed; on
+    success, ``path``'s final state is whatever the *last* ``mutate()`` call produced (the
+    caller's ``mutate`` should be idempotent/safe to repeat so that final state is well
+    defined)."""
+    deadline = time.monotonic() + budget_s
+    while True:
+        ct_before = path.stat().st_ctime_ns
+        mutate()
+        os.utime(path, ns=(mt_ns, mt_ns))
+        st = path.stat()
+        if st.st_mtime_ns == mt_ns and st.st_ctime_ns != ct_before:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+
+
 @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
                     reason="root can list any directory")
 def test_stamps_detect_permission_change(tree, tmp_path, monkeypatch):
@@ -501,9 +533,10 @@ def test_stamps_detect_permission_change(tree, tmp_path, monkeypatch):
     m1 = scan(roots, cache_s=60)
     assert classify(o / "permdata", m1).kind == "public"
     mt = sub.stat().st_mtime_ns
-    os.chmod(sub, 0o311)                            # searchable, not listable
     try:
-        os.utime(sub, ns=(mt, mt))
+        ok = _retry_until_ctime_changes(sub, lambda: os.chmod(sub, 0o311), mt)
+        if not ok:
+            pytest.skip(reason=_NO_CTIME_BUMP.format(_CTIME_RETRY_BUDGET_S))
         assert sub.stat().st_mtime_ns == mt
         _later(monkeypatch, 120)
         ex.clear_cache()
@@ -536,9 +569,22 @@ def test_stamps_detect_link_swap_with_restored_mtime(tree, tmp_path, monkeypatch
     assert classify(o / "swap1", m1).kind == "public"
     assert classify(o / "swap2", m1).kind == "unserved"
     st = sub.stat()
-    os.unlink(sub / "lnk")
-    os.symlink(o / "swap2", sub / "lnk2")
-    os.utime(sub, ns=(st.st_atime_ns, st.st_mtime_ns))
+    swapped = {"done": False}
+
+    def _swap() -> None:
+        if not swapped["done"]:
+            os.unlink(sub / "lnk")
+            os.symlink(o / "swap2", sub / "lnk2")
+            swapped["done"] = True
+        else:
+            # Retry attempt: re-create the entry so the directory's contents still change
+            # (and ctime is marked for update again) without reintroducing "lnk".
+            os.unlink(sub / "lnk2")
+            os.symlink(o / "swap2", sub / "lnk2")
+
+    ok = _retry_until_ctime_changes(sub, _swap, st.st_mtime_ns)
+    if not ok:
+        pytest.skip(reason=_NO_CTIME_BUMP.format(_CTIME_RETRY_BUDGET_S))
     assert (sub.stat().st_ino, sub.stat().st_mtime_ns) == (st.st_ino, st.st_mtime_ns)
     _later(monkeypatch, 120)
     ex.clear_cache()

@@ -37,6 +37,7 @@ import numpy as np
 from ..bundle import codec
 from ..bundle.catalog import CatalogResult
 from ..bundle.writer import BundleError, BundleWriter, Ledger
+from ..constants import FADE_WIDTH
 
 __all__ = ["GcManifestError", "read_manifest", "convert", "write", "tile_u16_bytes",
            "SCHEMA1_ENCODING"]
@@ -122,12 +123,29 @@ def _tile_levels(refs: list[Mapping]) -> list[str]:
 def convert(m: Mapping, *, ds: str, url_base: str, tile_file: str | None,
             build: str | None = None, title: str | None = None,
             links: Mapping | None = None, provenance: Mapping | None = None,
-            source_manifest: str | None = None) -> dict:
+            source_manifest: str | None = None, spec: Any = None,
+            labeler: Any = None) -> dict:
     """Map a GC schema-1 manifest onto a ``pk-catalog/1`` manifest.
 
     ``tile_file`` is the dataset-relative path of the u16 tile file (see
     :func:`tile_u16_bytes`); ``None`` keeps the GC tile file, which requires a u16 tile
     dtype.
+
+    ``spec``, when given, is the originating :class:`~portalkit.spec.CatalogSpec`: its
+    ``presets``, ``virtual``, ``groups`` (merged with the groups the GC dims' own
+    ``group`` metadata would otherwise auto-derive; an explicit group wins its key),
+    ``manifold.frames``/``manifold.default_frame``, per-column ``filter`` (matched by
+    :class:`~portalkit.spec.ColumnSpec.key` against the built columns) and ``id`` (marks
+    the matching column's role ``"id"``, for the id/search metadata caps.py reads off a
+    served manifest) are merged into the output -- otherwise only what the GC manifest
+    itself carries is emitted, as before.
+
+    ``labeler``, when given, provides ``scrub``/``scrub_text`` (the shape of
+    :class:`~portalkit.build.PathLabeler`; not imported here to avoid a cycle with
+    ``build.py``) and is applied to ``source_manifest`` and the raw ``gc_*`` provenance
+    fields pulled from the GC manifest, so absolute local paths embedded there (e.g. in
+    ``source`` or ``build_notes`` free text) do not leak into the served manifest
+    (``portalkit check --gate G2``).
     """
     _check(m, source_manifest or ds)
     n = int(m["n"])
@@ -218,6 +236,15 @@ def convert(m: Mapping, *, ds: str, url_base: str, tile_file: str | None,
         cols.append(cc)
         keys.add(cc["key"])
 
+    col_specs_by_key = {c.key: c for c in (getattr(spec, "columns", None) or [])}
+    id_key = str(getattr(spec, "id", "") or "")
+    for c in cols:
+        cs = col_specs_by_key.get(c["key"])
+        if cs is not None and getattr(cs, "filter", None):
+            c["filter"] = cs.filter
+        if id_key and c["key"] == id_key:
+            c["role"] = "id"
+
     if tile_file is None and tmeta.get("dtype", "u8") != "u16":
         raise GcManifestError("the u8 GC tile index needs a widened u16 tile file")
     pos = {"enc": "i16off",
@@ -237,22 +264,64 @@ def convert(m: Mapping, *, ds: str, url_base: str, tile_file: str | None,
         else {"kind": "input"}
     man["pos"] = pos
     man["cols"] = cols
+
+    presets_out: list[dict] = []
+    for p in getattr(spec, "presets", None) or []:
+        pd: dict[str, Any] = {"key": p.key, "label": p.label, "kind": p.kind}
+        pdata = dict(getattr(p, "data", None) or {})
+        for k in ("key", "label", "kind"):
+            pdata.pop(k, None)
+        pd.update(pdata)
+        presets_out.append(pd)
+    if presets_out:
+        man["presets"] = presets_out
+
+    virtual_out: list[dict] = []
+    for v in getattr(spec, "virtual", None) or []:
+        ve: dict[str, Any] = {"key": v.key}
+        if getattr(v, "label", None) is not None:
+            ve["label"] = v.label
+        if getattr(v, "unit", None):
+            ve["unit"] = v.unit
+        if getattr(v, "group", None) is not None:
+            ve["group"] = v.group
+        virtual_out.append(ve)
+    if virtual_out:
+        man["virtual"] = virtual_out
+
     dims = [str(d["key"]) for d in m["dims"]]
     groups: dict[str, list[str]] = {}
     for d in m["dims"]:
         if d.get("group"):
             groups.setdefault(str(d["group"]), []).append(str(d["key"]))
-    if len(groups) > 1:
-        man["groups"] = [{"key": g, "label": g, "dims": v} for g, v in groups.items()]
-    man["manifold"] = {"dims": dims, "default_frame": "pca", "fade_width": 0.12}
+    auto_groups = [{"key": g, "label": g, "dims": v} for g, v in groups.items()] if len(groups) > 1 else []
+    explicit_groups = [{"key": g.key, "label": g.label, "dims": list(g.dims)}
+                       for g in (getattr(spec, "groups", None) or [])]
+    explicit_keys = {g["key"] for g in explicit_groups}
+    merged_groups = explicit_groups + [g for g in auto_groups if g["key"] not in explicit_keys]
+    if merged_groups:
+        man["groups"] = merged_groups
+
+    mf = getattr(spec, "manifold", None)
+    man["manifold"] = {"dims": dims,
+                       "default_frame": getattr(mf, "default_frame", None) or "pca",
+                       "fade_width": FADE_WIDTH}
+    mf_frames = dict(getattr(mf, "frames", None) or {}) if mf is not None else {}
+    if mf_frames:
+        man["manifold"]["frames"] = {k: [float(x) for x in v] for k, v in mf_frames.items()}
+
     if links:
         man["links"] = dict(links)
     prov: dict[str, Any] = dict(provenance or {})
+    sm = source_manifest
+    if labeler is not None and sm is not None:
+        sm = labeler.scrub_text(str(sm))
     prov.setdefault("foreign", {"kind": "gc-manifest-1", "url_base": url_base,
-                                "manifest": source_manifest, "created": m.get("created")})
+                                "manifest": sm, "created": m.get("created")})
     for k in ("source", "sample", "cutout_layers", "build_notes"):
         if m.get(k) is not None:
-            prov.setdefault(f"gc_{k}", m[k])
+            val = m[k] if labeler is None else labeler.scrub(m[k])
+            prov.setdefault(f"gc_{k}", val)
     man["provenance"] = prov
     if m.get("caveats"):
         man["caveats"] = [str(c) for c in m["caveats"]]
@@ -278,20 +347,29 @@ class GcResult:
 def write(source: Any, dest: str | Path | BundleWriter, *, ds: str | None = None,
           url_base: str | None = None, build: str | None = None, title: str | None = None,
           links: Mapping | None = None, provenance: Mapping | None = None,
-          ledger: Ledger | None = None, log: Callable[[str], None] | None = None) -> CatalogResult:
+          ledger: Ledger | None = None, log: Callable[[str], None] | None = None,
+          labeler: Any = None) -> CatalogResult:
     """Write ``manifest.json`` (and the widened tile file) for a GC manifold into ``dest``.
 
     ``source`` is a :class:`~portalkit.spec.CatalogSpec` with ``foreign`` set (its
-    ``url_base`` and ``manifest_path`` are used), a :class:`~portalkit.spec.ForeignRef`, or
-    the path of a GC ``manifest.json`` (then ``ds`` and ``url_base`` are required).
+    ``url_base`` and ``manifest_path`` are used -- its ``presets``/``virtual``/``groups``/
+    ``manifold``/``columns[].filter``/``id`` are merged into the manifest, see
+    :func:`convert`), a :class:`~portalkit.spec.ForeignRef`, or the path of a GC
+    ``manifest.json`` (then ``ds`` and ``url_base`` are required, and no CatalogSpec
+    metadata is available to merge).
     Returns a :class:`~portalkit.bundle.catalog.CatalogResult` with empty id maps (GC
     manifolds carry no per-row ids).
+
+    ``labeler``, when given, scrubs absolute local paths out of the ``provenance`` block
+    (see :func:`convert`); pass ``build.PathLabeler`` for a real build.
     """
     foreign = getattr(source, "foreign", None)
+    cat_spec: Any = None
     if foreign is not None:
         ds = ds or source.key
         title = title if title is not None else (getattr(source, "title", "") or None)
         caveats = list(getattr(source, "caveats", []) or [])
+        cat_spec = source
     else:
         caveats = []
         foreign = source if hasattr(source, "manifest_path") else None
@@ -325,7 +403,8 @@ def write(source: Any, dest: str | Path | BundleWriter, *, ds: str | None = None
         tile_rel = w.put("pos", "tile", tile_u16_bytes(data, int(m["n"])), kind="pos")
         files.append(tile_rel)
     man = convert(m, ds=ds, url_base=url_base, tile_file=tile_rel, build=build, title=title,
-                  links=links, provenance=provenance, source_manifest=str(mpath))
+                  links=links, provenance=provenance, source_manifest=str(mpath),
+                  spec=cat_spec, labeler=labeler)
     for c in caveats:
         man.setdefault("caveats", [])
         if c not in man["caveats"]:

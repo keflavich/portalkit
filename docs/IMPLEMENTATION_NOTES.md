@@ -570,3 +570,58 @@ starting.
     both `_owned_text` (decoded with `errors="replace"`) and `_write_owned` (byte comparison), so a
     non-UTF-8 owned file is never a crash and is rewritten.
 
+## Resolved in WPE9
+
+144. **gc_manifest CatalogSpec merge and path labelling (WPE9 item 1).** `legacy.gc_manifest.convert`
+    takes `spec` (the GC-foreign `CatalogSpec`) and merges its `presets` (serialized the same way as
+    `bundle/catalog.py`), `virtual`, `groups` (an explicit group wins over an auto-derived one of the same
+    key), `manifold.frames`/`default_frame`, and each column's `filter` into the schema-2 manifest; a
+    column whose key equals `CatalogSpec.id` gets `role: "id"`. `manifold.dims` itself stays the
+    GC-derived dim list; it is not overwritten from `spec.manifold.dims` (the merge scope is frames and
+    default_frame only). `convert`/`write` also take `labeler` (duck-typed `.scrub`/`.scrub_text`, not
+    typed as `build.PathLabeler` to avoid a circular import) and run it over `provenance.foreign.manifest`
+    and every `provenance.gc_*` value, so `portalkit check --gate G2` passes for gc_manifold portals.
+    `build.py` passes `fb.labeler`; `gc_manifest`'s own `BundleWriter` is not a `LabellingWriter`, so this
+    had to be threaded through `convert`/`write` directly rather than relying on wrapper auto-scrub.
+    The "id/search metadata" item is interpreted narrowly (role marking only, not the chunked/gz ids-file
+    block of `bundle/catalog.py`): GC's own data model has no natural id/alias string column, and the real
+    `gc_manifold.py` adapter sets `CatalogSpec.id=""`, so the heavier feature has no real call site yet.
+145. **`related` lists only portals built this run (WPE9 item 2).** `_FamilyBuild.built_portal_ids` is
+    `set(by_portal)`, computed once before the per-portal build loop starts (so it is independent of
+    ordering within that loop). `_PortalBuild.portal_doc()` filters `fb.site.portals` by
+    `o.id in fb.built_portal_ids` before listing `related`. "Built" means "the adapter assigned the portal
+    at least one page this run", matching the `sgrb2_manifold` example in both the WPE9 task text and
+    `sites/gc_manifold.toml`'s own comments; it does not mean "the per-portal build succeeded" (a portal
+    with pages always reaches `by_portal`, whether or not its build later raises).
+146. **`gc_monitor` registered as excluded (WPE9 item 3).** `sites/gc_monitor.toml` is `family="gc_monitor",
+    status="excluded", portal=[]`: an excluded family needs neither `adapter` nor a non-empty `portal` list
+    (`schema.validate_site`'s `nonempty` check is gated on `status=="active"`). This lets `portalkit status`
+    report the jwst-gc pipeline monitor (a QA dashboard outside portal scope, never built by `portalkit
+    build`) and lets gc_manifold readmes link `MONITOR_URL` without an unregistered, un-statused reference.
+147. **gc-query `cmd_pane` (WPE9 item 8).** `page.legacy.cmd_pane` (a `[[portal.page]]` TOML key or
+    `LegacyRef.cmd_pane`) names a scatter pane that receives gc-query's legacy CMD axes (`a`, `b`, `m`; x is
+    the colour `dim[a]-dim[b]`, y is `dim[m]`) as `<cmd_pane>.x`/`<cmd_pane>.y` instead of
+    `<manifold>.frame`; `p=ccd` always still maps onto `<manifold>.frame` (no plain-axes equivalent).
+    `legacy/hashmap.py` `cmd_pane_of`/`_gc_query` implement the read side; `config._cmd_pane_errors`
+    validates that the named pane exists and is a scatter pane. Two gaps outside WPE9's files currently
+    block the feature in a real build: `spec.LegacyRef` has no declared `cmd_pane` field (callers must set
+    it as a dynamic attribute on the dataclass instance), and `schema.validate_page`'s `page.legacy` key
+    allowlist does not include `"cmd_pane"`, so `config.assemble()` (which always calls `validate_page`)
+    raises `ConfigError` for any page that sets it, even a page `_cmd_pane_errors` accepts cleanly.
+    `legacyhash.js`'s mirror of this routing (`cmd_pane`/`a`/`b`/`m`) is owned by WPE8 and was not confirmed
+    present as of this writing.
+
+Items 5 (`caps.py` spectrum-pane auto-expand), 6 (`deploy/devserver.py` mounts) and 7
+(`tests/py/test_exposure.py` ctime-tick robustness on Lustre) needed no contract clarification beyond the
+code and tests themselves; see `docs/deploy.md` ("Mounts") for item 6.
+
+148. **Images preset `role` schema gap (WPE9 item 4).** `bundle/images.py` emits a preset's own top-level
+    `role` (section 5.10's role galleries) correctly, but `schema.validate_images`'s preset key allowlist
+    (outside WPE9's files) does not include `"role"`, so `validate_images` reports `"unknown key 'role'"`
+    for every such preset. `build.check_build` (`portalkit/build.py`, run by default from `build_family`)
+    calls `validate_images` on every images document, so a real build with a role preset fails `check_build`
+    even though the preset itself is written correctly; `tests/py/test_catalog_bundle.py::test_images_preset_role`
+    pins both the correct emission and this schema gap. Needs `"role"` added to `validate_images`'s
+    `presets[]` key allowlist (and ideally validated as a string among the image set's declared role keys)
+    by schema.py's owning WP.
+

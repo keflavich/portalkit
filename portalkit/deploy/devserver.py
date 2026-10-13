@@ -21,6 +21,16 @@ Paths the portalkit ``.htaccess`` denies (:func:`portalkit.deploy.htaccess.denie
 segment starting with ``.portalkit``, and ``*.pk-tmp``) answer 403 and are left out of
 directory listings, like ``.ht*`` paths, whether or not the served tree holds that file.
 
+``mounts`` (``DevServer(..., mounts={"/jwst/spectra/portal_unified/": staged_dir})``, CLI
+``--mount PREFIX=DIR``, repeatable) serves a sibling portal's staged directory at a
+deploy-relative URL path, under the same host/port as ``root``, so a foreign base that climbs
+above the test's served root (e.g. ``'../../../../jwst/spectra/portal_unified/data/'``)
+resolves without per-test routing. The longest matching mount prefix wins; everything else is
+served from ``root`` as before. The ``..``/``.ht*``/:func:`~portalkit.deploy.htaccess.denied`
+403 rules are checked against the request path before a mount is even considered, so they
+apply inside a mount exactly as they do under ``root``.
+
+
 Every request is recorded in ``DevServer.requests`` (method, path, status, bytes, range,
 encoding, auth, and ``t``: the epoch-ms time the response finished, IMPLEMENTATION_NOTES 112).
 """
@@ -45,7 +55,7 @@ from functools import partial
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 from urllib.parse import quote, unquote, urlsplit
 
 from .htaccess import denied
@@ -96,6 +106,24 @@ class ServerOptions:
     verbose: bool = False
     requests: list[RequestRecord] = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock)
+    #: (prefix path segments, directory) pairs, longest prefix first (see _normalize_mounts)
+    mounts: list[tuple[list[str], Path]] = field(default_factory=list)
+
+
+def _normalize_mounts(mounts: Mapping[str, os.PathLike | str] | None) -> list[tuple[list[str], Path]]:
+    """``{"/a/b/": dir, ...}`` -> ``[(["a", "b"], dir.resolve()), ...]``, longest prefix
+    first so the first scan match in :meth:`DevRequestHandler._mount_for` is the longest."""
+    out: list[tuple[list[str], Path]] = []
+    for prefix, d in (mounts or {}).items():
+        parts = [p for p in str(prefix).split("/") if p]
+        if not parts:
+            raise ValueError(f"mount prefix must name at least one path segment: {prefix!r}")
+        dpath = Path(d)
+        if not dpath.is_dir():
+            raise FileNotFoundError(f"no such directory for mount {prefix!r}: {d}")
+        out.append((parts, dpath.resolve()))
+    out.sort(key=lambda t: -len(t[0]))
+    return out
 
 
 def guess_type(path: str) -> str:
@@ -195,6 +223,15 @@ class DevRequestHandler(SimpleHTTPRequestHandler):
             return expected_cache_control(path)
         return cc
 
+    def _mount_for(self, parts: list[str]) -> tuple[Path, list[str]] | None:
+        """``(mount_dir, remaining_parts)`` for the longest mount prefix matching ``parts``,
+        or ``None`` when no mount applies and ``root`` should serve the request."""
+        for prefix, mdir in self.opts.mounts:
+            n = len(prefix)
+            if parts[:n] == prefix:
+                return mdir, parts[n:]
+        return None
+
     def _handle(self, head: bool) -> None:
         if self.opts.latency_ms > 0:
             time.sleep(self.opts.latency_ms / 1000.0)
@@ -212,7 +249,12 @@ class DevRequestHandler(SimpleHTTPRequestHandler):
             # deploy's bookkeeping (.portalkit* manifests and backups, *.pk-tmp)
             self._simple(HTTPStatus.FORBIDDEN, b"403 forbidden\n", head=head)
             return
-        fs_path = self.translate_path(self.path)
+        mount = self._mount_for(parts)
+        if mount is not None:
+            mdir, rest = mount
+            fs_path = str(mdir.joinpath(*rest)) if rest else str(mdir)
+        else:
+            fs_path = self.translate_path(self.path)
         if os.path.isdir(fs_path):
             if not url_path.endswith("/"):
                 loc = urlsplit(self.path)._replace(path=urlsplit(self.path).path + "/").geturl()
@@ -357,7 +399,8 @@ class DevServer:
     def __init__(self, root: os.PathLike | str, host: str = "127.0.0.1", port: int = 0, *,
                  auth: str | None = None, range: bool = True,  # noqa: A002
                  content_encoding: str = "auto", latency_ms: float = 0.0,
-                 cache_control: str | None = None, verbose: bool = False) -> None:
+                 cache_control: str | None = None, verbose: bool = False,
+                 mounts: Mapping[str, os.PathLike | str] | None = None) -> None:
         if content_encoding not in ENCODING_MODES:
             raise ValueError(f"content_encoding must be one of {ENCODING_MODES}")
         if auth is not None and ":" not in auth:
@@ -369,7 +412,8 @@ class DevServer:
             raise FileNotFoundError(f"no such directory: {root}")
         self.options = ServerOptions(root=root.resolve(), auth=auth, range=range,
                                      content_encoding=content_encoding, latency_ms=latency_ms,
-                                     cache_control=cache_control, verbose=verbose)
+                                     cache_control=cache_control, verbose=verbose,
+                                     mounts=_normalize_mounts(mounts))
         handler = partial(DevRequestHandler, opts=self.options)
         self.httpd = _Server((host, port), handler)
         self.host = host
@@ -418,15 +462,16 @@ class DevServer:
 def serve(root: os.PathLike | str, port: int = 8765, host: str = "127.0.0.1", *,
           auth: str | None = None, content_encoding: str = "auto", no_range: bool = False,
           latency_ms: float = 0.0, cache_control: str | None = None,
-          verbose: bool = True) -> None:
+          verbose: bool = True, mounts: Mapping[str, os.PathLike | str] | None = None) -> None:
     """Blocking server for ``portalkit serve BUILD_DIR`` (Ctrl-C stops it)."""
     srv = DevServer(root, host, port, auth=auth, range=not no_range,
                     content_encoding=content_encoding, latency_ms=latency_ms,
-                    cache_control=cache_control, verbose=verbose)
+                    cache_control=cache_control, verbose=verbose, mounts=mounts)
+    mount_note = "".join(f", mount /{'/'.join(p)}/ -> {d}" for p, d in srv.options.mounts)
     print(f"serving {srv.options.root} at {srv.url} "
           f"(range={'off' if no_range else 'on'}, content-encoding={content_encoding}"
-          f"{', auth' if auth else ''}{f', latency {latency_ms} ms' if latency_ms else ''})",
-          flush=True)
+          f"{', auth' if auth else ''}{f', latency {latency_ms} ms' if latency_ms else ''}"
+          f"{mount_note})", flush=True)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
@@ -446,10 +491,18 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-range", action="store_true")
     ap.add_argument("--latency-ms", type=float, default=0.0)
     ap.add_argument("--cache-control", default=None)
+    ap.add_argument("--mount", action="append", default=[], metavar="PREFIX=DIR",
+                    help="serve DIR at the deploy-relative URL path PREFIX; repeatable")
     args = ap.parse_args(argv)
+    mounts: dict[str, str] = {}
+    for m in args.mount:
+        if "=" not in m:
+            ap.error(f"--mount must look like PREFIX=DIR, got {m!r}")
+        prefix, d = m.split("=", 1)
+        mounts[prefix] = d
     serve(args.root, args.port, args.host, auth=args.auth,
           content_encoding=args.content_encoding, no_range=args.no_range,
-          latency_ms=args.latency_ms, cache_control=args.cache_control)
+          latency_ms=args.latency_ms, cache_control=args.cache_control, mounts=mounts or None)
     return 0
 
 

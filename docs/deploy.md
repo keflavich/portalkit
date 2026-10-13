@@ -59,12 +59,35 @@ python -m portalkit.deploy.devserver BUILD_DIR --auth user:pw --content-encoding
 | `content_encoding="gzip"` | compress every body when the client accepts gzip, `.bin` included (mod_deflate); Range is then ignored |
 | `latency_ms` | fixed delay before each response |
 | `cache_control` | a header value, or `"htaccess"` to apply the section 11.5 rules |
+| `mounts={"/PREFIX/": DIR, ...}` / repeatable `--mount PREFIX=DIR` | serve a second directory tree at a deploy-relative URL prefix on the same host/port (below) |
 
 Every request is logged in `DevServer.requests` (method, path, status, bytes, range,
 encoding, auth). `.ht*` paths and `..` components answer 403, and so does every path
 `htaccess.denied` matches (ownership manifests, `.portalkit_backup/`, `*.pk-tmp`; section 4
 ".htaccess"), whether or not the served tree holds a `.htaccess`. Directory listings leave
 those names out. Authentication is checked first, so a secure server answers 401 before 403.
+These checks run on the raw request path before mount resolution, so they apply the same way
+inside a mount as in the main served root.
+
+**Mounts** (WPE9#6). A page under review often links a sibling portal with a relative base
+that climbs above the served root, e.g. a foreign dataset's `'../../../../jwst/spectra/portal_unified/data/'`.
+Rather than route each such request by hand, mount that sibling's staged directory at its
+deploy-relative prefix on the *same* `DevServer`:
+
+```
+portalkit serve BUILD_DIR --port 8765 --mount /jwst/spectra/portal_unified/=/path/to/other/staged/dir
+python -m portalkit.deploy.devserver BUILD_DIR --mount /jwst/spectra/portal_unified/=OTHER_DIR
+```
+
+```python
+from portalkit.deploy.devserver import DevServer
+srv = DevServer(build_dir, mounts={"/jwst/spectra/portal_unified/": other_staged_dir}).start()
+```
+
+The longest matching prefix wins when mounts overlap or a mount sits inside another. A
+request outside every mount falls back to the main served root exactly as before. The
+`devserver` pytest fixture (`tests/conftest.py`) exposes the same `mounts=` keyword, so an
+e2e test for a page with foreign bases does not need per-test routing.
 
 ## 3. Exposure check
 

@@ -49,7 +49,13 @@ def _check_providers(res):
     ids = [p.get("id", p["pane"]) for p in caps.iter_panes(res.layout)]
     assert len(ids) == len(set(ids)), ids
     for p in res.added_panes:
-        assert p["collapsed"] is True
+        # WPE9#5: an added pane is collapsed by default, except a spectrum view (1d/2d),
+        # which the provider-intersection check above guarantees is the page's only pane of
+        # that type and so opens expanded instead of hiding the page's main content.
+        if p["pane"] in ("spectrum1d", "spectrum2d"):
+            assert p["collapsed"] is False, p
+        else:
+            assert p["collapsed"] is True, p
     assert res.enabled == sorted(res.enabled)
     assert not set(res.enabled) & set(res.disabled)
     assert set(caps.ALWAYS) - set(res.disabled) <= set(res.enabled)
@@ -99,7 +105,9 @@ def test_explorer_full():
     types = caps.pane_types(res.layout)
     assert {"list", "sky", "detail", "scatter", "spectrum1d", "spectrum2d", "sed", "readme"} <= types
     core = [p for p in caps.iter_panes(res.layout) if not p.get("collapsed")]
-    assert {p["pane"] for p in core} == {"list", "sky", "detail"}
+    # spectrum1d/spectrum2d are added (not archetype core) but open expanded: each is the
+    # page's only pane of its type (WPE9#5).
+    assert {p["pane"] for p in core} == {"list", "sky", "detail", "spectrum1d", "spectrum2d"}
     # positions give `sky`, but layer stacking needs a HiPS document (note 89)
     assert set(res.disabled) == {"hips_layer_stacking"}
     assert "HiPS" in res.disabled["hips_layer_stacking"]
@@ -173,6 +181,49 @@ def test_manifold_archetype():
     man = next(p for p in caps.iter_panes(res.layout) if p["pane"] == "manifold")
     assert not man.get("collapsed")
     assert man["options"]["dims"] == ["f182m", "f405n", "f410m"]
+    _check_providers(res)
+
+
+def test_manifold_foreign_spectrum1d_opens_expanded():
+    """wd2_manifold-style page: a manifold archetype page whose only spectrum view is a
+    capability-added spectrum1d pane (e.g. foreign shared spectra via av_slider /
+    spectrum_viewer_1d) opens it expanded, not collapsed (WPE9#5)."""
+    ds = {"src": _cat(), "spec": _rec("spec", "pks1")}
+    res = caps.resolve(_page("manifold", ["src", "spec"], manifold=True), ds, {})
+    assert {"spectrum_viewer_1d", "av_slider"} & set(res.enabled)
+    spectra = [p for p in caps.iter_panes(res.layout) if p["pane"] == "spectrum1d"]
+    assert len(spectra) == 1 and spectra[0].get("collapsed") is False
+    assert any(p["pane"] == "spectrum1d" and p["collapsed"] is False for p in res.added_panes)
+    _check_providers(res)
+
+
+def test_explicit_collapsed_false_spectrum1d_pane_is_untouched():
+    """An explicit PaneSpec with collapsed=False for an existing spectrum1d pane wins: the
+    resolver never touches it, and adds no second spectrum1d pane for it (WPE9#5)."""
+    ds = {"src": _cat(), "spec": _rec("spec", "pks1")}
+    layout = {"row": [{"pane": "list", "dataset": "src"},
+                      {"pane": "spectrum1d", "id": "s1", "dataset": "spec",
+                       "collapsed": False, "options": {"records": "spec"}}]}
+    page = _page("explorer", ["src", "spec"], layout=copy.deepcopy(layout))
+    res = caps.resolve(page, ds, {})
+    s1s = [p for p in caps.iter_panes(res.layout) if p["pane"] == "spectrum1d"]
+    assert len(s1s) == 1 and s1s[0]["id"] == "s1" and s1s[0]["collapsed"] is False
+    assert not any(p["pane"] == "spectrum1d" for p in res.added_panes)
+    _check_providers(res)
+
+
+def test_explicit_collapsed_true_spectrum1d_pane_is_untouched():
+    """An explicit collapsed=True spectrum1d pane stays collapsed: the resolver's open-
+    expanded rule applies only to a spectrum pane it adds itself, never to one already in
+    page.layout."""
+    ds = {"src": _cat(), "spec": _rec("spec", "pks1")}
+    layout = {"row": [{"pane": "list", "dataset": "src"},
+                      {"pane": "spectrum1d", "id": "s1", "dataset": "spec",
+                       "collapsed": True, "options": {"records": "spec"}}]}
+    page = _page("explorer", ["src", "spec"], layout=copy.deepcopy(layout))
+    res = caps.resolve(page, ds, {})
+    s1 = next(p for p in caps.iter_panes(res.layout) if p["pane"] == "spectrum1d")
+    assert s1["collapsed"] is True
     _check_providers(res)
 
 

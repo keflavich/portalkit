@@ -1068,7 +1068,17 @@ def resolve(page: PageSpec, datasets: dict[str, DatasetSpec], manifests: dict[st
                 leaf = _make_pane(ptype, pd)
                 if leaf is None:
                     continue
-                leaf["collapsed"] = True
+                # Section 3's "outside the archetype core starts collapsed" rule has one
+                # exception: a spectrum view (1d or 2d) added here is, by the intersection
+                # check just above (no provider of this cap already present in `have` or in
+                # `new`), necessarily the page's only pane of that type -- e.g. the foreign
+                # spectrum1d pane a manifold page like wd2_manifold gains from av_slider/
+                # spectrum_viewer_1d. Hiding a page's only spectrum view by default would
+                # bury its main content, so it opens expanded instead (WPE9#5). This never
+                # touches an existing pane: an explicit PaneSpec with collapsed=False (or
+                # True) already in page.layout, or a core pane, is what made `have` non-empty
+                # in the first place and so is left exactly as given.
+                leaf["collapsed"] = ptype not in ("spectrum1d", "spectrum2d")
                 leaf["id"] = _unique_id(ptype, taken)
                 new.append(leaf)
                 break

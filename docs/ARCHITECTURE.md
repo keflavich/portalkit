@@ -870,8 +870,9 @@ Panes never call each other. They read and write store keys, call the DataClient
 | `sel:<ds>` | `{version, count}` | `sel=` (primary ds) | Selection (via selection.js) | every pane on `<ds>` |
 | `vis:<ds>` | `{version, count}` (visibility mask from filters) | – | query op result handler | all panes on `<ds>` |
 | `filters:<ds>` | `{cats:{key:[offLevels]}, ranges:{expr:[lo,hi]}, flags:{key:0|1}, snr:{min, scope:"projection"|"all"}, text?:string}` | `f=` | chips, controls, list search, hist brush | hub → query op |
-| `axes:<pane>` | `{x:expr, y:expr, xlog, ylog, xinv, yinv, xr?:[lo,hi], yr?:[lo,hi]}` | `<pane>.x=`, `<pane>.y=` | axis_picker, presets, hash | scatter, overlays |
+| `axes:<pane>` | `{x:expr, y:expr, xlog, ylog, xinv, yinv, xr?:[lo,hi], yr?:[lo,hi]}` | `<pane>.x=`, `<pane>.y=`, `<pane>.xr=`, `<pane>.yr=` (zoom range, `lo,hi`; legacy `spherex-colours` `zoom=` maps onto it, §6.4) | axis_picker, presets, hash | scatter, overlays |
 | `frame:<pane>` | `{preset?:string, F?:number[] (2·D), dims:string[]}` | `<pane>.frame=` (preset name or `b64:` f32) | manifold, tour, controls | manifold, compass |
+| `layers:<pane>` | `{raster?:string[], ovl?:string[]}` (ids of that pane's configured `options.raster`/`options.overlays` layers currently shown; absent = all shown) | `<pane>.raster=`, `<pane>.ovl=` (comma list of ids, `-` for none) | legend, layer panel, legacy `spherex-colours` `yoo=` (§6.4, `ovl` only) | scatter, overlays (layer visibility) |
 | `color` | `{by: key|expr|null, cmap, lo?, hi?}` | `c=` | controls, legend | all plots, sky markers |
 | `av`, `rv`, `dm` | number | `av=`, `rv=`, `dm=` | controls (rAF-throttled) | sed, spectrum1d templates, overlays, isochrones |
 | `speed` | number > 0 (tour / playback speed multiplier, default 1) | `speed=` | wavelength and tour controls, legacy `?speed=` / `speed=` (§6.4) | wavelength, manifold tour |
@@ -972,15 +973,15 @@ export function mapLegacy(grammars: string[], loc): {hash: Record<string,string>
 - `#sky=..&beat=b3` keeps the hash view: at load and on hash navigation the narrative pane computes `explicitSky(sky, pageSky, {beatSet})` and keeps the explicit parts over the beat's, with no highlight goto for a kept view;
 - `narrative:highlight` carries `goto: true` only for a beat with a highlight, no `view.sky`, no `suppress_view`, and no kept explicit view (docs/js.md).
 
-Grammar names (WP13 implements all of them; WP12 tests one fixture per name; WPE6 registers `spherex-colours` in `schema.GRAMMARS`, WPE5 implements its parser in `legacyhash.js`, and `legacy/hashmap.py` mirrors it). The canonical hash key `speed` (a float, the tour speed multiplier) is the target of the legacy `?speed=` and `speed=` forms (WPE6, item D).
+Grammar names (WP13 implements all of them; WP12 tests one fixture per name; WPE6 registers `spherex-colours` in `schema.GRAMMARS`, WPE5 implements its parser in `legacyhash.js`, and `legacy/hashmap.py` mirrors it). The canonical hash key `speed` (a float, the tour speed multiplier) is the target of the legacy `?speed=` and `speed=` forms (WPE6, item D). `page.legacy.cmd_pane` (WPE9, item E): gc-query's legacy CMD axes (`a`,`b`,`m` -- x is the colour `dim[a]-dim[b]`, y is `dim[m]`) map onto `<cmd_pane>.x`/`<cmd_pane>.y` of that scatter pane instead of `<manifold>.frame` when the page names one; `p=ccd` always still maps onto `<manifold>.frame` (the CCD panel has no plain-axes equivalent). Every pane-suffixed canonical key (`<pane>.x`, `.y`, `.frame`, `.xr`, `.yr`, `.raster`, `.ovl`, §6.2) round-trips through a canonical hash unchanged, whether or not the grammar in use writes that particular suffix.
 
 | Grammar | Legacy form | Maps to |
 |---|---|---|
 | `bare-name` | `#name` | `id=` via id/alias |
 | `kv-view` | `#view=..&name=..` | `id=`, `view=` |
-| `gc-query` | `?a=&b=&m=&p=&x1=&x2=&y1=&y2=&cb=&cd=&cm=&cl=&ch=&g=&rv=&fa=&sel=` and treasury `y,g,rv,fa` | `manifold.frame`, `axes`, `color`, `rv`, `filters`, `sel=r:` |
+| `gc-query` | `?a=&b=&m=&p=&x1=&x2=&y1=&y2=&cb=&cd=&cm=&cl=&ch=&g=&rv=&fa=&sel=` and treasury `y,g,rv,fa` | `manifold.frame` (or `<cmd_pane>.x`/`.y` for `a`/`b`/`m` when `page.legacy.cmd_pane` is set, item E above), `axes`, `color`, `rv`, `filters`, `sel=r:` |
 | `wavelength` | `#rung=&ra=&dec=&fov=`, `?speed=` or `#speed=` | `rung=`, `sky=`, `speed=` |
-| `spherex-colours` | `?ax=&ay=&bx=&by=&c=&band=&cmd=&zoom=&yoo=&hide=` (legacy SPHEREx `colours.html` query state) | CCD panel axes (`ax`,`ay`), second panel axes (`bx`,`by`), `color` (`c`), CMD band (`band`), CMD panel on/off (`cmd`), `xr`/`yr` (`zoom`), the `yoo_*` overlay layers that are on (`yoo`, comma list), hidden levels of the colour-by category (`hide`); dims pass through `dim_alias` |
+| `spherex-colours` | `?ax=&ay=&bx=&by=&c=&band=&cmd=&zoom=&yoo=&hide=` (legacy SPHEREx `colours.html` query state) | CCD panel axes (`ax`,`ay`), second panel axes (`bx`,`by`), `color` (`c`), CMD band (`band`), CMD panel on/off (`cmd`), `<pane>.xr`/`<pane>.yr` (`zoom`), the `yoo_*` overlay layers that are on as `<pane>.ovl` (`yoo`, comma list of ids, `layers:<pane>.ovl`, §6.2), hidden levels of the colour-by category (`hide`); dims pass through `dim_alias` |
 | `beat` | `#beat=` | `beat=` |
 | `gallery-index` | `#<index>` or `#img=` | `lb=` |
 | `w51-rowid` | `#W51-000123` | alias lookup |
@@ -1656,7 +1657,7 @@ portalkit build FAMILY [--tier A|B|C] [--pages p1,p2] [--limit N] [--stage-root 
 portalkit check BUILD_DIR [--gate G1|G2] [--json]
 portalkit caps FAMILY [--json]                         # capability matrix per page (dry: runs adapter in fixture mode)
 portalkit serve BUILD_DIR [--port 8765] [--host 127.0.0.1] [--auth USER:PASS] [--content-encoding auto|none|gzip]
-                          [--no-range] [--latency-ms 0]
+                          [--no-range] [--latency-ms 0] [--mount PREFIX=DIR]   # --mount is repeatable
 portalkit deploy FAMILY BUILD_ID [--portal ID] [--target DIR] [--replace[=stub|inplace]] [--htaccess]
                                  [--dry-run] [--yes]
 portalkit rollback FAMILY BUILD_ID [--portal ID]

@@ -1,0 +1,13 @@
+# jwst-gc pipeline monitor (ARCHITECTURE.md sections 4.1 and 14.2; WPE9#3).
+#
+# The monitor (web/public/jwst-gc/monitor.html, fields/<target>.html, *_monitor5as.html) is
+# a QA dashboard of the reduction pipeline (409 kB index + 195 MB field docs) and is out of
+# portal scope -- it is never built by `portalkit build`. This file exists only so
+# `portalkit status` reports it (status = "excluded", per family) and so the gc_manifold
+# portals' readmes (sites/gc_manifold.toml, WP30) may link MONITOR_URL without that link
+# being an unregistered, un-statused dangling reference. No adapter and no portals: an
+# excluded family needs neither (schema.validate_site allows an empty `portal` list and
+# omits the `adapter` requirement when status = "excluded").
+family = "gc_monitor"
+status = "excluded"
+portal = []

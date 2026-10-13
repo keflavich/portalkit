@@ -147,6 +147,31 @@ def repo_root() -> Path:
     return REPO_ROOT
 
 
+@pytest.fixture()
+def devserver():
+    """Factory for a started :class:`portalkit.deploy.devserver.DevServer`; every server it
+    creates is stopped automatically at teardown.
+
+    ``devserver(root, mounts={"/jwst/spectra/portal_unified/": staged_dir}, ...)`` mounts a
+    sibling portal's staged directory at a deploy-relative URL path under the same
+    host/port, so a foreign base that climbs above the test's served root (e.g.
+    ``"../../../../jwst/spectra/portal_unified/data/"``) resolves without per-test routing
+    (WPE9#6). Any other :class:`DevServer` keyword (``auth``, ``range``, ...) passes through.
+    """
+    from portalkit.deploy.devserver import DevServer
+
+    made: list[DevServer] = []
+
+    def make(root: Path | str, **kw: object) -> DevServer:
+        srv = DevServer(root, **kw).start()
+        made.append(srv)
+        return srv
+
+    yield make
+    for srv in made:
+        srv.stop()
+
+
 @pytest.fixture(scope="session")
 def node_bin() -> str:
     """Path of the ``node`` executable; skips the test when node is absent."""

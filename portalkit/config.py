@@ -448,6 +448,19 @@ def _dim_alias_errors(alias: Mapping, pd: PageData) -> list[str]:
     return errs
 
 
+def _cmd_pane_errors(cmd_pane: str, layout: Any) -> list[str]:
+    """``page.legacy.cmd_pane`` (contract (E), ARCHITECTURE.md section 6.4): must name a
+    scatter pane of this page -- gc-query's legacy CMD axes (a/b/m) map onto its
+    ``.x``/``.y`` canonical keys instead of ``<manifold>.frame`` when it is set."""
+    ids = {(p.get("id") or p.get("pane")): p.get("pane") for p in capsmod.iter_panes(layout)}
+    if cmd_pane not in ids:
+        return [f"page.legacy.cmd_pane: {cmd_pane!r} is not a pane of this page "
+                f"({', '.join(sorted(k for k in ids if k)) or 'no panes'})"]
+    if ids[cmd_pane] != "scatter":
+        return [f"page.legacy.cmd_pane: {cmd_pane!r} is a {ids[cmd_pane]!r} pane, not scatter"]
+    return []
+
+
 def _pane_catalog(leaf: Mapping, pd: PageData, refs: Mapping[str, Mapping]) -> str | None:
     ds = leaf.get("dataset")
     if isinstance(ds, str):
@@ -950,6 +963,10 @@ def assemble(page: PageSpec, datasets: Mapping[str, DatasetSpec], manifests: Map
         if alias:
             errs.extend(_dim_alias_errors(alias, pd))
             lg["dim_alias"] = alias
+        cmd_pane = getattr(page.legacy, "cmd_pane", None)
+        if cmd_pane:
+            errs.extend(_cmd_pane_errors(cmd_pane, layout))
+            lg["cmd_pane"] = cmd_pane
         doc["page"]["legacy"] = lg
     if page.links:
         doc["links"] = dict(page.links)

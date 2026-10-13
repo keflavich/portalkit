@@ -283,3 +283,103 @@ def test_deploy_bookkeeping_paths_answer_403(root):
         assert req(srv, "/.portalkit-deploy.json")[0] == 401        # auth comes first
         assert req(srv, "/.portalkit-deploy.json", headers=basic("u:p"))[0] == 403
         assert req(srv, "/data/manifest.json", headers=basic("u:p"))[0] == 200
+
+
+# ---------------------------------------------------------------------------
+# mounts (WPE9#6): sibling portals served at a deploy-relative URL path
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def foreign_root(tmp_path: Path) -> Path:
+    d = tmp_path / "foreign"
+    (d / "data").mkdir(parents=True)
+    (d / "data" / "manifest.json").write_text('{"n": 42}')
+    (d / "index.html").write_text("<!doctype html><p>foreign index</p>")
+    (d / ".htaccess").write_text("secret")
+    (d / "sub").mkdir()
+    (d / "sub" / "b.txt").write_text("b")
+    return d
+
+
+def test_mount_serves_sibling_directory_at_its_prefix(root, foreign_root):
+    with DevServer(root, mounts={"/jwst/spectra/portal_unified/": foreign_root}) as srv:
+        st, h, body = req(srv, "/jwst/spectra/portal_unified/data/manifest.json")
+        assert st == 200 and body == b'{"n": 42}'
+        assert h["content-type"] == "application/json; charset=utf-8"
+        # root is unaffected
+        st, _, body = req(srv, "/data/manifest.json")
+        assert st == 200 and body == b'{"n": 1}'
+        # a path that only exists under the mount is 404 outside it
+        assert req(srv, "/data/manifest.json", "GET")[0] == 200
+        assert req(srv, "/jwst/spectra/manifest.json")[0] == 404
+
+
+def test_mount_index_html_and_listing(root, foreign_root):
+    with DevServer(root, mounts={"/mnt/": foreign_root}) as srv:
+        st, _, body = req(srv, "/mnt/")
+        assert st == 200 and b"foreign index" in body
+        st, h, _ = req(srv, "/mnt")                       # no trailing slash: redirected
+        assert st == 301 and h["location"] == "/mnt/"
+        st, _, body = req(srv, "/mnt/sub/")
+        assert st == 200 and b"b.txt" in body              # no index.html here: a listing
+
+
+def test_mount_denied_paths_403_inside_mount(root, foreign_root):
+    """The .ht*/.portalkit* 403 rules are checked before a mount is picked, so they apply
+    inside a mount exactly as they do under root."""
+    (foreign_root / ".portalkit-deploy.json").write_text('{"target": "/abs"}')
+    with DevServer(root, mounts={"/mnt/": foreign_root}) as srv:
+        assert req(srv, "/mnt/.htaccess")[0] == 403
+        assert req(srv, "/mnt/.portalkit-deploy.json")[0] == 403
+        assert req(srv, "/mnt/../../etc/passwd")[0] == 403
+        assert req(srv, "/mnt/sub/b.txt")[0] == 200
+
+
+def test_mount_longest_prefix_wins(root, foreign_root, tmp_path):
+    outer = tmp_path / "outer"
+    outer.mkdir()
+    (outer / "manifest.json").write_text('{"which": "outer"}')
+    with DevServer(root, mounts={"/a/": outer, "/a/b/": foreign_root}) as srv:
+        st, _, body = req(srv, "/a/manifest.json")
+        assert st == 200 and body == b'{"which": "outer"}'
+        st, _, body = req(srv, "/a/b/data/manifest.json")
+        assert st == 200 and body == b'{"n": 42}'          # the more specific mount, not outer
+
+
+def test_mount_bad_options(root, foreign_root, tmp_path):
+    with pytest.raises(ValueError):
+        DevServer(root, mounts={"/": foreign_root})          # no path segment to match
+    with pytest.raises(FileNotFoundError):
+        DevServer(root, mounts={"/mnt/": tmp_path / "absent"})
+
+
+def test_mount_via_devserver_fixture(devserver, root, foreign_root):
+    """tests/conftest.py's ``devserver`` factory fixture starts the server and stops it at
+    teardown; this exercises it directly rather than through DevServer's context manager."""
+    srv = devserver(root, mounts={"/mnt/": foreign_root})
+    st, _, body = req(srv, "/mnt/data/manifest.json")
+    assert st == 200 and body == b'{"n": 42}'
+
+
+def test_main_mount_cli_option(root, foreign_root, capsys):
+    from portalkit.deploy.devserver import main
+
+    class _Stop(Exception):
+        pass
+
+    import portalkit.deploy.devserver as dsmod
+    orig = dsmod.DevServer.serve_forever
+
+    def fake_serve_forever(self):
+        raise _Stop
+
+    dsmod.DevServer.serve_forever = fake_serve_forever
+    try:
+        with pytest.raises(_Stop):
+            main([str(root), "--port", "0", "--mount", f"/mnt/={foreign_root}"])
+    finally:
+        dsmod.DevServer.serve_forever = orig
+    out = capsys.readouterr().out
+    assert "mount /mnt/" in out and str(foreign_root) in out
+    with pytest.raises(SystemExit):
+        main([str(root), "--mount", "no-equals-sign"])

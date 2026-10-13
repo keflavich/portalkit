@@ -177,13 +177,19 @@ def cmd_caps(args: argparse.Namespace) -> int:
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
+    from .deploy import UsageError
     from .deploy.devserver import serve
     if not Path(args.build_dir).is_dir():
-        from .deploy import UsageError
         raise UsageError(f"no such directory: {args.build_dir}")
+    mounts: dict[str, str] = {}
+    for m in args.mount:
+        if "=" not in m:
+            raise UsageError(f"--mount must look like PREFIX=DIR, got {m!r}")
+        prefix, d = m.split("=", 1)
+        mounts[prefix] = d
     serve(args.build_dir, args.port, args.host, auth=args.auth,
           content_encoding=args.content_encoding, no_range=args.no_range,
-          latency_ms=args.latency_ms)
+          latency_ms=args.latency_ms, mounts=mounts or None)
     return 0
 
 
@@ -561,6 +567,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--content-encoding", choices=("auto", "none", "gzip"), default="auto")
     s.add_argument("--no-range", action="store_true")
     s.add_argument("--latency-ms", type=float, default=0.0)
+    s.add_argument("--mount", action="append", default=[], metavar="PREFIX=DIR",
+                   help="serve DIR at the deploy-relative URL path PREFIX; repeatable")
     s.set_defaults(fn=cmd_serve)
 
     d = sub.add_parser("deploy", help="deploy a staged build")

@@ -11,24 +11,11 @@ VECTORS = json.loads((Path(__file__).resolve().parents[1] / "fixtures" / "legacy
                       / "hash_vectors.json").read_text())
 
 
-# Grammars whose shared vectors are pending in hash_vectors.json (owned by the fixture WP);
-# tests/py/test_wpe6.py and tests/js/wpe5.test.mjs cover them until the vectors land.
-PENDING_VECTORS = {"spherex-colours"}
-
-# These shared vectors predate the canonical `speed` key (contract (D)): both mirrors now map
-# their ?speed=2 to speed=2 (tests/js/legacyhash.test.mjs carries the same table). Remove the
-# entries once hash_vectors.json is regenerated.
-SPEED_DIVERGENT = {"wavelength kv + speed": {"speed": "2"},
-                   "wavelength speed only on canonical hash": {"speed": "2"}}
-
-
 @pytest.mark.parametrize("case", VECTORS["cases"], ids=[c["name"] for c in VECTORS["cases"]])
 def test_vectors(case):
     r = hm.map_legacy(case["grammars"], case["loc"])
     assert r["consumedSearch"] == case["consumedSearch"]
     want = dict(case["hash"])
-    if case["name"] in SPEED_DIVERGENT and "speed" not in want:
-        want.update(SPEED_DIVERGENT[case["name"]])
     assert set(r["hash"]) == set(want)
     if "speed" in want:
         assert r["hash"]["speed"] == want["speed"]
@@ -43,7 +30,7 @@ def test_vectors(case):
 
 def test_vectors_cover_grammars():
     used = {g for c in VECTORS["cases"] for g in c["grammars"]}
-    assert set(hm.GRAMMAR_NAMES) - PENDING_VECTORS <= used
+    assert set(hm.GRAMMAR_NAMES) <= used
     assert set(hm.GRAMMARS) == set(hm.GRAMMAR_NAMES)
 
 
@@ -51,6 +38,59 @@ def test_single_grammar_functions():
     assert hm.GRAMMARS["bare-name"]({"hash": "#abc"}) == {"id": "abc"}
     assert hm.GRAMMARS["bare-name"]({"hash": ""}) is None
     assert hm.GRAMMARS["w51-rowid"]({"hash": "#W51-3"}) == {"id": "W51-3"}
+
+
+def _page_with_cmd_pane(cmd_pane: str | None, *, scatter_id: str = "cmd") -> dict:
+    layout = {"row": [{"pane": "manifold", "id": "man", "dataset": "gc"},
+                      {"pane": "scatter", "id": scatter_id}]}
+    legacy = {"cmd_pane": cmd_pane} if cmd_pane else {}
+    return {"page": {"legacy": legacy}, "layout": layout, "datasets": {"gc": {}}}
+
+
+def test_cmd_pane_of():
+    assert hm.cmd_pane_of({}) is None
+    assert hm.cmd_pane_of({"page": None}) is None
+    assert hm.cmd_pane_of({"page": {"page": {"legacy": {}}}}) is None
+    assert hm.cmd_pane_of({"page": {"page": {"legacy": {"cmd_pane": "cmd"}}}}) == "cmd"
+    # non-string / empty-string values are not a pane id
+    assert hm.cmd_pane_of({"page": {"page": {"legacy": {"cmd_pane": ""}}}}) is None
+    assert hm.cmd_pane_of({"page": {"page": {"legacy": {"cmd_pane": 3}}}}) is None
+
+
+def test_gc_query_cmd_pane_routes_axes_instead_of_frame():
+    """contract (E): with page.legacy.cmd_pane set, gc-query's a/b/m CMD axes go to
+    <cmd_pane>.x/.y (colour = dim[a]-dim[b], y = dim[m]) instead of <manifold>.frame."""
+    loc = {"search": "?a=0&b=1&m=2", "dims": ["f115w", "f200w", "f356w", "f444w"],
+          "page": _page_with_cmd_pane("cmd")}
+    r = hm.map_legacy("gc-query", loc)
+    assert r["hash"] == {"cmd.x": "f115w-f200w", "cmd.y": "f356w"}
+    assert set(r["consumedSearch"]) == {"a", "b", "m"}
+    assert "man.frame" not in r["hash"]
+
+
+def test_gc_query_ccd_still_uses_frame_with_cmd_pane_set():
+    """p=ccd has no plain-axes equivalent and must keep mapping onto <manifold>.frame even
+    when page.legacy.cmd_pane is set."""
+    loc = {"search": "?p=ccd&x1=0&x2=1&y1=1&y2=3", "dims": ["f115w", "f200w", "f356w", "f444w"],
+          "page": _page_with_cmd_pane("cmd")}
+    r = hm.map_legacy("gc-query", loc)
+    assert list(r["hash"]) == ["man.frame"]
+    assert r["hash"]["man.frame"].startswith("b64:")
+
+
+def test_gc_query_without_cmd_pane_keeps_frame_behavior():
+    """Regression guard: omitting page.legacy.cmd_pane (the pre-existing shape, and every
+    hash_vectors.json gc-query case) must not change the a/b/m -> <manifold>.frame mapping."""
+    loc = {"search": "?a=0&b=1&m=2", "dims": ["f115w", "f200w", "f356w", "f444w"],
+          "page": _page_with_cmd_pane(None)}
+    r = hm.map_legacy("gc-query", loc)
+    assert list(r["hash"]) == ["man.frame"]
+    without_page = hm.map_legacy("gc-query", {"search": "?a=0&b=1&m=2",
+                                              "dims": ["f115w", "f200w", "f356w", "f444w"]})
+    # pane id differs ("man" from the layout vs. the "manifold" default), the frame payload
+    # must not: cmd_pane absence only ever affects which <pane>.frame key is written
+    assert list(without_page["hash"]) == ["manifold.frame"]
+    assert hm.decode_frame(r["hash"]["man.frame"]) == hm.decode_frame(without_page["hash"]["manifold.frame"])
 
 
 @pytest.mark.parametrize("x, s", [

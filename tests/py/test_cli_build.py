@@ -666,6 +666,36 @@ def test_serve_missing_dir(capsys, tmp_path):
     assert code == 2 and "no such directory" in err
 
 
+def test_serve_mount_bad_option(capsys, tmp_path):
+    """WPE9#6: ``portalkit serve`` rejects a --mount without PREFIX=DIR (exit 2, UsageError)."""
+    (tmp_path / "built").mkdir()
+    code, _, err = run(capsys, "serve", str(tmp_path / "built"), "--mount", "no-equals-sign")
+    assert code == 2 and "--mount" in err and "PREFIX=DIR" in err
+
+
+def test_serve_mount_wired_to_devserver(capsys, tmp_path, monkeypatch):
+    """WPE9#6: ``portalkit serve --mount PREFIX=DIR`` passes the mount through to the
+    underlying DevServer (checked via the startup line devserver.serve() prints)."""
+    import portalkit.deploy.devserver as dsmod
+
+    built = tmp_path / "built"
+    built.mkdir()
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+
+    class _Stop(Exception):
+        pass
+
+    def fake_serve_forever(self):
+        raise _Stop
+
+    monkeypatch.setattr(dsmod.DevServer, "serve_forever", fake_serve_forever)
+    with pytest.raises(_Stop):
+        run(capsys, "serve", str(built), "--port", "0", "--mount", f"/mnt/={foreign}")
+    out = capsys.readouterr().out
+    assert "mount /mnt/" in out and str(foreign) in out
+
+
 # ---------------------------------------------------------------------------
 # review fixes: registry dir, argument ranges, build ids, caps on foreign catalogs,
 # manifold dims for legacy grammars, digest-cache writes, memo scope
@@ -892,6 +922,53 @@ def test_multi_portal_scoping_and_manifold_dims(tmp_path):
     leaf = next(p for p in panes(mani["layout"]) if p.get("pane") == "manifold")
     dims = leaf["options"]["dims"]
     assert isinstance(dims, list) and set(dims) >= {"f115w", "f200w", "f356w", "f444w"}
+
+
+def test_related_excludes_portals_not_built_this_run(tmp_path):
+    """WPE9#2: ``portal.json``'s ``related`` lists only portals the adapter actually
+    assigned a page to this run. A sibling registered in the site but skipped by the
+    adapter (e.g. gc_manifold's site also registers sgrb2_manifold, which the adapter
+    conditionally omits) must not appear, while two portals that both got pages list each
+    other."""
+    mod = f"pk_cli_related_{uuid.uuid4().hex[:8]}"
+    (tmp_path / "ad").mkdir()
+    (tmp_path / "ad" / f"{mod}.py").write_text(MULTI_SRC)
+    sites = tmp_path / "sites"
+    sites.mkdir()
+    portals = ""
+    for pid in ("a", "b", "c"):
+        (tmp_path / f"legacy_{pid}").mkdir()
+        portals += textwrap.dedent(f'''
+            [[portal]]
+            id = "{pid}"
+            title = "Portal {pid}"
+            visibility = "public"
+            legacy_dir = "{tmp_path}/legacy_{pid}"
+            url = "https://data.rc.ufl.edu/pub/adamginsburg/climulti/{pid}/"
+            ''')
+    (sites / "climulti_related.toml").write_text(
+        f'family = "climulti_related"\nadapter = "{mod}:ADAPTER"\ntier_default = "A"\n' + portals)
+    mp = pytest.MonkeyPatch()
+    mp.syspath_prepend(str(tmp_path / "ad"))
+    mp.setenv("PK_CACHE_DIR", str(tmp_path / "cache"))
+    try:
+        res = buildmod.build_family("climulti_related", stage_root=tmp_path / "stage", sites_dir=sites,
+                                    emap=ExposureMap(roots={}, url_prefixes={}),
+                                    allow_tmp_inputs=True, log=lambda s: None, run_check=False)
+    finally:
+        mp.undo()
+        sys.modules.pop(mod, None)
+    errs = {k: v["errors"] for k, v in res.report["portals"].items()}
+    assert res.ok, errs
+    # the adapter (MULTI_SRC) returns pages only for "a" and "b"; "c" is registered in the
+    # site but never assigned a page this run
+    doc_a = json.loads((res.staging / "a" / "portal.json").read_text())
+    doc_b = json.loads((res.staging / "b" / "portal.json").read_text())
+    related_a = {r["title"] for r in doc_a.get("related", [])}
+    related_b = {r["title"] for r in doc_b.get("related", [])}
+    assert related_a == {"Portal b"}
+    assert related_b == {"Portal a"}
+    assert "Portal c" not in related_a and "Portal c" not in related_b
 
 
 def test_doc_file_refs_include_ids_chunks():

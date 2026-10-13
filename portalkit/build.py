@@ -689,7 +689,8 @@ class _PortalBuild:
             fb.log(f"[{self.pid}] catalog {k}")
             if spec.foreign is not None:
                 res = gc_manifest.write(spec, dw, ds=k, build=fb.build_id, links=links or None,
-                                        provenance=prov, ledger=self.ledger, log=fb.log)
+                                        provenance=prov, ledger=self.ledger, log=fb.log,
+                                        labeler=fb.labeler)
                 ref: dict[str, Any] = {"kind": "catalog", "url": f"data/{k}/manifest.json"}
                 if spec.context:
                     ref["context"] = True
@@ -883,7 +884,7 @@ class _PortalBuild:
                 ent["subtitle"] = p.subtitle
             doc["pages"].append(ent)
         related = [{"title": o.title, "url": o.url, "auth": o.visibility}
-                   for o in fb.site.portals if o.id != self.pid]
+                   for o in fb.site.portals if o.id != self.pid and o.id in fb.built_portal_ids]
         if related:
             doc["related"] = related
         search = []
@@ -1004,6 +1005,10 @@ class _FamilyBuild:
         self.run_check = run_check
         self.thumb_px = int(thumb_px)
         self.warnings: list[str] = []
+        #: portal ids the adapter actually assigned >=1 page to this run (WPE9#2); a portal
+        #: registered in the site but not built this run (e.g. the adapter conditionally
+        #: skips it) is absent here and excluded from every built portal's ``related`` list
+        self.built_portal_ids: set[str] = set()
         self.site: SiteConfig = load_site(family, sites_dir)
         if self.site.status == "excluded":
             raise UsageError(f"family {family!r} is excluded (status = \"excluded\")")
@@ -1172,6 +1177,7 @@ class _FamilyBuild:
             by_portal = {pid: pl for pid, pl in by_portal.items() if pl}
         if not by_portal:
             raise BuildError(f"adapter {self.adapter_ref} returned no pages")
+        self.built_portal_ids = set(by_portal)
         reports: dict[str, dict] = {}
         built: list[str] = []
         ok = True

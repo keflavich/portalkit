@@ -272,6 +272,77 @@ def test_manifest_takes_precedence_over_spec():
 
 
 # ---------------------------------------------------------------------------
+# page.legacy.cmd_pane (contract (E), WPE9#8): gc-query's legacy CMD axes (a/b/m) map onto
+# <cmd_pane>.x/.y instead of <manifold>.frame when set; config.py checks it names a scatter
+# pane of the page. Two cross-ownership gaps limit how far this can be tested end to end
+# (see contract_issues): LegacyRef (spec.py) has no declared `cmd_pane` field, so these tests
+# set it as a plain extra attribute on the dataclass instance -- exactly what an adapter will
+# do once that field exists; and schema.py's page.legacy key allowlist does not include
+# "cmd_pane" yet, and config.assemble() always runs validate_page(doc) and raises on any
+# error, so *every* page carrying cmd_pane currently fails assembly on that schema error
+# alone, however correct config.py's own merge/validation of it is. The tests below cover
+# config.py's own logic directly (_cmd_pane_errors) and confirm, through assemble()'s raised
+# errors, that schema.py's gap is the only thing standing between this and a clean document.
+# ---------------------------------------------------------------------------
+
+def _legacy_with_cmd_pane(cmd_pane):
+    lg = LegacyRef(files=["old.html"], grammar=["gc-query"])
+    lg.cmd_pane = cmd_pane
+    return lg
+
+
+def test_cmd_pane_errors_scatter_pane_of_page_ok():
+    layout = {"row": [{"pane": "manifold", "id": "man", "dataset": "src"},
+                      {"pane": "scatter", "id": "cmd"}]}
+    assert config._cmd_pane_errors("cmd", layout) == []
+
+
+def test_cmd_pane_errors_not_a_pane_of_the_page():
+    layout = {"pane": "manifold", "id": "man", "dataset": "src"}
+    errs = config._cmd_pane_errors("nope", layout)
+    assert any("cmd_pane" in e and "nope" in e and "not a pane" in e for e in errs)
+
+
+def test_cmd_pane_errors_wrong_pane_type():
+    layout = {"row": [{"pane": "manifold", "id": "man", "dataset": "src"},
+                      {"pane": "list", "id": "cmd", "dataset": "src"}]}
+    errs = config._cmd_pane_errors("cmd", layout)
+    assert any("cmd_pane" in e and "'list'" in e and "not scatter" in e for e in errs)
+
+
+def test_cmd_pane_passed_through_and_only_the_known_schema_gap_blocks_assembly():
+    """config.py's own merge/validation accepts a valid cmd_pane silently; assembly still
+    fails, but on schema.py's "unknown key 'cmd_pane'" alone (the gap above), not on
+    anything _cmd_pane_errors checks."""
+    layout = {"row": [{"pane": "manifold", "id": "man", "dataset": "src"},
+                      {"pane": "scatter", "id": "cmd"}]}
+    page = PageSpec(id="m", archetype="explorer", title="M", datasets=["src"], layout=layout,
+                    legacy=_legacy_with_cmd_pane("cmd"))
+    with pytest.raises(config.ConfigError) as ei:
+        _assemble(page, {"src": _cat()})
+    assert ei.value.errors == ["page.legacy: unknown key 'cmd_pane'"]
+
+
+def test_cmd_pane_invalid_pane_error_surfaces_alongside_schema_gap():
+    layout = {"pane": "manifold", "id": "man", "dataset": "src"}
+    page = PageSpec(id="m", archetype="explorer", title="M", datasets=["src"], layout=layout,
+                    legacy=_legacy_with_cmd_pane("nope"))
+    with pytest.raises(config.ConfigError) as ei:
+        _assemble(page, {"src": _cat()})
+    assert any("cmd_pane" in e and "nope" in e and "not a pane" in e for e in ei.value.errors)
+    assert any("unknown key 'cmd_pane'" in e for e in ei.value.errors)
+
+
+def test_cmd_pane_absent_is_not_an_error():
+    layout = {"pane": "manifold", "id": "man", "dataset": "src"}
+    page = PageSpec(id="m", archetype="explorer", title="M", datasets=["src"], layout=layout,
+                    legacy=LegacyRef(files=["old.html"]))
+    doc = _assemble(page, {"src": _cat()})
+    assert "cmd_pane" not in doc["page"]["legacy"]
+    assert validate_page(doc) == []
+
+
+# ---------------------------------------------------------------------------
 # URLs, providers, sizes
 # ---------------------------------------------------------------------------
 

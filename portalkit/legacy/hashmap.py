@@ -19,6 +19,10 @@ Shared contracts of wave E (ARCHITECTURE sections 4.1 and 6.4), mirrored here:
 * (D) the canonical ``speed`` key: the wavelength and kv-view grammars map a legacy
   ``?speed=`` query parameter (consumed, also under a canonical hash) and a legacy ``speed=``
   hash value onto it.
+* (E) ``page.legacy.cmd_pane``: gc-query's legacy CMD axes (``a``, ``b``, ``m`` -- x is the
+  colour ``dim[a]-dim[b]``, y is ``dim[m]``) map onto ``<cmd_pane>.x``/``<cmd_pane>.y`` of
+  that scatter pane instead of ``<manifold>.frame`` when the page names one; ``p=ccd``
+  always still maps onto ``<manifold>.frame`` (the CCD panel has no plain-axes pane).
 
 ``map_legacy`` returns ``{"hash", "consumedSearch"}``; the browser's ``mapLegacy`` also
 returns ``fromHash``, which only ``boot.js`` uses.
@@ -38,7 +42,8 @@ from urllib.parse import unquote, unquote_plus
 __all__ = ["CANONICAL_KEYS", "GRAMMAR_NAMES", "GRAMMARS", "SEL_RADIUS_ARCSEC",
            "DEFAULT_FOV_DEG", "map_legacy", "is_canonical_hash", "encode_json", "decode_json",
            "encode_frame", "decode_frame", "encode_recipe", "decode_recipe", "b64url_encode",
-           "b64url_decode", "legacy_context", "layout_info", "js_number", "dim_alias"]
+           "b64url_decode", "legacy_context", "layout_info", "js_number", "dim_alias",
+           "cmd_pane_of"]
 
 CANONICAL_KEYS = ("id", "sel", "f", "c", "av", "rv", "dm", "speed", "tpl", "feat", "spec",
                   "wl", "sky", "base", "ovl", "rung", "beat", "role", "fac", "lb", "view")
@@ -301,6 +306,18 @@ def _alias_dim(alias: Mapping[str, str], key: str) -> str:
     return alias.get(key, key)
 
 
+def cmd_pane_of(loc: Mapping) -> str | None:
+    """``page.legacy.cmd_pane`` (contract (E)): the scatter pane id that receives gc-query's
+    legacy CMD ``a``/``b``/``m`` axes as ``<cmd_pane>.x``/``<cmd_pane>.y``, read the same way
+    as :func:`dim_alias` reads ``page.legacy.dim_alias``. ``None`` when unset, so those axes
+    keep mapping onto ``<manifold>.frame`` as before."""
+    page = loc.get("page")
+    pg = page.get("page") if isinstance(page, Mapping) else None
+    lg = pg.get("legacy") if isinstance(pg, Mapping) else None
+    v = lg.get("cmd_pane") if isinstance(lg, Mapping) else None
+    return str(v) if isinstance(v, str) and v else None
+
+
 def _scatter_panes(loc: Mapping) -> list[dict]:
     """Scatter panes of the page layout in layout order: ``[{id, options}]``."""
     page = loc.get("page")
@@ -527,11 +544,16 @@ def _gc_query(loc: Mapping) -> Result | None:
         ia, ib, im = _int(q.get("a")), _int(q.get("b")), _int(q.get("m"))
         da, db, dm = _dim_at(ctx, ia), _dim_at(ctx, ib), _dim_at(ctx, im)
         if da and db and dm:
-            F = [0.0] * (2 * D)
-            F[ia] += _w(da)
-            F[ib] -= _w(db)
-            F[D + im] = -1.0
-            out[f"{pane}.frame"] = encode_frame(F)
+            cmd_pane = cmd_pane_of(loc)
+            if cmd_pane:
+                out[f"{cmd_pane}.x"] = f"{da['key']}-{db['key']}"
+                out[f"{cmd_pane}.y"] = dm["key"]
+            else:
+                F = [0.0] * (2 * D)
+                F[ia] += _w(da)
+                F[ib] -= _w(db)
+                F[D + im] = -1.0
+                out[f"{pane}.frame"] = encode_frame(F)
             use("a", "b", "m", "p")
     if q.get("y") and ctx["dims"]:
         keys = [d["key"] for d in dims]

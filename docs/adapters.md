@@ -94,7 +94,15 @@ A family with several portals (for example a public and a secure one) lists seve
   pass `virtual_colours=False` to keep them stored.
 - Existing GC tile manifests: a `CatalogSpec` with `foreign=ForeignRef("gc-manifest-1",
   url_base, manifest_path)`; the build writes a schema-2 manifest that points at the
-  existing tiles (`portalkit.legacy.gc_manifest`).
+  existing tiles (`portalkit.legacy.gc_manifest`). That manifest merges the `CatalogSpec`'s
+  own `presets` (including `red_clump` and the CMD/CCD axes presets), `virtual` dims,
+  `groups` (an explicit group wins over an auto-derived one with the same key),
+  `manifold.frames`/`default_frame`, and each column's `filter`, so a GC-foreign catalog's
+  metadata reaches the served page the same way a native catalog's does. A column whose key
+  equals `CatalogSpec.id` gets `role="id"`. Local paths written into the manifest's
+  `provenance` block (the source manifest path, and any `source`/`sample`/`cutout_layers`/
+  `build_notes` values copied from the legacy manifest) go through the family's
+  `PathLabeler` first, so `portalkit check --gate G2` passes.
 - Per-source spectra: `RecordSetSpec(kind="pks1", catalog=..., ids=..., loader=fn)`. The
   loader returns a `Spectrum` (wavelength in um, ascending per segment) or `None` to skip.
   `kind="sedcurve"` takes any channel names (for example `SPHEREx` and `IRS`); `pks1`
@@ -128,6 +136,12 @@ the site registry fill `PageSpec.legacy` (legacy files and hash grammars) when t
 leaves it empty. `dim_alias = {legacy_dim = "dim"}` in a `[[portal.page]]` entry (or
 `LegacyRef.dim_alias`) maps the dim keys of legacy hashes to the page's dims, for example
 `{c_F162M_F210M = "f162m-f210m"}`; every value must be a dim of the page's catalogs.
+`cmd_pane = "cmd"` (or `LegacyRef.cmd_pane`) names the scatter pane of the page that should
+receive gc-query's legacy CMD axes (`a`, `b`, `m`) as `<cmd_pane>.x`/`<cmd_pane>.y` instead
+of `<manifold>.frame`; `p=ccd` still always maps onto `<manifold>.frame` (the CCD panel has
+no plain-axes pane). As of this writing `cmd_pane` is accepted by `config.assemble()` but
+rejected by `schema.validate_page()`'s `page.legacy` key allowlist, so a page that sets it
+cannot finish assembly until that allowlist is updated (not owned by this work package).
 
 ## Build, check, inspect
 

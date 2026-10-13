@@ -7,7 +7,7 @@ Document shape::
      "items":   [{"id", "row"?, "roles": {role: {"url", "w"?, "h"?, "thumb"?}},
                   "caption"?, "tags": {facet: value}, "w"?, "h"?}],
      "facets":  [{"key", "label", "values": [sorted distinct values]}],
-     "presets": [{"key", "label", "facets": {facet: [values]}}],
+     "presets": [{"key", "label", "facets": {facet: [values]}, "role"?: roleKey}],
      "catalog"?: dsId}
 
 When the gzip size of the document exceeds ``IMAGES_SOFT_MAX`` (4 MiB) the items move to
@@ -20,6 +20,13 @@ has) would select nothing; the gallery pane reads a missing or empty value list 
 (``gallery.js`` ``passesFacets``/``normFacets``), so such a preset is dropped with a warning
 instead of being written as a select-all. A preset with no facets at all (``{}``) is kept: it
 was written as "all images".
+
+A preset's ``data`` may also carry a ``role`` naming one of the set's declared image roles
+(e.g. "nb"/"bb" on a role-gallery such as ``pngs/gallery_2640.html``); it is not a facet and
+is emitted as the preset's own top-level ``role`` instead of being folded into ``facets``
+(the role may sit beside an explicit ``facets`` key, or alone for a role-only preset). An
+undeclared role is dropped with a warning; the preset is still written (without ``role``) if
+it has no facets left to make it void.
 
 ``row`` is the catalog stored row of the item, looked up through ``rows`` (a mapping or a
 callable such as ``CatalogResult.row_of``). The lookup key is ``item.id``, or the item's tag
@@ -148,7 +155,19 @@ def build_document(spec: Any, *, rows: Mapping[str, int] | Callable[[str], int |
     for p in _g(spec, "presets") or []:
         pkey = _g(p, "key")
         data = dict(_g(p, "data") or {})
-        fsel = data.get("facets", data)
+        prole = data.get("role")
+        if prole is not None:
+            prole = str(prole)
+            if prole not in role_keys:
+                _warn(f"image preset {pkey!r}: role {prole!r} not declared")
+                prole = None
+        # ``data.role`` picks which image role a preset shows (section 5.10's role presets,
+        # e.g. "nb"/"bb"); it is not a facet selection, so it is pulled out before the facet
+        # dict is read, whether it sits beside an explicit "facets" key or (role-only preset)
+        # directly in `data`.
+        fsel = data.get("facets")
+        if fsel is None:
+            fsel = {k: v for k, v in data.items() if k != "role"}
         fout = {}
         void: list[str] = []          # facet selections that match no item
         for fk, fv in fsel.items():
@@ -170,7 +189,10 @@ def build_document(spec: Any, *, rows: Mapping[str, int] | Callable[[str], int |
             # the gallery reads an empty value list as "no filter" and would show every image
             _warn(f"image preset {pkey!r}: facet(s) {void} match no image; preset dropped")
             continue
-        presets.append({"key": str(pkey), "label": str(_g(p, "label")), "facets": fout})
+        pdoc = {"key": str(pkey), "label": str(_g(p, "label")), "facets": fout}
+        if prole is not None:
+            pdoc["role"] = prole
+        presets.append(pdoc)
 
     doc: dict = {"schema": "pk-images/1", "roles": roles, "items": items, "facets": facets}
     if presets:
