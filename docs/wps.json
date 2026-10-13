@@ -1213,5 +1213,23 @@
    "tests/e2e/test_port_wd2.py"
   ],
   "description": "Adopt WPE8/WPE9 (read their diffs and docs/IMPLEMENTATION_NOTES.md):\n1. gc_manifold: remove the GC_MANIFEST_GAP_CAPS/FLAGS work-arounds and the xfail on test_fixture_build_full_g2 now that gc_manifest keeps presets/frames and labels paths; set page.legacy.cmd_pane for the CMD scatter pane; serve the red-clump preset as a manifest preset.\n2. spherex: manifold.default_frame 'default' names no preset; emit a real preset key.\n3. jwst_archive: gallery presets carry role through images.py (drop the per-file '&role=' stub work-around only if equivalent).\n4. wd2 and jwst_archive e2e: use the devserver sibling mount instead of per-test routing for foreign bases.\nRun each touched family's adapter and e2e tests and one bounded build through `portalkit check --gate G2`."
+ },
+ {
+  "id": "WPE11",
+  "title": "Integration: close cross-WP gaps (cmd_pane, preset role, frame representation, wavelength speed, foreign mounts) and make the whole e2e suite green",
+  "depends_on": [],
+  "files": [
+   "portalkit/schema.py",
+   "portalkit/spec.py",
+   "portalkit/build.py",
+   "portalkit/config.py",
+   "portalkit/legacy/hashmap.py",
+   "web/js/",
+   "adapters/",
+   "sites/",
+   "tests/",
+   "docs/"
+  ],
+  "description": "Sole WP running: you may edit any file under the listed paths. Read commits 24ecbbf (WPE8), 2033c08 (WPE9), 8321f4c (WP32), 620ec76 (WPE10) and docs/IMPLEMENTATION_NOTES.md 140+.\n1. page.legacy.cmd_pane is unreachable end to end: add cmd_pane to spec.LegacyRef, propagate it in build.py _merge_legacy (adapter-set values must survive merging with the site TOML), add it to both page.legacy allowlists in schema.py, and set it in adapters/gc_manifold.py for the CMD scatter pane. Python hashmap and JS legacyhash already route on it.\n2. schema.validate_images preset allowlist lacks 'role' although bundle/images.py emits it and gallery.js reads it: allow it, then let adapters/jwst_archive.py serve its role-carrying gallery presets in the dropdown (drop the filter work-around).\n3. Manifold frame representation after WPE8's raw axes frames: tests/e2e/test_port_wd2.py::test_sabbi_manifold expects the default_frame axes preset to report its virtual dim name ('m_hst_v-m_hst_h') but gets the decomposed base dims; test_port_spherex.py::test_legacy_hash_focus[...view=co_ice] gets a zero frame for a named axes preset; test_port_gc_manifold.py::test_gc_query_cmd_and_ccd_frames is flaky and its frame is orthonormalized (gc-query frames carry no preset). Decide one consistent rule (recommended: an axes preset or gc-query a/b/m CMD is shown as the raw 2-D projection of its expressions; stats()/test hooks report the preset's expression names; tours start from the nearest orthonormal frame) and fix code and tests to match; remove the flakiness (find its race).\n4. tests/e2e/test_port_wd2.py::test_wavelength_rungs_and_speed: ?speed=2 never reaches the wavelength pane after WPE8 moved it to the store key 'speed'; fix the boot/legacyhash/wavelength path.\n5. tests/e2e/test_port_wd2.py::test_manifold_legacy_kv_hash 404s because the nirspec2640 sibling mount is populated by a later test; make the foreign-portal mount a module-scoped fixture built before any test that loads wd2_manifold.\n6. Then run EVERY e2e file (python -m pytest tests/e2e -m e2e --run-e2e -q, with PK_SYNTH_DIR and PK_CACHE_DIR under your scratch; it is slow on this loaded host -- run files one at a time and re-run a failure once before treating it as real), the adapters suite (tests/adapters --run-adapters), tests/py and the node suite, and fix every real failure. Report the per-file e2e pass/fail table. Treat a timing-only assertion that fails once and passes on re-run as load, and say so."
  }
 ]
