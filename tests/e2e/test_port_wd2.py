@@ -14,7 +14,8 @@ SED PNGs) are aborted by the harness and recorded.
   selections; the 2640 spectra are plotted from the nirspec2640 portal's record shards
   (foreign record set ``nirspec``, ``../nirspec2640/data/spec/``). The staged wd2 build holds
   no nirspec2640 portal, so the test writes a small synthetic record set for the wd2 spec ids
-  and routes those requests to it.
+  under ``foreign_dir``, which ``server`` mounts at ``/nirspec2640/data/`` (WPE9 item 6) so the
+  browser's real request for that foreign base resolves without per-test routing.
 * sabbi: manifold with isochrones recorded as disabled (no HST MIST bands); the default frame
   is the first axes preset.
 * wd2_sedgallery: gallery items = SED PNGs, live SED with the blackbody model, range brushes
@@ -74,9 +75,20 @@ def portal_dir(tmp_path_factory) -> Path:
 
 
 @pytest.fixture(scope="module")
-def server(portal_dir):
+def foreign_dir(tmp_path_factory) -> Path:
+    """Backing directory for the ``/nirspec2640/data/`` mount (see ``server``): the staged wd2
+    build holds no nirspec2640 portal, so ``test_manifold_foreign_spectra`` writes a synthetic
+    record set here under ``spec/`` before fetching it through the mount."""
+    return tmp_path_factory.mktemp("nirspec2640")
+
+
+@pytest.fixture(scope="module")
+def server(portal_dir, foreign_dir):
     from portalkit.deploy.devserver import DevServer
-    srv = DevServer(portal_dir.parent).start()
+    # mounts a sibling "nirspec2640" portal's data/ onto this server (WPE9 item 6) instead of
+    # per-test Playwright ctx.route() interception, so the foreign base the wd2_manifold page
+    # climbs to (``../nirspec2640/data/spec/...``) resolves as a real mounted directory.
+    srv = DevServer(portal_dir.parent, mounts={"/nirspec2640/data/": foreign_dir}).start()
     yield srv
     srv.stop()
 
@@ -232,8 +244,9 @@ def test_manifold_legacy_kv_hash(runs, portal_dir):
     _no_errors(run)
 
 
-def test_manifold_foreign_spectra(browser, server, runs, portal_dir, tmp_path):
-    """wd2 stages no spectrum shards: the spectrum pane reads ../nirspec2640/data/spec/."""
+def test_manifold_foreign_spectra(server, runs, portal_dir, foreign_dir):
+    """wd2 stages no spectrum shards: the spectrum pane reads ../nirspec2640/data/spec/, which
+    ``server`` mounts onto ``foreign_dir`` (WPE9 item 6) rather than routing it per-test."""
     import numpy as np
 
     from portalkit.bundle import records
@@ -254,21 +267,10 @@ def test_manifold_foreign_spectra(browser, server, runs, portal_dir, tmp_path):
     def spec(rid):
         return Spectrum(wave=w, channels={"flux": 1e-3 * (1 + w), "err": np.full(w.size, 1e-4)},
                         units={"flux": "Jy"})
-    records.write(RecordSetSpec("spec", "pks1", "src", sorted({sid for _, sid in pick}), spec), tmp_path / "spec")
-    assert (tmp_path / "spec" / "index.json").is_file()
-    seen = []
-
-    def to_synth(r):
-        rest = r.request.url.split("/nirspec2640/data/", 1)[1].split("?", 1)[0]
-        seen.append(rest)
-        f = tmp_path / rest
-        if not f.is_file():
-            return r.fulfill(status=404, body=b"")
-        return r.fulfill(status=200, body=f.read_bytes(),
-                         content_type="application/json" if rest.endswith(".json") else "application/octet-stream")
-    ctx = browser.new_context(viewport={"width": 1400, "height": 900})
-    ctx.route(re.compile(r"/nirspec2640/data/"), to_synth)
-    run = runs("wd2_manifold.html", context=ctx)
+    records.write(RecordSetSpec("spec", "pks1", "src", sorted({sid for _, sid in pick}), spec), foreign_dir / "spec")
+    assert (foreign_dir / "spec" / "index.json").is_file()
+    before = len(server.requests)
+    run = runs("wd2_manifold.html")
     run.wait_panes_settled()
     p = _panes(run)
     assert "spectrum1d" in p, p
@@ -277,7 +279,9 @@ def test_manifold_foreign_spectra(browser, server, runs, portal_dir, tmp_path):
     run.ev(f"() => window.__pk.store.set({{focus: {{ds: 'src', i: {pick[0][0]}, id: null}}}}, {{source: 'test'}})")
     st = _wait(run, p["spectrum1d"][0], "s.n > 0")
     assert st["n"] > 0
-    assert "spec/index.json" in seen and any(x.startswith("spec/") and x != "spec/index.json" for x in seen), seen
+    seen = [rq.path for rq in server.requests[before:] if rq.path.startswith("/nirspec2640/data/")]
+    assert any(p.startswith("/nirspec2640/data/spec/index.json") for p in seen)
+    assert any(p.startswith("/nirspec2640/data/spec/") and "index.json" not in p for p in seen), seen
     _no_errors(run)
 
 

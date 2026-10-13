@@ -28,16 +28,18 @@ public GC URLs. Nothing is re-encoded; only the u8 tile index is widened to u16.
 * The legacy query grammar (``?a=&b=&m=&p=&x1..y2&cb&cd&cm&cl&ch&g&rv&fa&sel``, Treasury
   ``y``) is mapped by ``legacyhash.js`` (``grammar = ["gc-query"]`` in the site registry).
   ``legacyContext`` resolves the state onto the page's one manifold pane, including the a/b/m
-  and Treasury ``y`` axis choice that legacy shows on the CMD pane; routing that part to the
-  ``cmd`` scatter pane instead needs a pane hint ``legacyhash.js``/``config.py`` do not carry
-  yet (WP30 contract issue, not fixed here).
+  and Treasury ``y`` axis choice that legacy shows on the CMD pane; ``legacyhash.js``/
+  ``config.py`` now carry a pane hint for this (``page.legacy.cmd_pane``, WPE9 item 8), but
+  wiring it here needs ``cmd_pane`` added to :class:`~portalkit.spec.LegacyRef` and propagated
+  through ``build.py``'s ``_merge_legacy`` and ``schema.py``'s two ``page.legacy`` allowlists,
+  none of which this adapter owns (WPE10 contract issue, not fixed here).
 * The red-clump zoom (``findDensityPeak``: densest bin of a 40x40 grid over the 0.5-99.5
   percentile box of the legacy ``sampleJoint`` (every ``SAMPLE_STRIDE_CAP``-th row, kept only
   when every manifold dim decodes), half-width 1/10 of the default fit range) is computed at
   build time from the decoded GC dims. It is a readme deep link (``#cmd.x=..&cmd.xr=..``) that
   zooms the CMD pane, and an ``axes`` preset of the CatalogSpec with the same ``x``/``y``/
-  ``xr``/``yr`` (``legacy/gc_manifest.write`` does not yet carry CatalogSpec presets into the
-  served manifest; see the WP30 contract issues).
+  ``xr``/``yr``, which ``legacy/gc_manifest.write`` merges onto the served manifest's top-level
+  ``presets`` (WPE9 item 1) alongside ``cmd``/``ccd``.
 * The jwst-gc pipeline monitor (``MONITOR_URL``) is out of portal scope (port table 14.2,
   archetype "excluded"); it is linked from the readme only.
 """

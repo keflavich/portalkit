@@ -41,16 +41,18 @@ INV_TREASURY = "GC Treasury catalog manifold viewer (treasury_manifold)"
 INV_FIELDS = "GC per-field catalog manifold viewers (<field>_manifold; 11 instances of one template)"
 INV_MONITOR = "jwst-gc pipeline monitor (monitor.html, fields/<target>.html, *_monitor5as.html)"
 
-#: Capabilities and flags that need catalog metadata ``legacy/gc_manifest.write`` does not merge
-#: into the served manifest (column ``filter`` -> mags3f; ``id`` -> cat; virtual dims -> num3 on
-#: 2-band fields). Contract issue for WP13; the adapter supplies the metadata in its CatalogSpec.
-GC_MANIFEST_GAP_CAPS = {"detail_panel", "hover_preview", "source_list_search", "selection_export",
+#: Capabilities and flags still missing on GC-manifest-backed fields after WPE9's gc_manifest.write
+#: merge (column ``filter``/``id``/``spec.manifold`` now flow through -- ``num3``, ``selection_export``
+#: and the G2 gate are resolved, so those are no longer here). The remaining gap is structural, not a
+#: merge gap: GC catalogues are referenced in place with rows addressed by tile index, not a per-row
+#: id (``CatalogSpec(id="")``), so ``cat`` (and its dependents ``detail_panel``/``hover_preview``/
+#: ``source_list_search``) can never trigger; and 2-band fields (vs. treasury/arches/gc2211/
+#: quintuplet's 3+) never reach ``mags3f``, so ``av_slider``/``model_template_overlay``/
+#: ``labeled_features_overlay``/``live_sed_viewer``/``extinction_vectors_on_ccd`` stay missing there.
+GC_MANIFEST_GAP_CAPS = {"detail_panel", "hover_preview", "source_list_search",
                         "live_sed_viewer", "extinction_vectors_on_ccd", "av_slider",
                         "model_template_overlay", "labeled_features_overlay"}
-GC_MANIFEST_GAP_FLAGS = {"cat", "mags3f", "num3"}
-#: G2 errors from the foreign manifest provenance (``provenance.foreign.manifest`` and
-#: ``gc_source`` hold local paths); written by legacy/gc_manifest.py (WP13), not the adapter.
-G2_FOREIGN = re.compile(r"absolute local path in served file data/cat_[a-z0-9_]+/manifest\.json")
+GC_MANIFEST_GAP_FLAGS = {"cat", "mags3f"}
 
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
@@ -193,8 +195,7 @@ def test_fixture_build_passes_check(built, runs):
     portals = _portals(built)
     assert [p.name for p in portals] == sorted(f"{k}_manifold" for k in _fields(runs))
     rep = check_build(res.staging, gate="G2")
-    other = [e for e in rep.errors if not G2_FOREIGN.search(e)]
-    assert not other, other
+    assert rep.ok, rep.errors
     for pdir in portals:
         report = json.loads((pdir / "build_report.json").read_text(encoding="utf-8"))
         assert report["tier"] == "B"
@@ -202,9 +203,9 @@ def test_fixture_build_passes_check(built, runs):
             assert pg["first_paint_bytes"] <= 2_000_000, (pdir.name, pg["id"])
 
 
-@pytest.mark.xfail(strict=False, reason="contract issue (WP13): legacy/gc_manifest.write leaves local "
-                                        "paths in provenance.foreign.manifest / gc_source")
 def test_fixture_build_full_g2(built):
+    """legacy/gc_manifest.write's PathLabeler (WPE9) scrubs the local paths that used to leak
+    into provenance.foreign.manifest / gc_source, so G2 now passes with no foreign-path carveout."""
     rep = check_build(built["res"].staging, gate="G2")
     assert rep.ok, rep.errors
 

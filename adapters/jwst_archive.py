@@ -462,8 +462,17 @@ class JWSTArchiveAdapter:
                         "filterset": "+".join(sets), "checklist": it["ck"] or None,
                         **{rk: _purl(fn) for rk, fn in it["files"].items()}})
         out.sort(key=lambda d: (d["program"], d["target"], d["id"]))
-        # the in-page preset menu applies facets only (images.json presets carry no role), so
-        # it lists the facet-distinct presets; the role variants live in the legacy stub hashes
+        # bundle/images.py now carries a preset's role through to the served document
+        # (WPE9 item 4; gallery.js applies it alongside facets) -- but schema.py's pk-images
+        # preset validator (its `_keys(..., ("key", "label", "facets"))` call) was not
+        # updated to allow it, so a preset literally carrying "role" fails `check_build`
+        # with "unknown key 'role'" (docs/IMPLEMENTATION_NOTES.md #148; schema.py not
+        # owned by this WP, see contract_issues). Emitting every GALLERY_PRESETS entry
+        # (role-carrying ones included) stays blocked on that until schema.py adds "role"
+        # as an optional key there (validated against the same `role_keys` the item-roles
+        # check already uses). Until then: the in-page preset menu applies facets only, so
+        # it lists the facet-distinct presets; the role variants live in the legacy stub
+        # hashes.
         pre = [Preset(k, lab, "filter", {"facets": fac}) for k, lab, fac, role in GALLERY_PRESETS if role is None]
         return ImageSetSpec.from_rows(out, {rk: (rk, lab) for rk, lab in PNG_ROLES.values()}, "pngs",
                                       tags=["program", "target", "grating", "filterset", "checklist"],

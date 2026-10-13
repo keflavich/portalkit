@@ -631,6 +631,10 @@ def test_png_row_prefers_the_observation_product():
 
 
 def test_gallery_presets_are_facet_distinct(runs):
+    """WPE10 contract issue: schema.py's pk-images preset validator has no "role" key (see
+    adapters/jwst_archive.py's comment above `pre = [...]`), so the dropdown still carries
+    only the role-less GALLERY_PRESETS entries (the role variants stay legacy-stub-only)
+    until that lands; this guards the current, narrower shape."""
     pre = runs["B"]["ds"]["pngs"].presets
     facs = [json.dumps(p.data["facets"], sort_keys=True) for p in pre]
     assert len(set(facs)) == len(facs) == 4
