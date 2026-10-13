@@ -1,0 +1,24 @@
+# JWST Galactic Center HiPS + catalog sky explorer (WP32 extra; ARCHITECTURE.md section 14 /
+# docs/port_table.json "jwst_gc_aladin.html (critic)"). No HTML generator was found for this
+# page (hand-maintained; per docs/inventory.json); its HiPS tiles and catalog-HiPS live under
+# the same public avm_images tree as adapters/hips_tours.py's rungs.
+family = "jwst_gc_aladin"
+adapter = "adapters.jwst_gc_aladin:ADAPTER"
+tier_default = "A"
+
+[[portal]]
+id = "jwst_gc_aladin"
+title = "JWST GC sky explorer"
+visibility = "public"
+legacy_dir = "/orange/adamginsburg/web/public"
+target_dir = "/orange/adamginsburg/web/public/avm_images/unified/jwst_gc_aladin"
+url = "https://data.rc.ufl.edu/pub/adamginsburg/avm_images/unified/jwst_gc_aladin/"
+inputs = [
+    "/orange/adamginsburg/web/public/avm_images/jwst_gc_aladin.html",
+    "/orange/adamginsburg/web/public/avm_images/jwst_ultrared_stars.json",
+    "/orange/adamginsburg/web/public/avm_images/jwst_gc_cat_*.json",
+]
+
+[[portal.page]]
+id = "jwst_gc_aladin"
+legacy = ["avm_images/jwst_gc_aladin.html"]

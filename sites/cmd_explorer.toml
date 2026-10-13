@@ -1,0 +1,21 @@
+# Pre-binned F212N/F480M colour-magnitude explorer (WP32 extra; ARCHITECTURE.md section 14 /
+# docs/port_table.json "cmd_explorer (critic)"). Generator: jwst_gc_pipeline/quicklook/
+# cmdview.py (render()) + scripts/quicklook/build_cmd_viewer.py (per docs/inventory.json).
+family = "cmd_explorer"
+adapter = "adapters.cmd_explorer:ADAPTER"
+tier_default = "A"
+
+[[portal]]
+id = "cmd_explorer"
+title = "CMD explorer"
+visibility = "public"
+legacy_dir = "/orange/adamginsburg/jwst/releases/site"
+url = "https://data.rc.ufl.edu/pub/adamginsburg/jwst/releases/site/unified/cmd_explorer/"
+inputs = [
+    "/orange/adamginsburg/jwst/releases/site/cmd_explorer.html",
+    "/orange/adamginsburg/jwst/releases/site/cmd_explorer_data.json",
+]
+
+[[portal.page]]
+id = "cmd_explorer"
+legacy = ["cmd_explorer.html", "cmd_explorer_data.json"]
