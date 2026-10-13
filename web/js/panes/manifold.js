@@ -48,7 +48,7 @@ import {resolveOverlays, drawOverlays} from '../plot/overlays.js';
 import {XYRenderer} from '../gl/xyrenderer.js';
 import {gcVertexBytes, XY_VERTEX_BYTES} from '../gl/budget.js';
 import {Renderer as GCRenderer} from '../vendor/gc/gl/renderer.js';
-import {basisFrame, orthonormalize, axisInfo, axisLabel} from '../vendor/gc/math/frame.js';
+import {basisFrame, orthonormalize, isOrthonormal, axisInfo, axisLabel} from '../vendor/gc/math/frame.js';
 import {fold, dimExpr, foldCamera, foldFade, projectRows, compileLinear} from '../math/fold.js';
 import {Tour} from '../math/tour.js';
 import {drawCompass, attachCompass} from '../math/compass.js';
@@ -78,6 +78,8 @@ export const MOTION_CPU_ROWS = SEMANTIC_ZOOM_MARKERS;
 export const F_BINS = 384;
 export const TRAIL_FRAMES = 6;
 export const MAX_AUTO_DIMS = 16;
+/** Orthonormality slack for a literal frame (writeFrame rounds to 1e-6, the hash stores f32). */
+export const RAW_FRAME_TOL = 1e-3;
 export const CONTEXT_BINS = 256;
 
 const now = () => performance.now();
@@ -448,19 +450,24 @@ export async function mount(host, ctx) {
 
   /** True when `name` is a known axes-kind preset (framePresets): render raw, no orthonormalize. */
   const isAxesPresetName = (name) => presets.some((q) => q.key === name && q.kind === 'axes');
+  /** True when literal frame F should be shown raw: it names an axes preset, or it carries no
+   *  preset name and is not orthonormal (RAW_FRAME_TOL absorbs the hash's float rounding, so a
+   *  restored free-tour frame still animates). */
+  const isRawFrame = (F, name) => isAxesPresetName(name) || (!name && !isOrthonormal(F, RAW_FRAME_TOL));
 
   let F0 = null;
   if (Array.isArray(fr0.F) && fr0.F.length === 2 * D) F0 = Float64Array.from(fr0.F);
   else if (fr0.F && fr0.F.length === 2 * D) F0 = Float64Array.from(fr0.F);
   const preset0 = initialPreset(fr0, cfg, client.manifest, presets);
   if (!F0) F0 = await presetFrame(preset0 || 'pca');
-  // An axes-preset frame, or a frame handed in directly with no preset name (e.g. a gc-query
-  // legacy CMD/CCD hash decoded straight to `frame:<pane>.F`, hashmap.py's _gc_query), is a raw
-  // (possibly non-orthonormal) 2-D projection (framePresets docstring above); Tour's constructor
-  // must not Gram-Schmidt it back into orthogonality on mount. A later leg still snaps to the
-  // nearest orthonormal frame first (Tour's own raw/setRaw docstring), so this only affects the
-  // frame actually shown before the first tour move.
-  const raw0 = Boolean(fr0.F && fr0.F.length) || isAxesPresetName(fr0.preset) || isAxesPresetName(preset0);
+  // An axes-preset frame, or a non-orthonormal frame handed in directly with no preset name (e.g.
+  // a gc-query legacy CMD/CCD hash decoded straight to `frame:<pane>.F`, hashmap.py's _gc_query),
+  // is a raw 2-D projection (framePresets docstring above); Tour's constructor must not
+  // Gram-Schmidt it back into orthogonality on mount. A later leg still snaps to the nearest
+  // orthonormal frame first (Tour's own raw/setRaw docstring), so this only affects the frame
+  // actually shown before the first tour move.
+  const raw0 = Boolean(fr0.F && fr0.F.length && isRawFrame(F0, fr0.preset))
+    || isAxesPresetName(fr0.preset) || isAxesPresetName(preset0);
   ctx.setStatus('');
 
   // ------------------------------------------------------------ state
@@ -1486,11 +1493,11 @@ export async function mount(host, ctx) {
     }
     if (fr.F && fr.F.length === 2 * D) {
       S.preset = fr.preset || null;
-      // Mirror the mount-time rule (raw0 above): a literal F with no preset name (e.g. a gc-query
-      // legacy CMD/CCD hash decoded straight to `frame:<pane>.F`) or naming an axes preset is the
-      // raw, possibly non-orthonormal 2-D projection it carries; an F tagged with an orthonormal
-      // frame preset still animates as a tour leg.
-      goTo(Float64Array.from(fr.F), {raw: !fr.preset || isAxesPresetName(fr.preset)});
+      // Mirror the mount-time rule (raw0 above): an axes-preset frame, or a non-orthonormal F with
+      // no preset name (a gc-query legacy CMD/CCD hash), is shown as the raw 2-D projection it
+      // carries; any other frame (a restored free-tour frame, a frame preset) animates as a leg.
+      const F = Float64Array.from(fr.F);
+      goTo(F, {raw: isRawFrame(F, fr.preset)});
     } else if (fr.preset) {
       presetFrame(fr.preset).then((F) => { S.preset = fr.preset; goTo(F, {raw: isAxesPresetName(fr.preset)}); }, warnErr('frame preset'));
     }

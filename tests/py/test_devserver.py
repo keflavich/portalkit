@@ -335,6 +335,26 @@ def test_mount_denied_paths_403_inside_mount(root, foreign_root):
         assert req(srv, "/mnt/sub/b.txt")[0] == 200
 
 
+def test_symlink_escape_follow_switch(root, foreign_root, tmp_path_factory):
+    """Symlinks resolving outside root (or the mount) are followed by default, as Apache does;
+    follow_symlinks=False (the `portalkit serve` default) answers 403 for them while links that
+    stay inside the served tree still work."""
+    outside = tmp_path_factory.mktemp("outside")
+    (outside / "secret.txt").write_text("SECRET")
+    (root / "escape").symlink_to(outside)
+    (root / "data" / "inner").symlink_to(root / "data" / "manifest.json")
+    (foreign_root / "escape").symlink_to(outside)
+    with DevServer(root, mounts={"/mnt/": foreign_root}) as srv:
+        assert req(srv, "/escape/secret.txt")[:3:2] == (200, b"SECRET")
+        assert req(srv, "/mnt/escape/secret.txt")[0] == 200
+    with DevServer(root, mounts={"/mnt/": foreign_root}, follow_symlinks=False) as srv:
+        assert req(srv, "/escape/secret.txt")[0] == 403
+        assert req(srv, "/escape/")[0] == 403
+        assert req(srv, "/mnt/escape/secret.txt")[0] == 403
+        assert req(srv, "/data/inner")[:3:2] == (200, b'{"n": 1}')
+        assert req(srv, "/mnt/sub/b.txt")[0] == 200
+
+
 def test_mount_longest_prefix_wins(root, foreign_root, tmp_path):
     outer = tmp_path / "outer"
     outer.mkdir()

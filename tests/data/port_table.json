@@ -427,7 +427,7 @@
    "sky_map_aladin",
    "source_list_search"
   ],
-  "special_handling": "Built by WP28 from the 1902-row archive fluxes table; templates copied into data/ when ../templates is not reachable from the secure tree; references shared archive spectra shards instead of the 28 MB duplicate; verify checks cross-tree URL returns 401 without credentials.",
+  "special_handling": "Built by WP28 from the 1902-row archive fluxes table; templates copied into data/ when ../templates is not reachable from the secure tree; keeps its own copy of the spectra shards (the W51 secure area uses a different htpasswd than web/secure/jwst, so a foreign reference would answer 401 to W51-only accounts); verify checks cross-tree URL returns 401 without credentials.",
   "flags": [
    "multi",
    "cat",

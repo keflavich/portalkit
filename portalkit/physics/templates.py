@@ -188,8 +188,10 @@ def build_extended_templates(src_json: str | Path, dest_json: str | Path, wmax_u
     with open(src_json) as fh:
         d = json.load(fh)
     out = extend_templates(d, wmax_um, planck=planck)
-    with open(dest_json, "w") as fh:
+    tmp = Path(f"{dest_json}.tmp")
+    with open(tmp, "w") as fh:
         json.dump(out, fh)
+    os.replace(tmp, dest_json)
     return dest_json
 
 

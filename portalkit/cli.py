@@ -189,7 +189,8 @@ def cmd_serve(args: argparse.Namespace) -> int:
         mounts[prefix] = d
     serve(args.build_dir, args.port, args.host, auth=args.auth,
           content_encoding=args.content_encoding, no_range=args.no_range,
-          latency_ms=args.latency_ms, mounts=mounts or None)
+          latency_ms=args.latency_ms, mounts=mounts or None,
+          follow_symlinks=args.follow_symlinks)
     return 0
 
 
@@ -569,6 +570,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--latency-ms", type=float, default=0.0)
     s.add_argument("--mount", action="append", default=[], metavar="PREFIX=DIR",
                    help="serve DIR at the deploy-relative URL path PREFIX; repeatable")
+    s.add_argument("--follow-symlinks", action="store_true",
+                   help="serve symlinks that resolve outside BUILD_DIR or a mount (default: 403)")
     s.set_defaults(fn=cmd_serve)
 
     d = sub.add_parser("deploy", help="deploy a staged build")

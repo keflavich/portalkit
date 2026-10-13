@@ -108,6 +108,15 @@ class ServerOptions:
     lock: threading.Lock = field(default_factory=threading.Lock)
     #: (prefix path segments, directory) pairs, longest prefix first (see _normalize_mounts)
     mounts: list[tuple[list[str], Path]] = field(default_factory=list)
+    #: follow symlinks that resolve outside root (or the mount dir), as Apache's FollowSymLinks
+    #: does; False answers 403 for them (``portalkit serve`` default, see :func:`serve`)
+    follow_symlinks: bool = True
+
+
+def _contained(fs_path: str, base: Path) -> bool:
+    """True when ``fs_path`` with every symlink resolved stays inside ``base`` (resolved)."""
+    real = Path(os.path.realpath(fs_path))
+    return real == base or base in real.parents
 
 
 def _normalize_mounts(mounts: Mapping[str, os.PathLike | str] | None) -> list[tuple[list[str], Path]]:
@@ -254,7 +263,11 @@ class DevRequestHandler(SimpleHTTPRequestHandler):
             mdir, rest = mount
             fs_path = str(mdir.joinpath(*rest)) if rest else str(mdir)
         else:
+            mdir = self.opts.root
             fs_path = self.translate_path(self.path)
+        if not self.opts.follow_symlinks and not _contained(fs_path, mdir):
+            self._simple(HTTPStatus.FORBIDDEN, b"403 forbidden\n", head=head)
+            return
         if os.path.isdir(fs_path):
             if not url_path.endswith("/"):
                 loc = urlsplit(self.path)._replace(path=urlsplit(self.path).path + "/").geturl()
@@ -400,7 +413,8 @@ class DevServer:
                  auth: str | None = None, range: bool = True,  # noqa: A002
                  content_encoding: str = "auto", latency_ms: float = 0.0,
                  cache_control: str | None = None, verbose: bool = False,
-                 mounts: Mapping[str, os.PathLike | str] | None = None) -> None:
+                 mounts: Mapping[str, os.PathLike | str] | None = None,
+                 follow_symlinks: bool = True) -> None:
         if content_encoding not in ENCODING_MODES:
             raise ValueError(f"content_encoding must be one of {ENCODING_MODES}")
         if auth is not None and ":" not in auth:
@@ -413,7 +427,8 @@ class DevServer:
         self.options = ServerOptions(root=root.resolve(), auth=auth, range=range,
                                      content_encoding=content_encoding, latency_ms=latency_ms,
                                      cache_control=cache_control, verbose=verbose,
-                                     mounts=_normalize_mounts(mounts))
+                                     mounts=_normalize_mounts(mounts),
+                                     follow_symlinks=follow_symlinks)
         handler = partial(DevRequestHandler, opts=self.options)
         self.httpd = _Server((host, port), handler)
         self.host = host
@@ -462,11 +477,16 @@ class DevServer:
 def serve(root: os.PathLike | str, port: int = 8765, host: str = "127.0.0.1", *,
           auth: str | None = None, content_encoding: str = "auto", no_range: bool = False,
           latency_ms: float = 0.0, cache_control: str | None = None,
-          verbose: bool = True, mounts: Mapping[str, os.PathLike | str] | None = None) -> None:
-    """Blocking server for ``portalkit serve BUILD_DIR`` (Ctrl-C stops it)."""
+          verbose: bool = True, mounts: Mapping[str, os.PathLike | str] | None = None,
+          follow_symlinks: bool = False) -> None:
+    """Blocking server for ``portalkit serve BUILD_DIR`` (Ctrl-C stops it). Unlike the
+    :class:`DevServer` default, symlinks that resolve outside the served root or mount answer
+    403 unless ``follow_symlinks`` is set, so pointing it at a tree that links into other
+    (possibly secure) data does not serve that data."""
     srv = DevServer(root, host, port, auth=auth, range=not no_range,
                     content_encoding=content_encoding, latency_ms=latency_ms,
-                    cache_control=cache_control, verbose=verbose, mounts=mounts)
+                    cache_control=cache_control, verbose=verbose, mounts=mounts,
+                    follow_symlinks=follow_symlinks)
     mount_note = "".join(f", mount /{'/'.join(p)}/ -> {d}" for p, d in srv.options.mounts)
     print(f"serving {srv.options.root} at {srv.url} "
           f"(range={'off' if no_range else 'on'}, content-encoding={content_encoding}"

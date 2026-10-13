@@ -18,10 +18,9 @@
 # sgrb2_manifold stays registered below even though the adapter currently skips it every build
 # (its deployed data tree disagrees with its manifest row count -- tree_problems()): status/
 # drift reporting needs the portal entry to say so. Until the upstream tree is redeployed
-# consistently, a build of this family does not produce an sgrb2_manifold portal, so any other
-# built portal's `related` nav entry for it (build.py lists every sibling in `site.portals`
-# without checking it was built) points at a page that does not exist; WP30 contract issue
-# (build.py, not owned by WP30) -- fix by having `related` only list portals that were built.
+# consistently, a build of this family does not produce an sgrb2_manifold portal; build.py's
+# `related` nav lists only portals that were built (WPE9, IMPLEMENTATION_NOTES 145), so the
+# other portals carry no dead link to it.
 family = "gc_manifold"
 adapter = "adapters.gc_manifold:ADAPTER"
 tier_default = "B"
