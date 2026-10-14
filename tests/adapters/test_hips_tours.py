@@ -200,6 +200,56 @@ def test_discover_aces_tours_matches_field_and_variant_suffix(monkeypatch, tmp_p
     assert list(out) == ["field_linear"]
 
 
+def _hips_tree(root: Path) -> Path:
+    """A fake public tree: one composite in avm_images/, two fields' pngs_<grid> dirs."""
+    (root / "avm_images" / "here_RGB_1-2-3_hips").mkdir(parents=True)
+    for grid in ("pngs_480", "pngs_140", "pngs_faithful"):
+        (root / "jwst" / "w51" / grid / "w51_RGB_9-8-7_hips").mkdir(parents=True)
+    (root / "jwst" / "w51" / "pngs_480" / "w51_RGB_only480_hips").mkdir(parents=True)
+    (root / "jwst" / "sgrb2" / "pngs_150" / "SgrB2_RGB_5-4-3_hips").mkdir(parents=True)
+    return root
+
+
+def test_resolver_keeps_avm_url_when_dir_exists(tmp_path):
+    res = mod.HipsResolver(_hips_tree(tmp_path), "https://pub/")
+    u = mod.AVM + "here_RGB_1-2-3_hips/"
+    assert res.url(u) == u
+    assert not res.moved and not res.missing
+
+
+def test_resolver_falls_back_to_finest_numeric_grid(tmp_path):
+    res = mod.HipsResolver(_hips_tree(tmp_path), "https://pub/")
+    assert res.url(mod.AVM + "w51_RGB_9-8-7_hips/") == "https://pub/jwst/w51/pngs_140/w51_RGB_9-8-7_hips/"
+    assert res.url(mod.AVM + "w51_RGB_only480_hips") == "https://pub/jwst/w51/pngs_480/w51_RGB_only480_hips/"
+    assert res.url(mod.AVM + "SgrB2_RGB_5-4-3_hips/") == "https://pub/jwst/sgrb2/pngs_150/SgrB2_RGB_5-4-3_hips/"
+    assert set(res.moved) == {"w51_RGB_9-8-7_hips", "w51_RGB_only480_hips", "SgrB2_RGB_5-4-3_hips"}
+
+
+def test_resolver_leaves_non_avm_urls_alone(tmp_path):
+    res = mod.HipsResolver(_hips_tree(tmp_path), "https://pub/")
+    assert res.url("https://elsewhere/x_hips/") == "https://elsewhere/x_hips/"
+
+
+def test_resolver_drops_and_renumbers_missing_rungs(tmp_path):
+    res = mod.HipsResolver(_hips_tree(tmp_path), "https://pub/")
+    rungs = [{"id": "rung0", "label": "a", "url": mod.AVM + "gone_hips/"},
+             {"id": "rung1", "label": "b", "url": mod.AVM + "here_RGB_1-2-3_hips/"},
+             {"id": "rung2", "label": "c", "url": mod.AVM + "gone_hips/"},
+             {"id": "rung3", "label": "d", "url": mod.AVM + "w51_RGB_9-8-7_hips/"}]
+    out = res.resolve(rungs)
+    assert [r["label"] for r in out] == ["b", "d"]
+    assert [r["id"] for r in out] == ["rung0", "rung1"]
+    assert res.missing == ["gone_hips"]
+    cav = mod._resolver_caveats(res)
+    assert "1 tour step(s) omitted" in cav and "`gone_hips`" in cav and "1 HiPS composite" in cav
+
+
+def test_resolver_no_caveats_when_all_in_avm(tmp_path):
+    res = mod.HipsResolver(_hips_tree(tmp_path), "https://pub/")
+    res.resolve([{"id": "rung0", "label": "a", "url": mod.AVM + "here_RGB_1-2-3_hips/"}])
+    assert mod._resolver_caveats(res) == ""
+
+
 # -- dataset-level: needs the legacy mount ---------------------------------------------------
 
 @pytest.fixture(scope="module")
@@ -271,3 +321,15 @@ def test_fixture_build_passes_check():
         assert res.ok, res.report.get("errors")
         rep = check_build(res.staging, gate="G2")
         assert rep.ok, rep.errors
+
+
+@skip_unmounted
+def test_every_rung_dir_exists_on_disk(run):
+    """Each rung URL under the public tree names a directory that exists (no 404 steps)."""
+    for k, spec in run["ds"].items():
+        if not k.startswith("hips_"):
+            continue
+        for r in spec.rungs:
+            if r["url"].startswith(mod.PUB):
+                rel = r["url"][len(mod.PUB):].strip("/")
+                assert (mod.WEB_PUBLIC / rel).is_dir(), (k, r["url"])

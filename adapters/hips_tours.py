@@ -22,6 +22,7 @@ reference their own ready-made rung lists; nothing is computed.
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
@@ -32,6 +33,17 @@ ACES_DIR = Path("/orange/adamginsburg/web/public/ACES_Aladin_tour")
 #: Public AVM HiPS tree both tour families' rungs live under (confirmed against
 #: avm_images/index.html; adapters/wd2.py's own wavelength-tour page uses the same constant).
 AVM = "https://data.rc.ufl.edu/pub/adamginsburg/avm_images/"
+#: Served root of the public tree and its URL (``AVM`` is ``PUB + "avm_images/"``).
+WEB_PUBLIC = Path("/orange/adamginsburg/web/public")
+PUB = "https://data.rc.ufl.edu/pub/adamginsburg/"
+#: Where a rung HiPS missing from ``avm_images/`` is looked for: the per-field
+#: ``jwst/<field>/pngs_<grid>`` directories. The legacy ACES pages name their HiPS by bare
+#: directory name and resolve it against ``avm_images/`` on data.rc.ufl.edu, where the W51
+#: and SgrB2 composites of five tours do not exist (404); the same names do exist under
+#: ``jwst/w51/pngs_{140,480,2100}`` and ``jwst/sgrb2/pngs_{150,466}``. HiPS names carry the
+#: field prefix (``w51_RGB_...``, ``SgrB2_...``), so a name match is unambiguous across fields;
+#: within a field the smallest numeric grid (finest pixel scale) is taken first.
+HIPS_FALLBACK_GLOB = "jwst/*/pngs_*"
 
 _TARGET_RE = re.compile(r"target\s*:\s*'([\-0-9.]+)\s+([\-0-9.]+)'")
 _FOV_RE = re.compile(r"fov\s*:\s*([0-9.eE+-]+)")
@@ -71,6 +83,69 @@ def _um_triplet(name: str) -> dict:
     except ValueError:
         return {}
     return dict(zip(("r_um", "g_um", "b_um"), vals))
+
+
+def _grid_key(d: Path) -> tuple:
+    """Sort key of a ``pngs_<grid>`` directory: numeric grids ascending, then the rest."""
+    tail = d.name[len("pngs_"):]
+    return (0, int(tail), "") if tail.isdigit() else (1, 0, tail)
+
+
+class HipsResolver:
+    """Map a rung's HiPS directory name to a public URL whose directory exists on disk.
+
+    ``avm_images/<name>`` is used when present (the legacy location); otherwise the first
+    ``HIPS_FALLBACK_GLOB`` directory (finest grid first) holding ``<name>``. ``missing`` collects
+    the names found nowhere. Only URLs under ``AVM`` are resolved; any other URL is kept."""
+
+    def __init__(self, web_public: Path = WEB_PUBLIC, pub: str = PUB):
+        self.web_public, self.pub = Path(web_public), pub
+        self._index: dict[str, str] | None = None
+        self.missing: list[str] = []
+        self.moved: dict[str, str] = {}
+
+    def _build_index(self) -> dict[str, str]:
+        idx: dict[str, str] = {}
+        dirs = sorted(self.web_public.glob(HIPS_FALLBACK_GLOB),
+                      key=lambda d: (d.parent.name, _grid_key(d)))
+        for d in dirs:
+            try:
+                names = sorted(os.listdir(d))
+            except OSError:
+                continue
+            rel = d.relative_to(self.web_public).as_posix()
+            for n in names:
+                if n.endswith("_hips"):
+                    idx.setdefault(n, f"{rel}/{n}")
+        return idx
+
+    def url(self, url: str) -> str | None:
+        """The resolved URL, or ``None`` when the HiPS directory exists nowhere."""
+        if not url.startswith(AVM):
+            return url
+        name = url[len(AVM):].strip("/")
+        if (self.web_public / "avm_images" / name).is_dir():
+            return url
+        if self._index is None:
+            self._index = self._build_index()
+        rel = self._index.get(name)
+        if rel is None:
+            if name not in self.missing:
+                self.missing.append(name)
+            return None
+        self.moved[name] = rel
+        return f"{self.pub}{rel}/"
+
+    def resolve(self, rungs: list[dict]) -> list[dict]:
+        """``rungs`` with resolved URLs; rungs whose HiPS exists nowhere are dropped and
+        renumbered (``rung0``...) so ids stay dense."""
+        out = []
+        for r in rungs:
+            u = self.url(r["url"])
+            if u is None:
+                continue
+            out.append({**r, "id": f"rung{len(out)}", "url": u})
+        return out
 
 
 def discover_rgb_tours(ctx) -> dict[str, dict]:
@@ -147,6 +222,18 @@ def aces_rungs(waypoints_path: Path) -> tuple[list[dict], dict | None]:
     return [], None
 
 
+def _resolver_caveats(res: HipsResolver) -> str:
+    out = ""
+    if res.moved:
+        out += (f"- {len(res.moved)} HiPS composite(s) named by the legacy tours are not in "
+                "`avm_images/` and are loaded from the field's `jwst/<field>/pngs_<grid>/` "
+                "directory instead (finest grid available).\n")
+    if res.missing:
+        out += (f"- {len(res.missing)} tour step(s) omitted: no HiPS directory found for "
+                + ", ".join(f"`{n}`" for n in res.missing) + ".\n")
+    return out
+
+
 class HipsToursAdapter:
     name = "hips_tours"
     tiers = ("A",)
@@ -157,9 +244,10 @@ class HipsToursAdapter:
             raise TierUnavailable(f"hips_tours implements tier A only, not {ctx.tier}")
         ds: dict = {}
         tours: list[tuple[str, str, str]] = []  # (page_id, title, hips key)
+        res = HipsResolver()
         rgb = discover_rgb_tours(ctx)
         for field, info in rgb.items():
-            rungs = rgb_rungs(info["text"])
+            rungs = res.resolve(rgb_rungs(info["text"]))
             if not rungs:
                 continue
             key = f"hips_rgb_{field}"
@@ -169,6 +257,7 @@ class HipsToursAdapter:
         aces = discover_aces_tours(ctx)
         for name, info in aces.items():
             rungs, target = aces_rungs(info["waypoints_path"])
+            rungs = res.resolve(rungs)
             if not rungs:
                 continue
             key = f"hips_aces_{name}"
@@ -184,7 +273,7 @@ class HipsToursAdapter:
             "tour(s) from `ACES_Aladin_tour/`. Each steps an Aladin HiPS view through a "
             "sequence of pre-built multi-band composites.\n\n"
             "## Caveats\n\n- Public data; every rung is a plain HiPS tile tree, no catalogue "
-            "or photometry is attached.\n"))
+            "or photometry is attached.\n" + _resolver_caveats(res)))
         return ds
 
     def pages(self, ctx, ds):

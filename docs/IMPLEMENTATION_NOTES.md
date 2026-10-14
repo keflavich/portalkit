@@ -645,3 +645,25 @@ preset `role` in a real build. Both are closed:
 `tests/py/test_catalog_bundle.py::test_images_preset_role` (plus a negative test for an undeclared
 role) cover both closures.
 
+
+## Post-integration: hips_tours HiPS resolution
+
+The production contact sheet showed five ACES tours (`aces_w51`, `aces_w51_linear`, `aces_w51_other`,
+`aces_sgrb2_linear`, `aces_sgrb2_other`) whose rungs pointed at `avm_images/<name>_hips/`. The legacy
+`tour-common.js` resolves the bare HiPS names in `waypoints_*.json` against
+`https://data.rc.ufl.edu/pub/adamginsburg/avm_images/` on data.rc.ufl.edu, and 43 of those names do
+not exist there (HTTP 404), so the legacy tours fail on those steps too. The same directories exist under
+`web/public/jwst/w51/pngs_{140,480,2100}/` and `web/public/jwst/sgrb2/pngs_{150,466}/`, which are
+publicly served.
+
+`adapters/hips_tours.py` now passes every rung through `HipsResolver`: `avm_images/<name>` when that
+directory exists, else the first `jwst/*/pngs_<grid>/<name>` (numeric grids ascending, i.e. finest pixel
+scale first). HiPS names carry the field prefix, so a name match does not cross fields. A rung found
+nowhere is dropped and named in the README caveats. On the current tree, all 153 distinct rung URLs
+return HTTP 200 for `properties` (110 under `avm_images/`, 43 under `pngs_*`), and no rung is dropped.
+`tests/adapters/test_hips_tours.py` covers the resolver on a fake tree and checks (when mounted) that
+every rung directory exists on disk.
+
+The contact sheet itself renders every unified tour dark because it serves the page from localhost and
+data.rc.ufl.edu sends no `Access-Control-Allow-Origin` header, so Aladin cannot read cross-origin tiles.
+On data.rc.ufl.edu the page and tiles share an origin.
