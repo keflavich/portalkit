@@ -1019,11 +1019,12 @@ def deploy(family: str, build_id: str, portal: Any, *, portal_id: str | None = N
                        target=target, replace=replace, htaccess=htaccess, yes=yes, emap=emap,
                        shared_legacy_dir=shared_legacy_dir, deny_htaccess=deny_htaccess)
     raise_for_plan(plan)
-    for w in plan.warnings:
-        log(f"warning: {w}")
     if dry_run:
+        # the summary lists the warnings
         log(plan.summary())
         return DeployResult(plan=plan, written=[], manifest=None, replaced=[], dry_run=True)
+    for w in plan.warnings:
+        log(f"warning: {w}")
 
     tgt = plan.target
     ensure_dirs(tgt, "")

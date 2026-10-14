@@ -220,10 +220,11 @@ def cmd_deploy(args: argparse.Namespace) -> int:
               replace=args.replace, htaccess=args.htaccess, emap=emap, shared_legacy_dir=shared)
     plan = plan_deploy(args.family, args.build_id, site, yes=plan_yes, **kw)
     raise_for_plan(plan)
+    # the summary lists the warnings; the engine's own log would repeat both, so it is not
+    # printed below
     print(plan.summary())
     if args.dry_run:
-        run_deploy(args.family, args.build_id, site, dry_run=True, yes=plan_yes, gc=False,
-                   log=print, **kw)
+        run_deploy(args.family, args.build_id, site, dry_run=True, yes=plan_yes, gc=False, **kw)
         print("dry run: nothing written")
         return 0
     if not args.yes:
@@ -234,7 +235,7 @@ def cmd_deploy(args: argparse.Namespace) -> int:
             print("not deployed")
             return 1
     res = run_deploy(args.family, args.build_id, site, dry_run=False, yes=True, gc=args.gc,
-                     log=print, **kw)
+                     **kw)
     print(f"deployed {len(res.written)} file(s) to {plan.target}")
     if res.replaced:
         print(f"replaced {len(res.replaced)} legacy file(s)")
