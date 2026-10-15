@@ -759,12 +759,19 @@ def plan_deploy(family: str, build_id: str, portal: Any, *, portal_id: str | Non
     source = portal_stage_dir(_stage_root(stage_root), family, build_id, pid)
     if not source.is_dir():
         raise UsageError(f"no staged build at {source}")
-    prov = build_provenance(read_build_report(source))
+    report = read_build_report(source)
+    prov = build_provenance(report)
     exp = classify(tgt, emap)
     decision = check_target(visibility, exp, served_by, yes)
 
     files, links = iter_stage_files(source)
     warnings: list[str] = []
+    if report.get("vendor_assets") is False:
+        # verify checks only the deployed files, so a missing shared asset base goes unnoticed
+        warnings.append("build is not vendored: its pages load web assets and shared "
+                        "resources from the published asset base; run `portalkit "
+                        "publish-assets` and `portalkit publish-res` first, or rebuild with "
+                        "--vendor-assets")
     conflicts: list[str] = []
     if links:
         conflicts.extend(f"staged tree contains a symlink: {r}" for r in links)

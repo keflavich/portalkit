@@ -119,6 +119,17 @@ def test_dry_run_writes_nothing(world):
     assert any("5 new" in ln for ln in lines)
 
 
+def test_unvendored_build_warns_about_asset_base(world):
+    stage_portal(world["stage"], report={"vendor_assets": False})
+    plan = dmod.plan_deploy(FAM, BID, site(world), stage_root=world["stage"],
+                            emap=world["emap"])
+    assert any("not vendored" in w for w in plan.warnings)
+    stage_portal(world["stage"], report={"vendor_assets": True})
+    plan = dmod.plan_deploy(FAM, BID, site(world), stage_root=world["stage"],
+                            emap=world["emap"])
+    assert not any("not vendored" in w for w in plan.warnings)
+
+
 def test_deploy_writes_files_and_valid_manifest(world):
     src = stage_portal(world["stage"])
     res = run(world, site(world))
