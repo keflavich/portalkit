@@ -10,7 +10,7 @@ id = "spitzer_spectra"
 title = "CMZ Spitzer IRS spectra"
 visibility = "public"
 legacy_dir = "/orange/adamginsburg/cmz/spitzer_spectra"
-url = "https://data.rc.ufl.edu/pub/adamginsburg/cmz/spitzer_spectra/unified/"
+url = "https://data.rc.ufl.edu/pub/adamginsburg/spitzer_spectra/unified/"
 inputs = [
     "/orange/adamginsburg/cmz/spitzer_spectra/spitzer_spectra_sources.json",
     "/orange/adamginsburg/cmz/spitzer_spectra/specdata/*.json",

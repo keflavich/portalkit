@@ -22,7 +22,7 @@ import numpy as np
 LEGACY_DIR = Path("/orange/adamginsburg/cmz/spitzer_spectra")
 #: Public web root this family is served under (ARCHITECTURE.md section 14: "public via
 #: web/public/spitzer_spectra").
-PUBLIC = "https://data.rc.ufl.edu/pub/adamginsburg/cmz/spitzer_spectra/"
+PUBLIC = "https://data.rc.ufl.edu/pub/adamginsburg/spitzer_spectra/"
 
 
 def _num(x):
