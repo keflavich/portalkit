@@ -72,7 +72,7 @@ Fixes for the judges' fatal flaws:
 |---|---|
 | Static hosting only; no server code at view time | shell + bundle only; `tests/py/test_shell.py` asserts no server-side templating markers |
 | No JS build step, bundler or npm runtime deps; vanilla ES modules | `tests/py/test_web_tree.py` (WP12): no `package.json` under `web/`, every `import` specifier is relative |
-| Only external runtime lib: Aladin Lite v3 (CDS CDN) with mirror `https://data.rc.ufl.edu/pub/adamginsburg/jwst-gc/aladin.js` | `sky/aladin.js`; e2e asserts no other external origin is requested (Google Fonts are not used) |
+| Only external runtime lib: Aladin Lite v3, self-hosted (`starformation.astro.ufl.edu`) with mirror `https://data.rc.ufl.edu/pub/adamginsburg/jwst-gc/aladin.js` (CDS is no longer the default source after its 2026-10-28 outage; a page may still set it per `aladin.cdn`/`aladin.mirror`) | `sky/aladin.js`; e2e asserts no other external origin is requested (Google Fonts are not used) |
 | Builder: Python 3.13 + numpy + astropy (optional extras: `dust_extinction` for regenerating tables, `matplotlib` for thumbnails) | `pyproject.toml`; optional imports wrapped in `except ImportError` |
 | Node and Playwright (Python, Chromium) for tests only | `tests/js/*.test.mjs` run by `node --test`; `tests/e2e` marked `e2e` |
 | Page HTML < 200 kB; data lazy and binary-columnar | `render/shell.py` budget check; `portalkit check` |
@@ -536,7 +536,7 @@ Pane `id` values are unique per page and default to the pane type. Each pane typ
  "caps":{"enabled":["keyboard_nav","cross_page_nav","..."],
          "disabled":{"isochrones_or_tracks":"no distance/age model for embedded MSA targets"}},
  "links":{"spectra":"specviewer.html#id={id}","manifold":"manifold.html#id={id}"},
- "aladin":{"cdn":"https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.js",
+ "aladin":{"cdn":"https://starformation.astro.ufl.edu/vendor/aladin-lite/3.8.2/aladin.js",
            "mirror":"https://data.rc.ufl.edu/pub/adamginsburg/jwst-gc/aladin.js"}}
 ```
 

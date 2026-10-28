@@ -30,7 +30,10 @@
 import {loadScript} from '../core/loadscript.js';
 import {ALADIN_TIMEOUT_MS} from '../core/constants.js';
 
-export const DEFAULT_CDN = 'https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.js';
+// aladin.cds.unistra.fr went down for an extended period on 2026-10-28 (connect hung ~25 s,
+// then was refused); the default source is now a self-hosted copy, with data.rc.ufl.edu as
+// the fallback. A page may still put the CDS URL in page.aladin.mirror/cdn itself.
+export const DEFAULT_CDN = 'https://starformation.astro.ufl.edu/vendor/aladin-lite/3.8.2/aladin.js';
 export const DEFAULT_MIRROR = 'https://data.rc.ufl.edu/pub/adamginsburg/jwst-gc/aladin.js';
 
 const D2R = Math.PI / 180;
