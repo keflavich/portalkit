@@ -73,11 +73,7 @@ __all__ = [
     "provenance_summary",
 ]
 
-#: aladin.cds.unistra.fr went down for an extended period on 2026-10-28 (connect hung ~25 s,
-#: then was refused); the default is now a self-hosted copy, with the data.rc.ufl.edu mirror
-#: as the second source (``sky/aladin.js``: cdn, then mirror, with ALADIN_TIMEOUT_MS each).
-#: CDS can still be passed per page as ``aladin={"mirror": "https://aladin.cds.unistra.fr/..."}``.
-ALADIN_CDN = "https://starformation.astro.ufl.edu/vendor/aladin-lite/3.8.2/aladin.js"
+ALADIN_CDN = "https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.js"
 ALADIN_MIRROR = "https://data.rc.ufl.edu/pub/adamginsburg/jwst-gc/aladin.js"
 
 #: Absolute URL prefixes with a known exposure (section 4.3 builder validation).
